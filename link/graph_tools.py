@@ -7,121 +7,6 @@ from link.tools import get_tri_angles, get_tri_pos
 logger = logging.getLogger()
 from itertools import combinations
 
-# def get_link_graph_flow(
-#     time,
-#     omega,
-#     link_graph: nx.Graph):
-
-#     # for link in link_graph.edges.data():
-#     #     print(link)
-#     visited_edges = []
-#     for node, node_data in link_graph.nodes.data():
-#         print(node, node_data)
-        
-#         #fixed_loc = None
-#         if node_data['fixed']:
-#             fixed_loc = node_data['fixed_loc']
-#             node_data['pos'].append(fixed_loc)
-#             continue
-
-#         connected_edges = list(link_graph.edges(node, data=True))
-#         for edge in  connected_edges:
-#         #for edge in link_graph.edges(node, data=True):
-#             # link = edge[2]['link']
-#             # link.is_driven:
-#             #print("\t", edge)
-#             #print("\t\t", edge[2]['link'])
-#             # if (this_node == edge[0] or this_node == edge[1]):
-#             #     print("this node in it") # this will always be true!
-#             link = edge[2]['link']
-
-#             #print("\t\t", 'edge 0 and 1', edge[0], edge[1])
-#             #print("\t\t", edge[0] == node)
-
-#             """
-#             The first node in any link should be this link
-#             This ensures we are looking at the end of the link
-#             """
-#             assert edge[0] == node, "The first node in any link should be this link"
-#             connected_node = edge[1]
-#             print("\t\t", link_graph.nodes[connected_node])
-#             connected_node_data = link_graph.nodes[connected_node]
-#             if link.is_driven and connected_node_data['fixed']:
-#                 fixed_loc =  connected_node_data['fixed_loc']
-#                 x = fixed_loc[0] + link.length * np.cos(omega * time)
-#                 y = fixed_loc[1] + link.length * np.sin(omega * time)
-#                 print("\t\tSETTING NODE DATA:", node_data['pos'].append((x, y)))
-
-#         if not node_data['fixed']:
-#             # Retrieve the edges connected to the current node
-#             connected_edges = list(link_graph.edges(node, data=True))
-#             if len(connected_edges) == 2:
-            
-#                 # Extract the links and their constraints
-#                 edge1, edge2 = connected_edges
-#                 link1 = edge1[2]['link']
-#                 link2 = edge2[2]['link']
-
-#                 assert edge1[0] ==  edge2[0]
-#                 con_node1 = edge1[1]
-#                 con_node2 = edge2[1]
-                
-#                 #print("n\t\t\t", con_node1, con_node2)
-
-#                 con_node_data1 = link_graph.nodes[con_node1]
-#                 con_node_data2 = link_graph.nodes[con_node2]
-
-#                 assert (con_node_data1['fixed']) or (con_node_data2['fixed'])
-#                 if con_node_data2['fixed']:
-#                     fixed_node = con_node2
-#                     free_node = con_node1
-#                     fixed_node_data = con_node_data2
-#                     free_node_data = con_node_data1
-#                 else:
-#                     fixed_node = con_node1
-#                     free_node = con_node2
-#                     fixed_node_data = con_node_data1
-#                     free_node_data = con_node_data2
-                    
-
-#                 print("fee node:", free_node,  free_node_data)
-#                 print("fixed node:", fixed_node, fixed_node_data)
-
-
-#                 x2, y2, x3, y3, x4, y4 = get_rod_coordinates(
-#                         t=time,
-#                         w=omega,
-#                         fixed_link1=prior_fixed_link,
-#                         fixed_link2=next_fixed_link,
-#                         free_link=this_link
-#                         )
-                    
-
-#         # #if link.is_driven and connected_node_data['fixed']:
-#         # # Determine the fixed location and length of the first link
-#         # fixed_loc = link1.fixed_loc
-#         # if fixed_loc is None:
-#         #     raise ValueError(f"Link {link1.name} must have a fixed location.")
-
-#             # if link1.is_driven:
-#             #     x2 = fixed_loc[0] + link1.length * np.cos(omega * time)
-#             #     y2 = fixed_loc[1] + link1.length * np.sin(omega * time)
-
-#             # def equations(p):
-#             #     x3, y3 = p
-#             #     eq1 = np.sqrt((x3 - x2)**2 + (y3 - y2)**2) - link2.length
-#             #     eq2 = np.sqrt((x3 - link2.fixed_loc[0])**2 + (y3 - link2.fixed_loc[1])**2) - link2.length
-#             #     return (eq1, eq2)
-
-#             # # Solve for the position of the free node
-#             # x3, y3 = fsolve(equations, (link2.fixed_loc[0], link2.fixed_loc[1]))
-#             # print(f"Calculated position for node {node}: ({x3}, {y3})")
-
-
-#     return None
-
-
-
 def minimal_bounds(free_link, constrained_link):
     """
     Find the minimum distance between the free link and the constrained link by drawing circles around them
@@ -156,7 +41,6 @@ def solve_graph_links(
     cycle_sets = [s for s in nx.simple_cycles(link_graph, length_bound=3)]
     tri_link_sets = []
     for cycle in cycle_sets :
-        cycle_sets 
         edge_data1 = link_graph.get_edge_data(cycle[0], cycle[1]) 
         edge_data2 = link_graph.get_edge_data(cycle[1], cycle[2]) 
         edge_data3 = link_graph.get_edge_data(cycle[2], cycle[0]) 
@@ -353,7 +237,6 @@ def solve_graph_links(
                 min_length = link.length
 
     return links
-
 
 
 def run_graph(

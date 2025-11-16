@@ -14,12 +14,19 @@ from typing import Any, Dict, List, Literal
 from pydantic import BaseModel, Field, field_validator, model_validator
 from typing_extensions import Annotated
 
+class Node(BaseModel):
+    id: str = Field(description="Unique identifier for the node")
+    pos: Tuple[float, float] = Field(description="Position coordinates (x, y)")
+    fixed: bool = Field(default=False, description="Whether the node is fixed in position")
+    fixed_loc: Optional[Tuple[float, float]] = Field(default=None, description="Fixed location coordinates (x, y) if fixed")
 
+    
+    
 class Link(BaseModel):
     """A link in the mechanical linkage system with validation."""
     
-    length: Annotated[float, Field(gt=0, description="Length of the link in meters")]
-    name: Optional[str] = Field(default=None, description="Optional name for the link")
+    length: Annotated[float, Field(gt=0, le=100, description="Length of the link in meters")]
+    name: str = Field(default="link", description="Name for the link")
     n_iterations: Annotated[int, Field(ge=1, le=10000, description="Number of iterations for simulation")] = 100
     fixed_loc: Optional[Tuple[float, float]] = Field(default=None, description="Fixed location coordinates (x, y)")
     has_fixed: bool = Field(default=False, description="Whether the link has a fixed location")
@@ -27,7 +34,10 @@ class Link(BaseModel):
     path: Optional[np.ndarray] = Field(default=None, description="Path array for the link")
     is_driven: bool = Field(default=False, description="Whether this is a driven link")
     flip: bool = Field(default=False, description="Whether to flip the link orientation")
-    
+    zlevel: int = Field(default=0, description="Z-level for rendering and physical building order." \
+    " higher z-levels are on top of lower z-levels. When physically constructing an automaton two links that are connected" \
+    " in the graph can NEVER be on the same z-level. Links that collide with each other should also be on different z-levels.")
+
     model_config = {
         "arbitrary_types_allowed": True,  # Allow numpy arrays
         "validate_assignment": True,      # Validate on assignment
@@ -104,3 +114,10 @@ class DriveGear(BaseModel):
         if hasattr(self, 'has_fixed'):
             data['has_fixed'] = self.has_fixed
         return data
+
+
+class AcxGraph:
+    def __init__(self, links: Optional[List[Link]] = None, nodes: Optional[List[Any]] = None, name: Optional[str] = None):
+        self.links = links or []
+        self.nodes = nodes or []
+        self.name = name

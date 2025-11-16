@@ -1,10 +1,8 @@
-# Automata
+# Acinonyx 🐆
 
-A Python application for simulating and visualizing mechanical linkage systems and automata.
+A Python application for simulating and visualizing mechanical linkage systems - fast and agile like a cheetah.
 
-This project provides tools for creating, simulating, and visualizing mechanical linkage systems. It includes:
-
-
+This project provides tools for creating, simulating, and visualizing mechanical linkage systems with exceptional performance. It includes:
 
 - **Mechanical Link Simulation**: Define and simulate multi-link mechanical systems
 - **Visualization Tools**: Generate static plots and animations of linkage motion
@@ -41,6 +39,11 @@ python structs/basic.py
 This should run without errors and generate visualization files in the `user/` directory.
 
 ## Usage
+
+chmod +x run.sh 
+Run ./run.sh  and it will open the webgui
+the first time you do this you may need to do '
+chmod +x run.sh '
 
 ### Basic Example
 

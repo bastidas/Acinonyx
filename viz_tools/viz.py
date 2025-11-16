@@ -1,5 +1,8 @@
 
 import numpy as np
+# Set matplotlib to use non-GUI backend BEFORE any matplotlib imports
+import matplotlib
+matplotlib.use('Agg', force=True)  # force=True to override existing backend  
 import matplotlib.pyplot as plt
 import matplotlib.colors as mcolors
 import seaborn as sns
@@ -77,7 +80,12 @@ def _handle_output(title: str, out_path: Optional[Union[str, Path]] = None,
         plt.savefig(full_path, dpi=style.dpi, bbox_inches=style.bbox_inches)
         plt.close()  # Close to free memory
     else:
-        plt.show()
+        # Only show plot if we're in an interactive environment (not in backend)
+        try:
+            plt.show()
+        except:
+            # If show fails (e.g., no display available), just close the figure
+            plt.close()
 
 
 def plot_graph(lg: nx.Graph, 
@@ -193,7 +201,7 @@ def plot_static_pos(links: List[Link],
         
         for link in links:
             color = phase_colors(rotation_fraction)
-            print(color)
+            # print(color)
             
             if show_end_points:
                 plt.scatter(link.pos2[i][0], link.pos2[i][1],

@@ -3,10 +3,10 @@
 import networkx as nx
 import matplotlib.pyplot as plt
 import seaborn as sns
-from viz import *
-from tools import *
-from graph_tools import minimal_bounds, solve_graph_links
-from viz import animate_script
+from viz_tools.viz import *
+from link.tools import *
+from link.graph_tools import minimal_bounds, solve_graph_links
+from viz_tools.viz import animate_script
 from matplotlib.animation import FuncAnimation
 from benchmarks import make_triangle_link
 from dataclasses import asdict, dataclass, field

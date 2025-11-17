@@ -57,14 +57,18 @@ const GraphBuilderTab: React.FC = () => {
   const [selectedLink, setSelectedLink] = useState<Link | null>(null)
   const [editDialog, setEditDialog] = useState(false)
   const [editForm, setEditForm] = useState({
-    length: '',
+    // Required fields with defaults
     name: '',
+    length: '1.0',
+    n_iterations: 24,
     has_fixed: false,
+    // Optional fields with defaults
     has_constraint: false,
     is_driven: false,
     flip: false,
-    color: '#1976d2',
-    zlevel: 0
+    zlevel: 0,
+    // Frontend-specific
+    color: '#1976d2'
   })
   const [colorMode, setColorMode] = useState<'default' | 'zlevel'>('default')
   const [error, setError] = useState<string | null>(null)
@@ -98,7 +102,7 @@ const GraphBuilderTab: React.FC = () => {
   }
 
   // Get unique z-levels from current links
-  const getUniqueZLevels = graphManager.getUniqueZLevels
+  const getUniqueZLevels = graphManager?.getUniqueZLevels || (() => [])
   const canvasRef = useRef<HTMLDivElement>(null)
 
   const createLink = async (linkData: any) => {
@@ -305,9 +309,13 @@ const GraphBuilderTab: React.FC = () => {
             const defaultColor = getDefaultColor(graphManager.graphState.links.length)
             
             const newLinkData = {
-              length: Math.max(0.1, length), // Minimum length
+              // Required fields
               name: linkName,
-              n_iterations: 100,
+              length: Math.max(0.1, length), // Minimum length, max 100 per backend
+              n_iterations: 24, // Default to match backend expectation
+              has_fixed: false, // Required field
+              // Optional fields
+              has_constraint: false,
               is_driven: isFirstLink,
               flip: false,
               zlevel: 0 // Will be updated after successful creation
@@ -316,12 +324,17 @@ const GraphBuilderTab: React.FC = () => {
             createLink(newLinkData).then(response => {
               if (response && response.status === 'success' && response.link) {
                 const newLink: Link = {
+                  // Backend response fields
                   ...response.link,
-                  length: typeof response.link.length === 'number' ? response.link.length : parseFloat(response.link.length) || 0,
+                  // Ensure required fields have proper values
+                  length: typeof response.link.length === 'number' ? response.link.length : parseFloat(response.link.length) || 1.0,
+                  // Generate ID if not provided by backend
+                  id: response.link.id || `link_${Date.now()}_${Math.random().toString(36).substr(2, 4)}`,
+                  // Frontend specific fields
                   start_point: startPoint,
                   end_point: endPoint,
                   color: defaultColor,
-                  zlevel: response.link.zlevel || 0
+                  zlevel: response.link.zlevel ?? 0
                 }
                 
                 // Add connection between existing nodes with this link
@@ -399,9 +412,13 @@ const GraphBuilderTab: React.FC = () => {
       const defaultColor = getDefaultColor(graphManager.graphState.links.length)
       
       const newLinkData = {
-        length: Math.max(0.1, length), // Minimum length
+        // Required fields
         name: linkName,
-        n_iterations: 100,
+        length: Math.max(0.1, Math.min(100, length)), // Clamp to backend limits 0.1-100
+        n_iterations: 24, // Default to match backend expectation
+        has_fixed: false, // Required field
+        // Optional fields
+        has_constraint: false,
         is_driven: isFirstLink,
         flip: false,
         zlevel: inheritedZLevel // Use inherited z-level from nearby connection
@@ -410,8 +427,13 @@ const GraphBuilderTab: React.FC = () => {
       createLink(newLinkData).then(response => {
         if (response && response.status === 'success' && response.link) {
           const newLink: Link = {
+            // Backend response fields
             ...response.link,
-            length: typeof response.link.length === 'number' ? response.link.length : parseFloat(response.link.length) || 0,
+            // Ensure required fields have proper values
+            length: typeof response.link.length === 'number' ? response.link.length : parseFloat(response.link.length) || 1.0,
+            // Generate ID if not provided by backend
+            id: response.link.id || `link_${Date.now()}_${Math.random().toString(36).substr(2, 4)}`,
+            // Frontend specific fields
             start_point: startPoint,
             end_point: endPoint,
             color: defaultColor,
@@ -433,11 +455,7 @@ const GraphBuilderTab: React.FC = () => {
             currentNodeCounter += 1
             finalEndNode = graphManager.addNode(endPoint[0], endPoint[1], `node${currentNodeCounter}`)
             setNodeCounter(currentNodeCounter)
-          }     if (!finalEndNode) {
-                  currentNodeCounter += 1
-                  finalEndNode = graphManager.addNode(endPoint[0], endPoint[1], `node${currentNodeCounter}`)
-                  setNodeCounter(currentNodeCounter)
-                }          // Add connection between nodes with this link
+          }          // Add connection between nodes with this link
           graphManager.addConnection(finalStartNode.id, finalEndNode.id, newLink)
           setLinkCounter(prev => prev + 1)
           setStatusMessage(`Link created: ${newLink.name}`)
@@ -453,14 +471,18 @@ const GraphBuilderTab: React.FC = () => {
   const handleLinkClick = (link: Link) => {
     setSelectedLink(link)
     setEditForm({
+      // Required fields
+      name: link.name,
       length: link.length.toString(),
-      name: link.name || '',
+      n_iterations: link.n_iterations,
       has_fixed: link.has_fixed,
-      has_constraint: link.has_constraint,
-      is_driven: link.is_driven,
-      flip: link.flip,
-      color: link.color || '#1976d2',
-      zlevel: link.zlevel || 0
+      // Optional fields with defaults
+      has_constraint: link.has_constraint ?? false,
+      is_driven: link.is_driven ?? false,
+      flip: link.flip ?? false,
+      zlevel: link.zlevel ?? 0,
+      // Frontend fields
+      color: link.color || '#1976d2'
     })
     setEditDialog(true)
   }
@@ -1002,7 +1024,7 @@ const GraphBuilderTab: React.FC = () => {
                   size="small"
                 />
                 <Chip 
-                  label={`Iterations: ${selectedLink?.n_iterations || 100}`} 
+                  label={`Iterations: ${selectedLink?.n_iterations || 24}`} 
                   variant="outlined" 
                   size="small"
                 />

@@ -1,8 +1,9 @@
 
 import numpy as np
-# Set matplotlib to use non-GUI backend BEFORE any matplotlib imports
-import matplotlib
-matplotlib.use('Agg', force=True)  # force=True to override existing backend  
+# Configure matplotlib for backend use BEFORE any matplotlib imports  
+from configs.matplotlib_config import configure_matplotlib_for_backend
+configure_matplotlib_for_backend()
+
 import matplotlib.pyplot as plt
 import matplotlib.colors as mcolors
 import seaborn as sns
@@ -156,7 +157,9 @@ def plot_static_arrows(links: List[Link],
         )
     
     if style.show_legend:
-        plt.legend()
+        # Only show legend if there are labeled artists
+        if plt.gca().get_legend_handles_labels()[0]:
+            plt.legend()
     
     _setup_plot_style(title, style)
     _handle_output(title, out_path, style)
@@ -237,7 +240,9 @@ def plot_static_pos(links: List[Link],
                            s=style.markersize, alpha=style.alpha, label=link.name)
         
         if style.show_legend:
-            plt.legend()
+            # Only show legend if there are labeled artists
+            if plt.gca().get_legend_handles_labels()[0]:
+                plt.legend()
     
     _setup_plot_style(title, style)
     _handle_output(title, out_path, style)

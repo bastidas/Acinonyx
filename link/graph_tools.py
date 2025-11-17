@@ -6,6 +6,9 @@ import logging
 from link.tools import get_tri_angles, get_tri_pos
 logger = logging.getLogger()
 from itertools import combinations
+from configs.link_models import Link, Node
+from pydantic import BaseModel
+
 
 def minimal_bounds(free_link, constrained_link):
     """
@@ -28,6 +31,258 @@ def minimal_bounds(free_link, constrained_link):
     # Subtract the radii of the circles (lengths of the links) to get the closest distance
     closest_distance = max(0, center_distance - (free_link.length + constrained_link.length))
     return closest_distance
+
+
+def validate_graph(graph):
+    """
+    Validate the graph structure to ensure all links and nodes are properly defined.
+    """
+    required_node_fields = Node.model_fields
+    required_link_fields = Link.model_fields
+    n_iterations = None
+    
+    n_driven_links = 0
+    n_fixed_nodes = 0
+    n_has_fixed_links = 0
+
+    node_ids = list(graph.nodes())
+    if len(node_ids) != len(set(node_ids)):
+        raise ValueError(f"Duplicate node IDs found in graph: {[nid for nid in node_ids if node_ids.count(nid) > 1]}")
+
+    for node in graph.nodes(data=True):
+        node_id = node[0]
+        node_data = node[1]
+        node_fields = set(node_data.keys())
+        for field in required_node_fields:
+            if field not in node_fields:
+                raise ValueError(f"Node {node_id} is missing required field: {field}")
+        
+        if n_iterations is None:
+            n_iterations = node_data.get('n_iterations', None)
+            expected_shape = (n_iterations, 2)
+        if n_iterations is None:
+            raise ValueError(f"Node {node_id} is missing 'n_iterations' field.")
+        
+        actual_shape = node_data['pos'].shape
+        if expected_shape != actual_shape:
+            raise ValueError(f"Node {node_id} pos has shape {actual_shape}, expected {expected_shape}")
+        
+
+        if node_data["fixed"]:
+            n_fixed_nodes += 1
+  
+    # # Check for duplicate link names
+    # all_link_names = [edge[2].get("name") for edge in graph.edges(data=True)]
+    # if len(all_link_names) != len(set(all_link_names)):
+    #     duplicates = [name for name in all_link_names if all_link_names.count(name) > 1]
+    #     raise ValueError(f"Duplicate link names found in graph: {list(set(duplicates))}")
+        
+    # for edge in graph.edges(data=True):
+    #     from_node = edge[0]
+    #     to_node = edge[1]
+    #     link_data = edge[2]
+    #     link_fields = set(link_data.keys())
+    #     for field in required_link_fields:
+    #         if field not in link_fields:
+    #             raise ValueError(f"Link from {from_node} to {to_node} is missing required field: {field}")  
+    
+    #     actual_shape1 = link_data['pos1'].shape
+    #     if expected_shape != actual_shape1:
+    #         raise ValueError(f"Link from {from_node} to {to_node} pos1 has shape {actual_shape1}, expected {expected_shape}")
+    #     actual_shape2 = link_data['pos2'].shape
+    #     if expected_shape != actual_shape2:
+    #         raise ValueError(f"Link from {from_node} to {to_node} pos2 has shape {actual_shape2}, expected {expected_shape}")
+        
+    #     if link_data["is_driven"]:
+    #         n_driven_links += 1
+    #     if link_data["has_fixed"]:
+    #         n_has_fixed_links += 1
+
+    #     link_name = link_data.get("name")
+    #     if link_name is None:
+    #         raise ValueError(f"Link from {from_node} to {to_node} is missing 'name' field")
+
+
+    # Check for duplicate link names
+    all_link_names = [edge[2]['link'].name for edge in graph.edges(data=True)]
+    if len(all_link_names) != len(set(all_link_names)):
+        duplicates = [name for name in all_link_names if all_link_names.count(name) > 1]
+        raise ValueError(f"Duplicate link names found in graph: {list(set(duplicates))}")
+        
+    for edge in graph.edges(data=True):
+        from_node = edge[0]
+        to_node = edge[1]
+        link_obj = edge[2]['link']
+        link_fields = set(link_obj.model_fields.keys())
+        for field in required_link_fields:
+            if field not in link_fields:
+                raise ValueError(f"Link from {from_node} to {to_node} is missing required field: {field}")  
+    
+        actual_shape1 = link_obj.pos1.shape
+        if expected_shape != actual_shape1:
+            raise ValueError(f"Link from {from_node} to {to_node} pos1 has shape {actual_shape1}, expected {expected_shape}")
+        actual_shape2 = link_obj.pos2.shape
+        if expected_shape != actual_shape2:
+            raise ValueError(f"Link from {from_node} to {to_node} pos2 has shape {actual_shape2}, expected {expected_shape}")
+        
+        if link_obj.is_driven:
+            n_driven_links += 1
+        if link_obj.has_fixed:
+            n_has_fixed_links += 1
+
+        link_name = link_obj.name
+        if link_name is None:
+            raise ValueError(f"Link from {from_node} to {to_node} is missing 'name' field")  
+        
+    assert n_driven_links == 1, "There must be exactly one driven link in the graph."
+    assert n_fixed_nodes >= 1, "There must be at least one fixed node in the graph."
+    assert n_has_fixed_links >= 2, f"There must be at least two links with a fixed end in the graph, but there are {n_has_fixed_links}."
+    print("Graph validation passed.")
+    return True
+
+
+def make_graph_simple(connections,
+                      links: list[Link],
+                      nodes: list[Node],
+                      n_iterations=12,
+                      as_dict=False):
+    """
+    Create a NetworkX graph from frontend connections and links data
+    example of connections;
+    connections = [
+            {"from_node": "node1", "to_node": "node2", "link": link1},
+            {"from_node": "node2", "to_node": "node3", "link": freelink},
+            {"from_node": "node3", "to_node": "node4", "link": link2},]
+                
+    """
+    graph = nx.Graph()  # Use undirected graph like the original make_3link
+    for node in nodes:
+        graph.add_node(node.name, 
+                      **node.as_dict())
+    
+
+    for i, conn in enumerate(connections):
+        from_node = conn.get('from_node')
+        to_node = conn.get('to_node')
+        link_obj = conn.get('link')
+        
+        if from_node and to_node and link_obj:
+            print(f"Connection {i+1}: {from_node} -> {to_node} via link '{link_obj.name}'")
+            try:
+                # Filter out frontend-specific fields
+                #clean_link_data = {k: v for k, v in link_data.items() 
+                #                 if k not in ['start_point', 'end_point', 'color', 'id']}
+                #link_obj = Link(**clean_link_data)
+                if as_dict: 
+                    graph.add_edge(from_node, to_node, **link_obj.as_dict())
+                else:
+                    graph.add_edge(from_node, to_node, link=link_obj)
+                print(f"  ✓ Converted connection link to Link object: {link_obj.name}")
+                print(link_obj.as_dict())
+            except Exception as e:
+                print(f"  ✗ Failed to convert connection link: {e}")
+                print(f"    Link data: {link_obj.as_dict()}")
+                # Skip this connection if Link conversion fails
+                #continue
+        else:
+            print(f"ERROR: Skipping invalid connection {i+1}: {conn}")
+
+    validate_graph(graph)
+    return graph
+
+def make_graph(connections,
+               links: list[Link],
+               nodes: list[Node],
+               n_iterations=12):
+    """Create a NetworkX graph from frontend connections and links data"""
+    print("\n=== MAKE_GRAPH CALLED ===")
+    print(f"Received {len(connections)} connections, {len(links)} links, and {len(nodes)} nodes")
+
+    n_iterations=3
+
+    # Create a new directed graph
+    graph = nx.DiGraph()
+    
+    # Add nodes to the graph with their properties
+    for node in nodes:
+        graph.add_node(node.id, 
+                      pos=node.pos,
+                      fixed=node.fixed,
+                      fixed_loc=node.fixed_loc)
+        print(f"Added node {node.id}: pos={node.pos}, fixed={node.fixed}")
+        print(f"fixed_loc: {node.fixed_loc}")
+    
+    # Process connections
+    for i, conn in enumerate(connections):
+        from_node = conn.get('from_node')
+        to_node = conn.get('to_node')
+        link_data = conn.get('link')
+        
+        if from_node and to_node and link_data:
+            print(f"Connection {i+1}: {from_node} -> {to_node} via link '{link_data.get('name', 'unnamed')}'")
+            
+            # Ensure nodes exist in the graph (add them if missing)
+            if from_node not in graph:
+                # Find matching node object or create default
+                from_node_obj = next((n for n in nodes if n.id == from_node), None)
+                if from_node_obj:
+                    graph.add_node(from_node,
+                                   pos=from_node_obj.pos,
+                                   fixed=from_node_obj.fixed,
+                                   fixed_loc=from_node_obj.fixed_loc)
+                else:
+                    # Create default node if not found
+                    graph.add_node(from_node, pos=(0, 0), fixed=False, fixed_loc=None)
+                    print(f"  Warning: Created default node for {from_node}")
+            
+            if to_node not in graph:
+                # Find matching node object or create default
+                to_node_obj = next((n for n in nodes if n.id == to_node), None)
+                if to_node_obj:
+                    graph.add_node(to_node, pos=to_node_obj.pos, fixed=to_node_obj.fixed, fixed_loc=to_node_obj.fixed_loc)
+                else:
+                    # Create default node if not found
+                    graph.add_node(to_node, pos=(0, 0), fixed=False, fixed_loc=None)
+                    print(f"  Warning: Created default node for {to_node}")
+            
+            # Convert dictionary link_data to Link object
+            try:
+                # Filter out frontend-specific fields
+                clean_link_data = {k: v for k, v in link_data.items() 
+                                 if k not in ['start_point', 'end_point', 'color', 'id']}
+                link_obj = Link(**clean_link_data)
+
+                #  Connection 1: node1 -> node2 via link 'drive_link'
+                # adding link drive_link with data: {'length': 2.1843315432490047, 'name': 'drive_link', 'n_iterations': 100, 'fixed_loc': None, 'has_fixed': False, 'has_constraint': False, 'path': None, 'is_driven': True, 'flip': False, 'zlevel': 0, 'pos1': {'0.0': 0}, 'pos2': {'0.0': 0}}
+                #   ✓ Converted connection link to Link object: drive_link
+                # Connection 2: node2 -> node3 via link 'link2'
+                # adding link link2 with data: {'length': 2.6826852219371546, 'name': 'link2', 'n_iterations': 100, 'fixed_loc': None, 'has_fixed': False, 'has_constraint': False, 'path': None, 'is_driven': False, 'flip': False, 'zlevel': 1, 'pos1': {'0.0': 0}, 'pos2': {'0.0': 0}}
+                #   ✓ Converted connection link to Link object: link2
+
+                print("adding link", link_obj.name, "with data:", clean_link_data)
+                graph.add_edge(from_node, to_node, link=link_obj)
+                print(f"  ✓ Converted connection link to Link object: {link_obj.name}")
+            except Exception as e:
+                print(f"  ✗ Failed to convert connection link: {e}")
+                print(f"    Link data: {link_data}")
+                # Skip this connection if Link conversion fails
+                continue
+        else:
+            print(f"Skipping invalid connection {i+1}: {conn}")
+    
+    print(f"\nCreated directed graph with {graph.number_of_nodes()} nodes and {graph.number_of_edges()} edges")
+    print(f"Nodes: {list(graph.nodes())}")
+    print(f"Edges: {list(graph.edges())}")
+
+    validate_graph(graph)
+    return {
+        "graph_type": "directed",
+        "nodes": list(graph.nodes()),
+        "edges": list(graph.edges()),
+        "node_count": graph.number_of_nodes(),
+        "edge_count": graph.number_of_edges()
+    }
+
 
 def solve_graph_links(
     i,
@@ -249,7 +504,7 @@ def run_graph(
     
     for edge in link_graph.edges(data=True):
         node1, node2, edge_data = edge
-        link = edge_data['link']
+        link: Link = edge_data['link']
         node1_data = link_graph.nodes[node1]
         node2_data = link_graph.nodes[node2]
 
@@ -272,8 +527,8 @@ def run_graph(
             #if len(connected_edges_node1) == 2 and len(connected_edges_node2) == 2:
             if len(connected_edges_node2) == 2:
                 # Check if the edges before and after are fixed
-                fixed_edges_node1 = [e for e in connected_edges_node1 if link_graph.nodes[e[1]].get('fixed', False)]
-                fixed_edges_node2 = [e for e in connected_edges_node2 if link_graph.nodes[e[1]].get('fixed', False)]
+                fixed_edges_node1 = [e for e in connected_edges_node1 if link_graph.nodes[e[1]]['fixed']]
+                fixed_edges_node2 = [e for e in connected_edges_node2 if link_graph.nodes[e[1]]['fixed']]
                 
                 if verbose > 0:
                     print("\t with 2 connected nodes, the first node is", fixed_edges_node1)

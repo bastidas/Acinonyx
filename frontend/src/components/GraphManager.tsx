@@ -46,10 +46,17 @@ export const useGraphManager = () => {
     }
     
     const newNode: GraphNode = {
+      // Required fields from backend
+      name: nodeId, // Use ID as name by default
+      n_iterations: 24, // Default to match backend expectation
+      init_pos: [x, y], // Set initial position
+      // Frontend required fields
       id: nodeId,
       pos: [x, y],
+      // Optional fields with defaults
       fixed: false,
       fixed_loc: undefined,
+      // GraphNode extension
       connections: []
     }
     
@@ -75,14 +82,25 @@ export const useGraphManager = () => {
   const addConnection = useCallback((fromNodeId: string, toNodeId: string, link: Link): string => {
     const connectionId = `conn_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`
     
-    const newConnection: GraphConnection = {
-      id: connectionId,
-      from_node: fromNodeId,
-      to_node: toNodeId,
-      link
-    }
-
     setGraphState(prev => {
+      // Find the connected nodes to check if any are fixed
+      const fromNode = prev.nodes.find(n => n.id === fromNodeId)
+      const toNode = prev.nodes.find(n => n.id === toNodeId)
+      const hasFixedNode = (fromNode?.fixed || false) || (toNode?.fixed || false)
+      
+      // Update link with correct has_fixed field
+      const updatedLink = {
+        ...link,
+        has_fixed: hasFixedNode
+      }
+      
+      const newConnection: GraphConnection = {
+        id: connectionId,
+        from_node: fromNodeId,
+        to_node: toNodeId,
+        link: updatedLink
+      }
+
       // Update nodes to include this connection
       const updatedNodes = prev.nodes.map(node => {
         if (node.id === fromNodeId || node.id === toNodeId) {
@@ -98,7 +116,7 @@ export const useGraphManager = () => {
         ...prev,
         nodes: updatedNodes,
         connections: [...prev.connections, newConnection],
-        links: [...prev.links, link]
+        links: [...prev.links, updatedLink]
       }
     })
 
@@ -291,13 +309,14 @@ export const useGraphManager = () => {
     })
   }, [])
 
-  // Get graph structure for backend
+  // Get graph structure for backend with all frontend data preserved
   const getGraphStructure = useCallback(() => {
     return {
       nodes: graphState.nodes.map(node => ({
         id: node.id,
         pos: node.pos,
-        fixed: node.fixed
+        fixed: node.fixed || false,
+        fixed_loc: node.fixed_loc
       })),
       connections: graphState.connections.map(conn => ({
         from_node: conn.from_node,
@@ -314,11 +333,11 @@ export const useGraphManager = () => {
     return [...new Set(zlevels)].sort((a, b) => a - b)
   }, [graphState.links])
 
-  // Toggle node fixed state
+  // Toggle node fixed state and update connected links
   const toggleNodeFixed = useCallback((nodeId: string, fixed: boolean) => {
-    setGraphState(prev => ({
-      ...prev,
-      nodes: prev.nodes.map(node => {
+    setGraphState(prev => {
+      // Update the node
+      const updatedNodes = prev.nodes.map(node => {
         if (node.id === nodeId) {
           return {
             ...node,
@@ -328,7 +347,60 @@ export const useGraphManager = () => {
         }
         return node
       })
-    }))
+      
+      // Find all connections involving this node
+      const connectionsInvolving = prev.connections.filter(conn => 
+        conn.from_node === nodeId || conn.to_node === nodeId
+      )
+      
+      // Update has_fixed field on connected links
+      const updatedLinks = prev.links.map(link => {
+        const connection = connectionsInvolving.find(conn => conn.link.id === link.id)
+        if (!connection) return link
+        
+        // Check if either connected node is fixed
+        const fromNode = updatedNodes.find(n => n.id === connection.from_node)
+        const toNode = updatedNodes.find(n => n.id === connection.to_node)
+        const hasFixedNode = (fromNode?.fixed || false) || (toNode?.fixed || false)
+        
+        return {
+          ...link,
+          has_fixed: hasFixedNode
+        }
+      })
+      
+      return {
+        ...prev,
+        nodes: updatedNodes,
+        links: updatedLinks
+      }
+    })
+  }, [])
+
+  // Utility function to sync has_fixed fields on all links based on connected nodes
+  const syncLinkFixedFields = useCallback(() => {
+    setGraphState(prev => {
+      const updatedLinks = prev.links.map(link => {
+        // Find connection for this link
+        const connection = prev.connections.find(conn => conn.link.id === link.id)
+        if (!connection) return link
+        
+        // Check if either connected node is fixed
+        const fromNode = prev.nodes.find(n => n.id === connection.from_node)
+        const toNode = prev.nodes.find(n => n.id === connection.to_node)
+        const hasFixedNode = (fromNode?.fixed || false) || (toNode?.fixed || false)
+        
+        return {
+          ...link,
+          has_fixed: hasFixedNode
+        }
+      })
+      
+      return {
+        ...prev,
+        links: updatedLinks
+      }
+    })
   }, [])
 
   return {
@@ -346,7 +418,8 @@ export const useGraphManager = () => {
     clearGraph,
     getGraphStructure,
     getUniqueZLevels,
-    toggleNodeFixed
+    toggleNodeFixed,
+    syncLinkFixedFields
   }
 }
 

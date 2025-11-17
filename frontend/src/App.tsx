@@ -11,6 +11,7 @@ import {
 } from '@mui/material'
 import cheetahGif from './assets/cheetah_run.gif'
 import GraphBuilderTab from './components/GraphBuilderTab'
+import GraphViewTab from './components/GraphViewTab'
 import StatusAboutTab from './components/StatusAboutTab'
 
 const theme = createTheme({
@@ -58,12 +59,14 @@ function App() {
         <Box sx={{ borderBottom: 1, borderColor: 'divider', mb: 3 }}>
           <Tabs value={currentTab} onChange={handleTabChange} centered>
             <Tab label="Graph Builder" />
+            <Tab label="Graph View" />
             <Tab label="Status & About" />
           </Tabs>
         </Box>
 
         {currentTab === 0 && <GraphBuilderTab />}
-        {currentTab === 1 && <StatusAboutTab />}
+        {currentTab === 1 && <GraphViewTab />}
+        {currentTab === 2 && <StatusAboutTab />}
       </Container>
     </ThemeProvider>
   )

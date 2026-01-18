@@ -41,7 +41,8 @@ testing = [
     ]
 
 dev = [
-    "pre-commit"
+    "pre-commit",
+    "black"
     ]
 
 

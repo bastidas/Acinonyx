@@ -81,6 +81,7 @@ class Link(BaseModel):
     has_constraint: bool = Field(default=False, description="Whether the link has constraints")
     path: Optional[np.ndarray] = Field(default=None, description="Path array for the link")
     is_driven: bool = Field(default=False, description="Whether this is a driven link")
+    is_ground: bool = Field(default=False, description="Whether this is a ground link (fixed frame between anchors)")
     flip: bool = Field(default=False, description="Whether to flip the link orientation")
     zlevel: int = Field(default=0, description="Z-level for rendering and physical building order." \
     " higher z-levels are on top of lower z-levels. When physically constructing an automaton two links that are connected" \

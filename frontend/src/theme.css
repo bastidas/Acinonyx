@@ -1,0 +1,281 @@
+/* =============================================================================
+   ACINONYX THEME - Centralized Color & Style Variables
+   =============================================================================
+   
+   USAGE:
+   - CSS: var(--color-primary)
+   - TypeScript: import { theme } from './theme'
+   
+   To change the theme, modify the CSS custom properties below.
+   ============================================================================= */
+
+:root {
+  /* -------------------------------------------------------------------------
+     PRIMARY PALETTE - Main brand colors
+     ------------------------------------------------------------------------- */
+  --color-primary: #FA8112;           /* Main highlight/accent - cheetah orange */
+  --color-primary-light: #FFB347;     /* Lighter variant */
+  --color-primary-dark: #D96A00;      /* Darker variant for hover states */
+  
+  /* -------------------------------------------------------------------------
+     BACKGROUND COLORS
+     ------------------------------------------------------------------------- */
+  --color-bg-tan: #FAF3E1;            /* Primary tan background */
+  --color-bg-tan-alt: #F5E7C6;        /* Alternate tan background */
+  --color-bg-tan-accent: #EAC381;     /* Tan accent for highlights */
+  --color-bg-dark: #222222;           /* Dark mode primary background */
+  --color-bg-dark-alt: #231A32;       /* Dark mode alternate (purple-tinted) */
+  
+  /* -------------------------------------------------------------------------
+     STATUS & FEEDBACK COLORS
+     ------------------------------------------------------------------------- */
+  --color-success: #B4D6A9;           /* Success states - soft green */
+  --color-success-dark: #4CAF50;      /* Strong success */
+  --color-nominal: #A2C8E7;           /* Okay/nominal states - soft blue */
+  --color-nominal-dark: #1976D2;      /* Strong nominal/info */
+  --color-warning: #E6A743;           /* Warning/highlight variation */
+  --color-warning-dark: #ED6C02;      /* Strong warning */
+  --color-error: #D32F2F;             /* Error states */
+  --color-error-light: #FFEBEE;       /* Error background */
+  
+  /* -------------------------------------------------------------------------
+     TEXT COLORS
+     ------------------------------------------------------------------------- */
+  --color-text-primary: #222222;      /* Main text on light backgrounds */
+  --color-text-secondary: #555555;    /* Secondary text */
+  --color-text-muted: #888888;        /* Muted/disabled text */
+  --color-text-on-dark: #FAF3E1;      /* Text on dark backgrounds */
+  --color-text-on-primary: #FFFFFF;   /* Text on primary color */
+  
+  /* -------------------------------------------------------------------------
+     SURFACE & BORDER COLORS
+     ------------------------------------------------------------------------- */
+  --color-surface: #FFFFFF;           /* Card/panel backgrounds */
+  --color-surface-hover: #F5F5F5;     /* Hover state for surfaces */
+  --color-border: #E0E0E0;            /* Default borders */
+  --color-border-light: #EEEEEE;      /* Light borders */
+  --color-divider: #E0E0E0;           /* Dividers */
+  
+  /* -------------------------------------------------------------------------
+     GRAPH/VISUALIZATION COLORS - Data visualization palette
+     ------------------------------------------------------------------------- */
+  --color-graph-blue: #1F77B4;
+  --color-graph-orange: #FF7F0E;
+  --color-graph-green: #2CA02C;
+  --color-graph-red: #D62728;
+  --color-graph-purple: #9467BD;
+  --color-graph-brown: #8C564B;
+  --color-graph-pink: #E377C2;
+  --color-graph-gray: #7F7F7F;
+  --color-graph-olive: #BCBD22;
+  --color-graph-cyan: #17BECF;
+  
+  /* -------------------------------------------------------------------------
+     JOINT/LINKAGE SPECIFIC COLORS
+     ------------------------------------------------------------------------- */
+  --color-joint-static: #E74C3C;      /* Fixed/static joints - red */
+  --color-joint-crank: #F39C12;       /* Crank joints - amber */
+  --color-joint-pivot: #2196F3;       /* Regular pivot joints - blue */
+  --color-link-ground: #888888;       /* Ground links */
+  --color-link-selected: #1976D2;     /* Selected link highlight */
+  --color-move-group: #9E9E9E;        /* Move group indication */
+  --color-merge-highlight: #00BCD4;   /* Merge indication - cyan */
+  
+  /* -------------------------------------------------------------------------
+     SHADOWS & EFFECTS
+     ------------------------------------------------------------------------- */
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.05);
+  --shadow-md: 0 4px 6px rgba(0, 0, 0, 0.1);
+  --shadow-lg: 0 10px 15px rgba(0, 0, 0, 0.1);
+  
+  /* -------------------------------------------------------------------------
+     SPACING (for reference)
+     ------------------------------------------------------------------------- */
+  --spacing-xs: 4px;
+  --spacing-sm: 8px;
+  --spacing-md: 16px;
+  --spacing-lg: 24px;
+  --spacing-xl: 32px;
+  
+  /* -------------------------------------------------------------------------
+     BORDER RADIUS
+     ------------------------------------------------------------------------- */
+  --radius-sm: 4px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --radius-full: 9999px;
+  
+  /* -------------------------------------------------------------------------
+     TRANSITIONS
+     ------------------------------------------------------------------------- */
+  --transition-fast: 150ms ease;
+  --transition-normal: 250ms ease;
+  --transition-slow: 350ms ease;
+}
+
+/* =============================================================================
+   DARK MODE OVERRIDES
+   Add class="dark-mode" to <html> or <body> to enable
+   ============================================================================= */
+
+.dark-mode {
+  --color-bg-tan: #222222;
+  --color-bg-tan-alt: #231A32;
+  --color-surface: #2E2E2E;
+  --color-surface-hover: #3A3A3A;
+  --color-text-primary: #FAF3E1;
+  --color-text-secondary: #CCCCCC;
+  --color-text-muted: #888888;
+  --color-border: #444444;
+  --color-border-light: #333333;
+  --color-divider: #444444;
+  
+  /* Canvas/SVG specific */
+  --color-canvas-bg: #1a1a1a;
+  --color-grid-major: #444444;
+  --color-grid-minor: #333333;
+  --color-grid-text: #666666;
+}
+
+/* Light mode canvas defaults */
+:root {
+  --color-canvas-bg: #fafafa;
+  --color-grid-major: #dddddd;
+  --color-grid-minor: #eeeeee;
+  --color-grid-text: #999999;
+}
+
+/* =============================================================================
+   BASE STYLES
+   ============================================================================= */
+
+html, body {
+  background-color: var(--color-surface);
+  color: var(--color-text-primary);
+  transition: background-color var(--transition-normal), color var(--transition-normal);
+}
+
+#root {
+  background-color: var(--color-surface);
+  min-height: 100vh;
+  transition: background-color var(--transition-normal);
+}
+
+/* =============================================================================
+   DARK MODE - MUI Component Overrides
+   ============================================================================= */
+
+.dark-mode .MuiPaper-root {
+  background-color: #2a2a2a !important;
+  color: #e0e0e0;
+}
+
+.dark-mode .MuiTypography-root {
+  color: inherit;
+}
+
+.dark-mode .MuiButton-outlined {
+  border-color: #555;
+  color: #e0e0e0;
+}
+
+.dark-mode .MuiButton-outlined:hover {
+  border-color: #888;
+  background-color: rgba(255, 255, 255, 0.08);
+}
+
+.dark-mode .MuiIconButton-root {
+  color: #e0e0e0;
+}
+
+.dark-mode .MuiDivider-root {
+  border-color: #444;
+}
+
+.dark-mode .MuiInputBase-root {
+  color: #e0e0e0;
+  background-color: #333;
+}
+
+.dark-mode .MuiInputBase-root .MuiOutlinedInput-notchedOutline {
+  border-color: #555;
+}
+
+.dark-mode .MuiInputBase-root:hover .MuiOutlinedInput-notchedOutline {
+  border-color: #777;
+}
+
+.dark-mode .MuiFormLabel-root {
+  color: #aaa;
+}
+
+.dark-mode .MuiFormHelperText-root {
+  color: #888;
+}
+
+.dark-mode .MuiSelect-icon {
+  color: #888;
+}
+
+.dark-mode .MuiMenuItem-root {
+  color: #e0e0e0;
+}
+
+.dark-mode .MuiMenu-paper {
+  background-color: #333 !important;
+}
+
+.dark-mode .MuiChip-root {
+  background-color: #444;
+  color: #e0e0e0;
+}
+
+.dark-mode .MuiSwitch-track {
+  background-color: #555 !important;
+}
+
+.dark-mode .MuiTabs-root {
+  border-color: #444;
+}
+
+.dark-mode .MuiTab-root {
+  color: #aaa;
+}
+
+.dark-mode .MuiTab-root.Mui-selected {
+  color: #FA8112;
+}
+
+/* Toolbar panel backgrounds in dark mode */
+.dark-mode .toolbar-toggle-buttons-container {
+  background-color: rgba(40, 40, 40, 0.9) !important;
+  border-color: rgba(255, 255, 255, 0.1) !important;
+}
+
+/* Footer toolbar in dark mode */
+.dark-mode [class*="FooterToolbar"],
+.dark-mode [style*="position: fixed"][style*="bottom: 0"] {
+  background-color: rgba(40, 40, 40, 0.98) !important;
+  border-top-color: #444 !important;
+}
+
+/* =============================================================================
+   UTILITY CLASSES
+   ============================================================================= */
+
+.bg-primary { background-color: var(--color-primary); }
+.bg-tan { background-color: var(--color-bg-tan); }
+.bg-tan-alt { background-color: var(--color-bg-tan-alt); }
+.bg-dark { background-color: var(--color-bg-dark); }
+
+.text-primary { color: var(--color-primary); }
+.text-success { color: var(--color-success-dark); }
+.text-warning { color: var(--color-warning-dark); }
+.text-error { color: var(--color-error); }
+.text-muted { color: var(--color-text-muted); }
+
+.border-primary { border-color: var(--color-primary); }
+.border-success { border-color: var(--color-success); }
+.border-warning { border-color: var(--color-warning); }
+.border-error { border-color: var(--color-error); }
+

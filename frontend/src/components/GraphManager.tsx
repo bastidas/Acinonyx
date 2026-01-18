@@ -446,12 +446,16 @@ export const useGraphManager = () => {
         fixed: node.fixed || false,
         fixed_loc: node.fixed_loc
       })),
-      // Connections are now lightweight - just references
-      connections: graphState.connections.map(conn => ({
-        from_node: conn.from_node,
-        to_node: conn.to_node,
-        link_id: conn.link_id
-      })),
+      // Connections include link_id AND link_name for robust backend matching
+      connections: graphState.connections.map(conn => {
+        const link = graphState.links.find(l => l.meta.id === conn.link_id)
+        return {
+          from_node: conn.from_node,
+          to_node: conn.to_node,
+          link_id: conn.link_id,
+          link_name: link?.name  // Include name for fallback matching
+        }
+      }),
       // Links are the single source of truth
       links: graphState.links
     }

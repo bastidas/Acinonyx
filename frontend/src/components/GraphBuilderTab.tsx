@@ -35,20 +35,10 @@ import {
   DeleteItem
 } from './GraphManagerHelpers'
 import PathVisualization from './PathVisualization'
+import { graphColors } from '../theme'
 
-// Seaborn-style "tab10" color palette equivalent
-const TAB10_COLORS = [
-  '#1f77b4', // blue
-  '#ff7f0e', // orange
-  '#2ca02c', // green
-  '#d62728', // red
-  '#9467bd', // purple
-  '#8c564b', // brown
-  '#e377c2', // pink
-  '#7f7f7f', // gray
-  '#bcbd22', // olive
-  '#17becf'  // cyan
-]
+// Use centralized graph color palette from theme
+const TAB10_COLORS = graphColors
 
 interface ClickPoint {
   x: number
@@ -1119,6 +1109,7 @@ const GraphBuilderTab: React.FC = () => {
             fixed_loc: link.fixed_loc ?? null,
             has_constraint: link.has_constraint ?? false,
             is_driven: link.is_driven ?? false,
+            is_ground: link.is_ground ?? false,  // Ground link support
             flip: link.flip ?? false,
             zlevel: link.zlevel ?? 0,
             meta: link.meta || {

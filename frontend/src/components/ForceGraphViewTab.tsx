@@ -14,6 +14,7 @@ import VisibilityIcon from '@mui/icons-material/Visibility'
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore'
 import ExpandLessIcon from '@mui/icons-material/ExpandLess'
 import * as d3 from 'd3'
+import { graphColors, colors } from '../theme'
 
 interface GraphData {
   nodes: any[]
@@ -56,9 +57,9 @@ const ForceGraph: React.FC<ForceGraphProps> = ({ data }) => {
       .enter().append("line")
       .style("fill", "none")
       .style("stroke", (d: any) => {
-        // Check if this link is driven (blue for driven, black for others)
+        // Check if this link is driven (blue for driven, dark for others)
         const isDrivern = d.link && d.link.is_driven
-        return isDrivern ? "#1f77b4" : "#000000ff"
+        return isDrivern ? graphColors[0] : colors.textPrimary
       })
       .style("stroke-width", (d: any) => {
         // Make driven links slightly thicker
@@ -86,8 +87,8 @@ const ForceGraph: React.FC<ForceGraphProps> = ({ data }) => {
       .enter().append("circle")
       .attr("r", 5)
       .style("cursor", "pointer")
-      .style("fill", "#323232ff")
-      .style("stroke", "#ffffffff")
+      .style("fill", colors.textPrimary)
+      .style("stroke", colors.surface)
       .style("stroke-width", "1px")
       .call(d3.drag<SVGCircleElement, any>()
         .on("start", (event, d: any) => {

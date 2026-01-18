@@ -10,21 +10,14 @@ import {
   Tab
 } from '@mui/material'
 import cheetahGif from './assets/cheetah_run.gif'
+import PylinkBuilderTab from './components/PylinkBuilderTab'
 import GraphBuilderTab from './components/GraphBuilderTab'
 import ForceGraphViewTab from './components/ForceGraphViewTab'
 import StatusAboutTab from './components/StatusAboutTab'
+import { muiThemeConfig } from './theme'
+import './theme.css'
 
-const theme = createTheme({
-  palette: {
-    mode: 'light',
-    primary: {
-      main: '#ff8c00', // Orange like a cheetah
-    },
-    secondary: {
-      main: '#2e2e2e', // Dark like cheetah spots
-    },
-  },
-})
+const theme = createTheme(muiThemeConfig)
 
 function App() {
   const [currentTab, setCurrentTab] = useState(0)
@@ -36,37 +29,46 @@ function App() {
   return (
     <ThemeProvider theme={theme}>
       <CssBaseline />
-      <Container maxWidth="md" sx={{ py: 0 }}>
-        <Box sx={{ textAlign: 'center', mb: 0 }}>
+      <Container maxWidth={false} sx={{ 
+        py: 0, 
+        px: currentTab === 0 ? 0 : 2, 
+        maxWidth: currentTab === 0 ? '100%' : '1600px',
+        backgroundColor: 'var(--color-surface)',
+        minHeight: '100vh',
+        transition: 'background-color 0.25s ease'
+      }}>
+        <Box sx={{ textAlign: 'center', mb: 0, mt: -1 }}>
           <img 
             src={cheetahGif} 
             alt="Acinonyx Cheetah" 
             style={{ 
-              maxWidth: '200px', 
+              maxWidth: '140px', 
               height: 'auto', 
-              marginBottom: '-60px',
+              marginBottom: '-45px',
               borderRadius: '0px'
             }} 
           />
-          <Typography variant="h5" component="h1" gutterBottom>
+          <Typography variant="h6" component="h1" sx={{ mb: -0.5, fontWeight: 600 }}>
             Acinonyx
           </Typography>
-          <Typography variant="subtitle1" color="text.secondary">
+          <Typography variant="body2" color="text.secondary" sx={{ mb: 0.5 }}>
           Mechanical Linkage Simulation
           </Typography>
         </Box>
 
-        <Box sx={{ borderBottom: 1, borderColor: 'divider', mb: 3 }}>
+        <Box sx={{ borderBottom: 1, borderColor: 'divider', mb: 1 }}>
           <Tabs value={currentTab} onChange={handleTabChange} centered>
+            <Tab label="Pylink Builder" />
             <Tab label="Graph Builder" />
             <Tab label="Graph View" />
             <Tab label="Status & About" />
           </Tabs>
         </Box>
 
-        {currentTab === 0 && <GraphBuilderTab />}
-        {currentTab === 1 && <ForceGraphViewTab />}
-        {currentTab === 2 && <StatusAboutTab />}
+        {currentTab === 0 && <PylinkBuilderTab />}
+        {currentTab === 1 && <GraphBuilderTab />}
+        {currentTab === 2 && <ForceGraphViewTab />}
+        {currentTab === 3 && <StatusAboutTab />}
       </Container>
     </ThemeProvider>
   )

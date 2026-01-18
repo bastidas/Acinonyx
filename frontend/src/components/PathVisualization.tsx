@@ -13,6 +13,7 @@ import {
 import PlayArrowIcon from '@mui/icons-material/PlayArrow'
 import PauseIcon from '@mui/icons-material/Pause'
 import StopIcon from '@mui/icons-material/Stop'
+import { getCyclicColor, jointColors, ColorCycleType } from '../theme'
 
 interface PathVisualizationProps {
   pathData: {
@@ -25,6 +26,7 @@ interface PathVisualizationProps {
     links: Array<{
       name: string
       is_driven: boolean
+      is_ground?: boolean  // Ground/frame link (dashed style)
       has_fixed: boolean
       has_constraint: boolean
       pos1: number[][]
@@ -117,9 +119,16 @@ const PathVisualization: React.FC<PathVisualizationProps> = ({ pathData }) => {
     // Reset alpha for main elements
     ctx.globalAlpha = 1.0
 
-    // Generate frame color (similar to matplotlib Spectral colormap)
-    const rotationFraction = frame / pathData.n_iterations
-    const frameColor = getSpectralColor(rotationFraction)
+    // ─────────────────────────────────────────────────────────────────────────
+    // FRAME COLOR - Cyclic color for current animation frame
+    // ─────────────────────────────────────────────────────────────────────────
+    // Uses a cyclic color gradient that returns to the starting color at the
+    // end of the animation, creating smooth visual continuity for looping.
+    //
+    // Available options: 'rainbow', 'fire', 'glow'
+    // ─────────────────────────────────────────────────────────────────────────
+    const frameColorCycle: ColorCycleType = 'rainbow'
+    const frameColor = getCyclicColor(frame, pathData.n_iterations, frameColorCycle)
 
     // First pass: Draw current frame links and nodes (30% bigger: lines 3->4, 2->3; nodes 4->5)
     const labelPositions: Array<{name: string, x: number, y: number}> = []
@@ -135,12 +144,23 @@ const PathVisualization: React.FC<PathVisualizationProps> = ({ pathData }) => {
         const y2 = transformY(pos2[1])
 
         // Draw link line
-        ctx.strokeStyle = frameColor
-        ctx.lineWidth = link.is_driven ? 4 : 3
+        ctx.strokeStyle = link.is_ground ? jointColors.ground : frameColor  // Gray for ground
+        ctx.lineWidth = link.is_driven ? 4 : (link.is_ground ? 2 : 3)
+        
+        // Use dashed line for ground links
+        if (link.is_ground) {
+          ctx.setLineDash([8, 4])  // 8px dash, 4px gap
+        } else {
+          ctx.setLineDash([])  // Solid line
+        }
+        
         ctx.beginPath()
         ctx.moveTo(x1, y1)
         ctx.lineTo(x2, y2)
         ctx.stroke()
+        
+        // Reset line dash for other drawing
+        ctx.setLineDash([])
 
         // Draw nodes (pos1 and pos2)
         ctx.fillStyle = frameColor
@@ -179,30 +199,6 @@ const PathVisualization: React.FC<PathVisualizationProps> = ({ pathData }) => {
     ctx.font = '14px Arial'
     ctx.textAlign = 'left'
     ctx.fillText(`Frame: ${frame + 1}/${pathData.n_iterations}`, 10, 20)
-  }
-
-  const getSpectralColor = (t: number): string => {
-    // Simple approximation of matplotlib Spectral colormap
-    let r, g, b
-    if (t < 0.25) {
-      r = 158 + Math.floor((255-158) * t * 4)
-      g = 1 + Math.floor((116-1) * t * 4)
-      b = 5 + Math.floor((9-5) * t * 4)
-    } else if (t < 0.5) {
-      r = 255 - Math.floor((255-255) * (t-0.25) * 4)
-      g = 116 + Math.floor((217-116) * (t-0.25) * 4)
-      b = 9 + Math.floor((54-9) * (t-0.25) * 4)
-    } else if (t < 0.75) {
-      r = 255 - Math.floor((255-171) * (t-0.5) * 4)
-      g = 217 + Math.floor((221-217) * (t-0.5) * 4)
-      b = 54 + Math.floor((164-54) * (t-0.5) * 4)
-    } else {
-      r = 171 - Math.floor((171-94) * (t-0.75) * 4)
-      g = 221 - Math.floor((221-79) * (t-0.75) * 4)
-      b = 164 - Math.floor((164-162) * (t-0.75) * 4)
-    }
-    
-    return `rgb(${r}, ${g}, ${b})`
   }
 
   const handlePlay = () => {
@@ -302,7 +298,7 @@ const PathVisualization: React.FC<PathVisualizationProps> = ({ pathData }) => {
                       y1={y1}
                       x2={x2}
                       y2={y2}
-                      stroke={i === currentFrame ? getSpectralColor(i / pathData.n_iterations) : '#999'}
+                      stroke={i === currentFrame ? getCyclicColor(i, pathData.n_iterations, 'rainbow') : '#999'}
                       strokeWidth={i === currentFrame ? 3 : 1}
                     />
                   )
@@ -314,7 +310,7 @@ const PathVisualization: React.FC<PathVisualizationProps> = ({ pathData }) => {
                   const pointerLength = 24
                   const x = 40 + pointerLength * Math.cos(angle)
                   const y = 40 + pointerLength * Math.sin(angle)
-                  const frameColor = getSpectralColor(currentFrame / pathData.n_iterations)
+                  const dialColor = getCyclicColor(currentFrame, pathData.n_iterations, 'rainbow')
                   return (
                     <>
                       <line
@@ -322,12 +318,12 @@ const PathVisualization: React.FC<PathVisualizationProps> = ({ pathData }) => {
                         y1="40"
                         x2={x}
                         y2={y}
-                        stroke={frameColor}
+                        stroke={dialColor}
                         strokeWidth="3"
                         strokeLinecap="round"
                       />
-                      <circle cx="40" cy="40" r="4" fill={frameColor} />
-                      <circle cx={x} cy={y} r="3" fill={frameColor} />
+                      <circle cx="40" cy="40" r="4" fill={dialColor} />
+                      <circle cx={x} cy={y} r="3" fill={dialColor} />
                     </>
                   )
                 })()}

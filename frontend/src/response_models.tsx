@@ -21,6 +21,7 @@ export interface Link {
   fixed_loc?: [number, number] | null
   has_constraint?: boolean
   is_driven?: boolean
+  is_ground?: boolean // Ground link between fixed anchors (frame)
   flip?: boolean
   zlevel?: number
   

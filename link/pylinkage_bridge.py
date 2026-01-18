@@ -205,6 +205,7 @@ def simulate_demo_4bar(
             {
                 "name": "ground",
                 "is_driven": False,
+                "is_ground": True,  # This is the ground/frame link
                 "has_fixed": True,
                 "has_constraint": True,
                 "pos1": trajectories["crank_anchor"].tolist(),
@@ -213,6 +214,7 @@ def simulate_demo_4bar(
             {
                 "name": "crank",
                 "is_driven": True,
+                "is_ground": False,
                 "has_fixed": True,
                 "has_constraint": False,
                 "pos1": trajectories["crank_anchor"].tolist(),
@@ -221,6 +223,7 @@ def simulate_demo_4bar(
             {
                 "name": "coupler",
                 "is_driven": False,
+                "is_ground": False,
                 "has_fixed": False,
                 "has_constraint": False,
                 "pos1": trajectories["crank_end"].tolist(),
@@ -229,6 +232,7 @@ def simulate_demo_4bar(
             {
                 "name": "rocker",
                 "is_driven": False,
+                "is_ground": False,
                 "has_fixed": True,
                 "has_constraint": False,
                 "pos1": trajectories["rocker_anchor"].tolist(),
@@ -422,6 +426,7 @@ def demo_4bar_to_ui_format(
             "target_cost_func": None,
             "has_constraint": False,
             "is_driven": True,  # This is the driver!
+            "is_ground": False,
             "flip": False,
             "zlevel": 0,
             "meta": {
@@ -441,6 +446,7 @@ def demo_4bar_to_ui_format(
             "target_cost_func": None,
             "has_constraint": False,
             "is_driven": False,
+            "is_ground": False,
             "flip": False,
             "zlevel": 1,
             "meta": {
@@ -460,6 +466,7 @@ def demo_4bar_to_ui_format(
             "target_cost_func": None,
             "has_constraint": False,
             "is_driven": False,
+            "is_ground": False,
             "flip": False,
             "zlevel": 0,
             "meta": {
@@ -468,30 +475,57 @@ def demo_4bar_to_ui_format(
                 "end_point": list(coupler_joint_init),
                 "color": colors[2]
             }
+        },
+        {
+            "name": "ground",
+            "length": ground_length,
+            "n_iterations": n_iterations,
+            "has_fixed": True,
+            "fixed_loc": list(crank_anchor),  # Ground starts at crank anchor
+            "target_length": None,
+            "target_cost_func": None,
+            "has_constraint": True,  # Ground is always constrained
+            "is_driven": False,
+            "is_ground": True,  # This is the ground/frame link!
+            "flip": False,
+            "zlevel": -1,  # Below other links
+            "meta": {
+                "id": ground_id,
+                "start_point": list(crank_anchor),
+                "end_point": list(rocker_anchor),
+                "color": "#888888"  # Gray for ground
+            }
         }
     ]
     
-    # Note: Ground link is implicit (between the two fixed anchors)
-    # We don't need to add it as it's just the frame
-    
     # ═══════════════════════════════════════════════════════════════
     # CONNECTIONS
+    # Include both link_id (UUID) and link_name for robust matching
     # ═══════════════════════════════════════════════════════════════
     connections = [
         {
             "from_node": "crank_anchor",
             "to_node": "crank_end",
-            "link_id": crank_id
+            "link_id": crank_id,
+            "link_name": "crank"
         },
         {
             "from_node": "crank_end",
             "to_node": "coupler_joint",
-            "link_id": coupler_id
+            "link_id": coupler_id,
+            "link_name": "coupler"
         },
         {
             "from_node": "rocker_anchor",
             "to_node": "coupler_joint",
-            "link_id": rocker_id
+            "link_id": rocker_id,
+            "link_name": "rocker"
+        },
+        {
+            "from_node": "crank_anchor",
+            "to_node": "rocker_anchor",
+            "link_id": ground_id,
+            "link_name": "ground"
         }
     ]
     
@@ -574,19 +608,34 @@ def _build_graph_from_connections(
         from_node = conn.get('from_node')
         to_node = conn.get('to_node')
         link_id = conn.get('link_id')
+        link_name_direct = conn.get('link_name')  # Direct link name in connection
         link_ref = conn.get('link')
         
-        # Find the link
+        # Find the link - try multiple methods
         link = None
+        
+        # Method 1: By meta.id (UUID from frontend)
         if link_id:
-            link = link_by_meta_id.get(link_id) or link_by_name.get(link_id)
+            link = link_by_meta_id.get(link_id)
+        
+        # Method 2: By direct link_name in connection (from demo_4bar_to_ui_format)
+        if not link and link_name_direct:
+            link = link_by_name.get(link_name_direct)
+        
+        # Method 3: By link_id as link name (sometimes used interchangeably)
+        if not link and link_id:
+            link = link_by_name.get(link_id)
+        
+        # Method 4: By embedded link reference
         if not link and link_ref:
-            link_name = link_ref.get('name') if isinstance(link_ref, dict) else None
-            if link_name:
-                link = link_by_name.get(link_name)
+            ref_name = link_ref.get('name') if isinstance(link_ref, dict) else None
+            if ref_name:
+                link = link_by_name.get(ref_name)
         
         if from_node and to_node and link:
             graph.add_edge(from_node, to_node, link=link)
+        elif from_node and to_node:
+            logger.warning(f"Could not find link for connection {from_node} -> {to_node} (link_id={link_id}, link_name={link_name_direct})")
     
     return graph
 
@@ -603,13 +652,18 @@ def _find_driven_link(links: list[Link]) -> Optional[Link]:
 
 
 def _find_fixed_links(links: list[Link]) -> list[Link]:
-    """Find all links with fixed anchors (excluding driven)."""
-    return [l for l in links if l.has_fixed and not l.is_driven]
+    """Find all links with fixed anchors (excluding driven and ground)."""
+    return [l for l in links if l.has_fixed and not l.is_driven and not getattr(l, 'is_ground', False)]
 
 
 def _find_free_links(links: list[Link]) -> list[Link]:
-    """Find all free-floating links (no fixed anchor)."""
-    return [l for l in links if not l.has_fixed]
+    """Find all free-floating links (no fixed anchor, not ground)."""
+    return [l for l in links if not l.has_fixed and not getattr(l, 'is_ground', False)]
+
+
+def _find_ground_links(links: list[Link]) -> list[Link]:
+    """Find all ground links (frame/base between fixed anchors)."""
+    return [l for l in links if getattr(l, 'is_ground', False)]
 
 
 def _determine_solve_order(
@@ -693,6 +747,12 @@ def convert_to_pylinkage(
         if not static_joints:
             result.errors.append("No fixed nodes found - linkage needs at least one ground point")
             return result
+        
+        # Note: Ground links are implicit in pylinkage (they define the frame)
+        ground_links = _find_ground_links(links)
+        for gl in ground_links:
+            result.warnings.append(f"Ground link '{gl.name}' is implicit in pylinkage - skipped in conversion")
+            logger.debug(f"Skipping ground link '{gl.name}' (implicit in pylinkage)")
         
         # ═══════════════════════════════════════════════════════════════
         # Step 2: Find and create Crank (driven link)
@@ -971,6 +1031,7 @@ def trajectories_to_link_positions(
         link_data = {
             "name": link.name,
             "is_driven": link.is_driven,
+            "is_ground": getattr(link, 'is_ground', False),
             "has_fixed": link.has_fixed,
             "has_constraint": link.has_constraint,
             "pos1": None,
@@ -1087,6 +1148,7 @@ def extract_path_visualization_data(
             links_data.append({
                 "name": link.name,
                 "is_driven": link.is_driven,
+                "is_ground": getattr(link, 'is_ground', False),
                 "has_fixed": link.has_fixed,
                 "has_constraint": link.has_constraint,
                 "pos1": pos1.tolist(),

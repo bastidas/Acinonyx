@@ -453,6 +453,15 @@ class TestDemo4Bar:
         assert "coupler" in link_names
         assert "rocker" in link_names
         
+        # Verify is_ground flag in path_data
+        ground_link = next(l for l in result["path_data"]["links"] if l["name"] == "ground")
+        assert ground_link.get("is_ground") == True
+        
+        # Non-ground links should have is_ground=False
+        other_links = [l for l in result["path_data"]["links"] if l["name"] != "ground"]
+        for link in other_links:
+            assert link.get("is_ground") == False, f"Link {link['name']} should not be ground"
+        
         print(f"✓ Demo 4-bar simulated in {result['execution_time_ms']:.2f}ms")
     
     def test_demo_4bar_grashof_condition(self):
@@ -514,27 +523,103 @@ class TestDemo4Bar:
         assert "crank_anchor" in fixed_ids
         assert "rocker_anchor" in fixed_ids
         
-        # Check links
-        assert len(ui_graph["links"]) == 3  # crank, coupler, rocker (no ground link)
+        # Check links - now includes ground link
+        assert len(ui_graph["links"]) == 4  # crank, coupler, rocker, ground
         link_names = [l["name"] for l in ui_graph["links"]]
         assert "crank" in link_names
         assert "coupler" in link_names
         assert "rocker" in link_names
+        assert "ground" in link_names
         
         # Verify driven link
         driven_links = [l for l in ui_graph["links"] if l.get("is_driven")]
         assert len(driven_links) == 1
         assert driven_links[0]["name"] == "crank"
         
-        # Check connections match links
-        assert len(ui_graph["connections"]) == 3
+        # Verify ground link
+        ground_links = [l for l in ui_graph["links"] if l.get("is_ground")]
+        assert len(ground_links) == 1
+        assert ground_links[0]["name"] == "ground"
+        assert ground_links[0]["has_fixed"] == True
+        assert ground_links[0]["has_constraint"] == True
+        
+        # Check connections match links (now 4 connections)
+        assert len(ui_graph["connections"]) == 4
         
         # Check metadata
         assert ui_graph["metadata"]["type"] == "4-bar"
         assert ui_graph["metadata"]["source"] == "pylinkage_demo"
         assert "parameters" in ui_graph["metadata"]
         
-        print(f"✓ UI format generated: {len(ui_graph['nodes'])} nodes, {len(ui_graph['links'])} links")
+        print(f"✓ UI format generated: {len(ui_graph['nodes'])} nodes, {len(ui_graph['links'])} links (including ground)")
+    
+    def test_ui_format_round_trip_conversion(self):
+        """Test that UI format can be converted back to pylinkage successfully."""
+        from link.pylinkage_bridge import demo_4bar_to_ui_format, convert_to_pylinkage
+        from configs.link_models import Link, Node
+        
+        # Step 1: Generate UI format
+        ui_graph = demo_4bar_to_ui_format(
+            ground_length=30.0,
+            crank_length=10.0,
+            coupler_length=25.0,
+            rocker_length=20.0,
+            crank_anchor=(20.0, 30.0),
+            n_iterations=24
+        )
+        
+        # Step 2: Convert to backend format (simulating what frontend sends)
+        node_objects = []
+        for node_dict in ui_graph["nodes"]:
+            node_data = {
+                "name": node_dict["id"],
+                "fixed": node_dict.get("fixed", False),
+                "fixed_loc": tuple(node_dict["fixed_loc"]) if node_dict.get("fixed_loc") else None,
+                "n_iterations": node_dict.get("n_iterations", 24),
+                "init_pos": tuple(node_dict["pos"])
+            }
+            node_objects.append(Node(**node_data))
+        
+        link_objects = []
+        for link_dict in ui_graph["links"]:
+            # Exclude frontend-specific fields (like meta)
+            link_data = {
+                "name": link_dict["name"],
+                "length": link_dict["length"],
+                "n_iterations": link_dict.get("n_iterations", 24),
+                "has_fixed": link_dict.get("has_fixed", False),
+                "fixed_loc": tuple(link_dict["fixed_loc"]) if link_dict.get("fixed_loc") else None,
+                "is_driven": link_dict.get("is_driven", False),
+                "is_ground": link_dict.get("is_ground", False),
+                "has_constraint": link_dict.get("has_constraint", False),
+                "flip": link_dict.get("flip", False),
+                "zlevel": link_dict.get("zlevel", 0)
+            }
+            link_objects.append(Link(**link_data))
+        
+        connections = ui_graph["connections"]
+        
+        # Step 3: Convert to pylinkage
+        result = convert_to_pylinkage(node_objects, link_objects, connections)
+        
+        # Verify conversion succeeded
+        assert result.success, f"Conversion failed: {result.errors}"
+        
+        # Check that ground link warning is present (ground is implicit)
+        ground_warnings = [w for w in result.warnings if "ground" in w.lower() and "implicit" in w.lower()]
+        assert len(ground_warnings) == 1, "Should have warning about ground being implicit"
+        
+        # Check that coupler was NOT skipped (should have no error about coupler)
+        coupler_errors = [e for e in result.errors if "coupler" in e.lower()]
+        assert len(coupler_errors) == 0, f"Coupler should not have errors: {coupler_errors}"
+        
+        coupler_warnings = [w for w in result.warnings if "coupler" in w.lower() and "could not determine" in w.lower()]
+        assert len(coupler_warnings) == 0, f"Coupler should not have parent joint warnings: {coupler_warnings}"
+        
+        # Verify joint structure
+        assert result.stats["revolute_joints"] >= 1, "Should have at least one Revolute joint for coupler"
+        
+        print(f"✓ Round-trip conversion successful: {result.stats}")
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

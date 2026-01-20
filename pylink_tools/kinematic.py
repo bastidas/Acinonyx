@@ -27,6 +27,339 @@ from pylink_tools.schemas import TrajectoryResult
 
 
 # =============================================================================
+# Hypergraph Format Conversion (v2.0.0 LinkageDocument -> Legacy PylinkDocument)
+# =============================================================================
+
+def is_hypergraph_format(data: dict) -> bool:
+    """
+    Check if data is in new hypergraph format (v2.0.0 LinkageDocument).
+
+    Hypergraph format has: linkage.nodes, linkage.edges
+    Legacy format has: pylinkage.joints
+    """
+    return 'linkage' in data and 'nodes' in data.get('linkage', {})
+
+
+def convert_hypergraph_to_legacy(doc: dict, verbose: bool = False) -> dict:
+    """
+    Convert hypergraph LinkageDocument to legacy PylinkDocument format.
+
+    This allows the backend to support both formats until full migration.
+
+    Hypergraph format (v2.0.0):
+        {
+            "linkage": {
+                "nodes": { "id": { "id", "position", "role", "angle", ... }, ... },
+                "edges": { "id": { "id", "source", "target", "distance" }, ... }
+            },
+            "meta": { "nodes": {...}, "edges": {...} }
+        }
+
+    Legacy format:
+        {
+            "pylinkage": {
+                "joints": [{ "type", "name", "x"/"y" or "joint0"/"distance", ... }],
+                "solve_order": [...]
+            },
+            "meta": { "joints": {...}, "links": {...} }
+        }
+    """
+    linkage = doc.get('linkage', {})
+    nodes = linkage.get('nodes', {})
+    edges = linkage.get('edges', {})
+    meta = doc.get('meta', {})
+    node_meta = meta.get('nodes', {})
+    edge_meta = meta.get('edges', {})
+
+    if verbose:
+        print(f'  Converting hypergraph format: {len(nodes)} nodes, {len(edges)} edges')
+
+    # Build adjacency: node_id -> list of (edge_id, other_node_id, distance)
+    adjacency: dict[str, list[tuple[str, str, float]]] = {nid: [] for nid in nodes}
+    for edge_id, edge in edges.items():
+        src, tgt = edge['source'], edge['target']
+        dist = edge.get('distance', 0)
+        if src in adjacency:
+            adjacency[src].append((edge_id, tgt, dist))
+        if tgt in adjacency:
+            adjacency[tgt].append((edge_id, src, dist))
+
+    # Sort nodes by role priority: fixed -> crank -> follower
+    role_order = {'fixed': 0, 'crank': 1, 'driven': 1, 'follower': 2}
+    sorted_nodes = sorted(
+        nodes.values(),
+        key=lambda n: (role_order.get(n.get('role', 'follower'), 3), n.get('id', '')),
+    )
+
+    # Track which joints have been processed (for dependency resolution)
+    processed = set()
+    joints = []
+    joints_meta = {}
+    validation_issues = []
+
+    # First pass: process fixed and crank nodes
+    for node in sorted_nodes:
+        nid = node['id']
+        role = node.get('role', 'follower')
+        pos = node.get('position', [0, 0])
+        nmeta = node_meta.get(nid, {})
+
+        if role == 'fixed':
+            joints.append({
+                'type': 'Static',
+                'name': nid,
+                'x': pos[0],
+                'y': pos[1],
+            })
+            processed.add(nid)
+
+        elif role in ('crank', 'driven'):
+            # Find parent (fixed node connected via edge)
+            parent_id = None
+            distance = 0
+
+            for edge_id, other_id, dist in adjacency.get(nid, []):
+                other_node = nodes.get(other_id, {})
+                if other_node.get('role') == 'fixed':
+                    parent_id = other_id
+                    distance = dist
+                    break
+
+            if parent_id:
+                joints.append({
+                    'type': 'Crank',
+                    'name': nid,
+                    'joint0': {'ref': parent_id},
+                    'distance': distance,
+                    'angle': node.get('angle', 0),
+                })
+                processed.add(nid)
+            else:
+                validation_issues.append(f"Crank '{nid}' has no fixed parent")
+
+        # Save meta
+        joints_meta[nid] = {
+            'color': nmeta.get('color', ''),
+            'zlevel': nmeta.get('zlevel', 0),
+            'x': pos[0],
+            'y': pos[1],
+            'show_path': nmeta.get('showPath', True),
+        }
+
+    # Second pass: process follower nodes (need two processed parents)
+    max_iterations = len(sorted_nodes)
+    iteration = 0
+
+    while iteration < max_iterations:
+        iteration += 1
+        made_progress = False
+
+        for node in sorted_nodes:
+            nid = node['id']
+            if nid in processed:
+                continue
+
+            role = node.get('role', 'follower')
+            if role not in ('follower',):
+                continue
+
+            # Find two processed parent nodes
+            parents = []
+            for edge_id, other_id, dist in adjacency.get(nid, []):
+                if other_id in processed:
+                    parents.append((other_id, dist))
+                    if len(parents) >= 2:
+                        break
+
+            if len(parents) >= 2:
+                joints.append({
+                    'type': 'Revolute',
+                    'name': nid,
+                    'joint0': {'ref': parents[0][0]},
+                    'joint1': {'ref': parents[1][0]},
+                    'distance0': parents[0][1],
+                    'distance1': parents[1][1],
+                })
+                processed.add(nid)
+                made_progress = True
+            elif len(parents) == 1:
+                # Underconstrained: only one parent
+                # This joint cannot be kinematically simulated
+                pass
+            elif len(parents) == 0:
+                # No connections to processed joints yet
+                pass
+
+        if not made_progress:
+            break
+
+    # Check for unprocessed nodes (underconstrained)
+    unprocessed = set(nodes.keys()) - processed
+    if unprocessed and verbose:
+        print(f'  Warning: Underconstrained nodes (cannot simulate): {unprocessed}')
+        for nid in unprocessed:
+            edge_count = len(adjacency.get(nid, []))
+            validation_issues.append(
+                f"Node '{nid}' is underconstrained ({edge_count} edge(s), need 2 for Revolute)",
+            )
+
+    # Convert edges to links
+    links_meta = {}
+    for edge_id, edge in edges.items():
+        emeta = edge_meta.get(edge_id, {})
+        links_meta[edge_id] = {
+            'color': emeta.get('color', '#888888'),
+            'connects': [edge['source'], edge['target']],
+            'isGround': emeta.get('isGround', False),
+        }
+
+    legacy = {
+        'name': doc.get('name', 'converted'),
+        'pylinkage': {
+            'name': linkage.get('name', 'converted'),
+            'joints': joints,
+            'solve_order': [j['name'] for j in joints],
+        },
+        'meta': {
+            'joints': joints_meta,
+            'links': links_meta,
+        },
+        '_validation_issues': validation_issues,
+        '_unprocessed_nodes': list(unprocessed),
+    }
+
+    return legacy
+
+
+def convert_legacy_to_hypergraph(legacy: dict, verbose: bool = False) -> dict:
+    """
+    Convert legacy PylinkDocument to hypergraph LinkageDocument format (v2.0.0).
+
+    This is used to return results in the new format after internal processing.
+
+    Legacy format:
+        {
+            "pylinkage": {
+                "joints": [{ "type", "name", "x"/"y" or "joint0"/"distance", ... }],
+                "solve_order": [...]
+            },
+            "meta": { "joints": {...}, "links": {...} }
+        }
+
+    Hypergraph format (v2.0.0):
+        {
+            "linkage": {
+                "nodes": { "id": { "id", "position", "role", "angle", ... }, ... },
+                "edges": { "id": { "id", "source", "target", "distance" }, ... }
+            },
+            "meta": { "nodes": {...}, "edges": {...} }
+        }
+    """
+    pylinkage = legacy.get('pylinkage', {})
+    joints = pylinkage.get('joints', [])
+    meta = legacy.get('meta', {})
+    joints_meta = meta.get('joints', {})
+    links_meta = meta.get('links', {})
+
+    if verbose:
+        print(f'  Converting legacy format: {len(joints)} joints, {len(links_meta)} links')
+
+    # Convert joints to nodes
+    nodes = {}
+    node_meta = {}
+
+    for joint in joints:
+        jtype = joint.get('type', 'Static')
+        name = joint.get('name', '')
+        jmeta = joints_meta.get(name, {})
+
+        # Determine position
+        if jtype == 'Static':
+            position = [joint.get('x', 0), joint.get('y', 0)]
+        else:
+            # Use meta position if available, otherwise [0, 0]
+            position = [jmeta.get('x', 0), jmeta.get('y', 0)]
+
+        # Map joint type to role
+        if jtype == 'Static':
+            role = 'fixed'
+        elif jtype == 'Crank':
+            role = 'crank'
+        else:
+            role = 'follower'
+
+        # Build node
+        node = {
+            'id': name,
+            'position': position,
+            'role': role,
+            'jointType': 'revolute',
+            'name': name,
+        }
+
+        # Add angle for crank nodes
+        if jtype == 'Crank':
+            node['angle'] = joint.get('angle', 0)
+
+        nodes[name] = node
+
+        # Build node meta
+        if jmeta:
+            node_meta[name] = {
+                'color': jmeta.get('color', ''),
+                'zlevel': jmeta.get('zlevel', 0),
+                'showPath': jmeta.get('show_path', role != 'fixed'),
+            }
+
+    # Convert links to edges
+    edges = {}
+    edge_meta = {}
+
+    for link_name, link in links_meta.items():
+        connects = link.get('connects', [])
+        if len(connects) >= 2:
+            source_id, target_id = connects[0], connects[1]
+
+            # Calculate distance from node positions
+            source_node = nodes.get(source_id, {})
+            target_node = nodes.get(target_id, {})
+            source_pos = source_node.get('position', [0, 0])
+            target_pos = target_node.get('position', [0, 0])
+
+            distance = np.sqrt(
+                (target_pos[0] - source_pos[0]) ** 2 +
+                (target_pos[1] - source_pos[1]) ** 2,
+            )
+
+            edges[link_name] = {
+                'id': link_name,
+                'source': source_id,
+                'target': target_id,
+                'distance': distance,
+            }
+
+            edge_meta[link_name] = {
+                'color': link.get('color', '#888888'),
+                'isGround': link.get('isGround', False),
+            }
+
+    return {
+        'name': legacy.get('name', 'converted'),
+        'version': '2.0.0',
+        'linkage': {
+            'name': pylinkage.get('name', 'converted'),
+            'nodes': nodes,
+            'edges': edges,
+            'hyperedges': {},
+        },
+        'meta': {
+            'nodes': node_meta,
+            'edges': edge_meta,
+        },
+    }
+
+
+# =============================================================================
 # Position Computation (Circle-Circle Intersection, Crank Geometry)
 # =============================================================================
 
@@ -580,12 +913,15 @@ def compute_trajectory(
     skip_sync: bool = False,
 ) -> TrajectoryResult:
     """
-    Compute joint trajectories from PylinkDocument format.
+    Compute joint trajectories from PylinkDocument or LinkageDocument format.
 
     This is the main entry point - coordinates all the steps.
+    Supports both legacy (pylinkage.joints) and new hypergraph (linkage.nodes/edges) formats.
 
     Args:
-        pylink_data: Full pylink document with 'pylinkage', 'meta', 'n_steps'
+        pylink_data: Document in either format:
+            - Legacy: { 'pylinkage': { 'joints': [...] }, 'meta': {...}, 'n_steps': N }
+            - Hypergraph: { 'linkage': { 'nodes': {...}, 'edges': {...} }, 'meta': {...}, 'n_steps': N }
         verbose: If True, print progress
         skip_sync: If True, skip syncing distances from visual positions.
                    Use this for optimization when you want the stored distances
@@ -594,8 +930,35 @@ def compute_trajectory(
     Returns:
         TrajectoryResult with trajectories or error
     """
-    # Parse input
     n_steps = pylink_data.get('n_steps', 12)
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # FORMAT DETECTION AND CONVERSION
+    # ─────────────────────────────────────────────────────────────────────────
+    if is_hypergraph_format(pylink_data):
+        if verbose:
+            print('  Detected hypergraph format (v2.0.0), converting to legacy...')
+        converted = convert_hypergraph_to_legacy(pylink_data, verbose=verbose)
+
+        # Check for validation issues from conversion
+        validation_issues = converted.get('_validation_issues', [])
+        unprocessed_nodes = converted.get('_unprocessed_nodes', [])
+
+        if unprocessed_nodes:
+            # Report underconstrained mechanism
+            return TrajectoryResult(
+                success=False,
+                trajectories={},
+                n_steps=n_steps,
+                joint_types={},
+                error=f"Underconstrained mechanism: nodes {unprocessed_nodes} cannot be simulated. "
+                f"Each follower node needs exactly 2 edges connecting to other nodes in the kinematic chain.",
+            )
+
+        # Use converted data
+        pylink_data = converted
+
+    # Parse input (now always in legacy format)
     pylinkage_data = pylink_data.get('pylinkage', {})
     meta = pylink_data.get('meta', {})
     meta_joints = meta.get('joints', {})

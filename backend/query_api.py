@@ -11,6 +11,9 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from configs.appconfig import USER_DIR
 from pylink_tools.kinematic import compute_trajectory
+from pylink_tools.kinematic import convert_hypergraph_to_legacy
+from pylink_tools.kinematic import convert_legacy_to_hypergraph
+from pylink_tools.kinematic import is_hypergraph_format
 from pylink_tools.kinematic import sync_pylink_distances
 from pylink_tools.optimize import extract_dimensions
 from pylink_tools.optimize import optimize_trajectory
@@ -520,6 +523,12 @@ def optimize_trajectory_endpoint(request: dict):
         print(f'Method: {method}')
         print(f'Bounds factor: {bounds_factor}')
 
+        # Check if input is hypergraph format and convert if needed
+        input_is_hypergraph = is_hypergraph_format(pylink_data)
+        if input_is_hypergraph:
+            print('  Input is hypergraph format, converting to legacy for processing...')
+            pylink_data = convert_hypergraph_to_legacy(pylink_data, verbose=verbose)
+
         # CRITICAL: First sync distances from visual positions
         # The frontend may save stale/incorrect distances that don't match visual layout.
         # This ensures we start with valid, solvable mechanism geometry.
@@ -629,6 +638,11 @@ def optimize_trajectory_endpoint(request: dict):
         print(f'  Final error: {final_err_str}')
         print(f'  Improvement: {improvement:.1f}%')
         print(f'  Completed in {execution_time_ms:.2f}ms')
+
+        # If input was hypergraph format, convert result back to hypergraph
+        if input_is_hypergraph and optimized_pylink_data:
+            print('  Converting result back to hypergraph format...')
+            optimized_pylink_data = convert_legacy_to_hypergraph(optimized_pylink_data, verbose=verbose)
 
         # Build response and sanitize for JSON (inf/nan not allowed)
         response = {
@@ -1035,4 +1049,87 @@ def analyze_trajectory_endpoint(request: dict):
         return {
             'status': 'error',
             'message': f'Failed to analyze trajectory: {str(e)}',
+        }
+
+
+@app.get('/logs/backend')
+def get_backend_log(lines: int = 500, offset: int = 0):
+    """
+    Get the most recent lines from the backend log file.
+
+    Args:
+        lines: Number of lines to return (default: 500)
+        offset: Number of lines to skip from the end (default: 0)
+
+    Returns:
+        {
+            "status": "success",
+            "content": "...",
+            "total_lines": 1234,
+            "lines_returned": 500
+        }
+    """
+    from configs.paths import BASE_DIR
+
+    log_file = BASE_DIR / 'backend.log'
+
+    try:
+        if not log_file.exists():
+            return {
+                'status': 'success',
+                'content': '(No log file found yet)',
+                'total_lines': 0,
+                'lines_returned': 0,
+            }
+
+        # Read all lines
+        with open(log_file, encoding='utf-8') as f:
+            all_lines = f.readlines()
+
+        total_lines = len(all_lines)
+
+        # Get the requested range from the end
+        if offset > 0:
+            end_idx = max(0, total_lines - offset)
+            start_idx = max(0, end_idx - lines)
+            selected_lines = all_lines[start_idx:end_idx]
+        else:
+            start_idx = max(0, total_lines - lines)
+            selected_lines = all_lines[start_idx:]
+
+        return {
+            'status': 'success',
+            'content': ''.join(selected_lines),
+            'total_lines': total_lines,
+            'lines_returned': len(selected_lines),
+        }
+
+    except Exception as e:
+        return {
+            'status': 'error',
+            'message': f'Failed to read log file: {str(e)}',
+        }
+
+
+@app.delete('/logs/backend')
+def clear_backend_log():
+    """Clear the backend log file."""
+    from configs.paths import BASE_DIR
+
+    log_file = BASE_DIR / 'backend.log'
+
+    try:
+        if log_file.exists():
+            with open(log_file, 'w', encoding='utf-8') as f:
+                f.write('')  # Clear the file
+
+        return {
+            'status': 'success',
+            'message': 'Log file cleared',
+        }
+
+    except Exception as e:
+        return {
+            'status': 'error',
+            'message': f'Failed to clear log file: {str(e)}',
         }

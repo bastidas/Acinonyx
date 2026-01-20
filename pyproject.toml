@@ -30,7 +30,9 @@ dependencies = [
     "python-dotenv",
     "websocket-client",
     "pydantic == 2.12.4",
-    "pylinkage"
+    "pylinkage",
+    "pyDOE3",
+    "nlopt"
     ]
 
 [project.optional-dependencies]
@@ -61,4 +63,4 @@ python_functions = "test_*"
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["configs*", "structs*", "backend*", "frontend*", "link*", "viz_tools*", "tests*"]
+include = ["configs*", "demo*", "structs*", "backend*", "frontend*", "link*", "optimizers*", "pylink_tools*", "viz_tools*", "tests*"]

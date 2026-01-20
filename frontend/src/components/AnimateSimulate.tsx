@@ -1,7 +1,7 @@
 /**
- * PylinkAnimateSimulate.tsx
+ * AnimateSimulate.tsx
  *
- * Helper module for Pylink animation and simulation functionality.
+ * Helper module for animation and simulation functionality.
  * Handles:
  * - Animation state management (play/pause frame-by-frame linkage motion)
  * - Simulation (computing trajectories from the backend)
@@ -291,7 +291,13 @@ export function useAnimation({
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 interface UseSimulationProps {
-  pylinkDoc: any  // PylinkDocument - using any to avoid complex type compatibility issues
+  /**
+   * The linkage document to simulate.
+   * Supports both formats:
+   * - New hypergraph format: { linkage: { nodes, edges }, meta }
+   * - Legacy format: { pylinkage: { joints }, meta }
+   */
+  linkageDoc: any
   simulationSteps: number
   autoSimulateDelayMs: number
   autoSimulateEnabled: boolean
@@ -315,11 +321,32 @@ interface UseSimulationReturn {
 }
 
 /**
- * Hook for managing pylink simulation.
+ * Check if a document has a crank joint (required for simulation).
+ * Supports both hypergraph and legacy formats.
+ */
+function hasCrankJoint(doc: any): boolean {
+  // Hypergraph format: check nodes for role === 'crank'
+  if (doc.linkage?.nodes) {
+    return Object.values(doc.linkage.nodes).some(
+      (node: any) => node.role === 'crank' || node.role === 'driven'
+    )
+  }
+  // Legacy format: check joints for type === 'Crank'
+  if (doc.pylinkage?.joints) {
+    return doc.pylinkage.joints.some((j: any) => j.type === 'Crank')
+  }
+  return false
+}
+
+/**
+ * Hook for managing linkage simulation.
  * Handles both manual simulation and auto-simulation with delay.
+ *
+ * The backend now supports both hypergraph (v2.0.0) and legacy formats,
+ * so we send the document directly without conversion.
  */
 export function useSimulation({
-  pylinkDoc,
+  linkageDoc,
   simulationSteps,
   autoSimulateDelayMs,
   autoSimulateEnabled: initialAutoSimulate,
@@ -336,8 +363,7 @@ export function useSimulation({
 
   /** Run simulation against the backend */
   const runSimulation = useCallback(async () => {
-    const hasCrank = pylinkDoc.pylinkage.joints.some((j: { type: string }) => j.type === 'Crank')
-    if (!hasCrank) {
+    if (!hasCrankJoint(linkageDoc)) {
       showStatus?.('Cannot simulate: no Crank joint defined', 'warning', 2000)
       return
     }
@@ -347,11 +373,12 @@ export function useSimulation({
       onSimulationStart?.()
       showStatus?.(`Simulating ${simulationSteps} steps...`, 'action')
 
+      // Send document directly - backend handles both formats
       const response = await fetch('/api/compute-pylink-trajectory', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          ...pylinkDoc,
+          ...linkageDoc,
           n_steps: simulationSteps
         })
       })
@@ -363,7 +390,7 @@ export function useSimulation({
         const data: TrajectoryData = {
           trajectories: result.trajectories,
           nSteps: result.n_steps,
-          jointTypes: result.joint_types
+          jointTypes: result.joint_types || {}
         }
         setTrajectoryData(data)
         onSimulationComplete?.(data)
@@ -371,16 +398,16 @@ export function useSimulation({
       } else {
         const errorMsg = result.message || 'Simulation failed'
         onSimulationError?.(errorMsg)
-        showStatus?.(errorMsg, 'error', 2000)
+        showStatus?.(errorMsg, 'error', 3000)
       }
     } catch (error) {
       const errorMsg = error instanceof Error ? error.message : 'Simulation error'
       onSimulationError?.(errorMsg)
-      showStatus?.(`Simulation error: ${errorMsg}`, 'error', 2000)
+      showStatus?.(`Simulation error: ${errorMsg}`, 'error', 3000)
     } finally {
       setIsSimulating(false)
     }
-  }, [pylinkDoc, simulationSteps, showStatus, onSimulationStart, onSimulationComplete, onSimulationError])
+  }, [linkageDoc, simulationSteps, showStatus, onSimulationStart, onSimulationComplete, onSimulationError])
 
   /** Clear trajectory data */
   const clearTrajectory = useCallback(() => {
@@ -392,8 +419,7 @@ export function useSimulation({
   useEffect(() => {
     if (!autoSimulateEnabled) return
 
-    const hasCrank = pylinkDoc.pylinkage.joints.some((j: { type: string }) => j.type === 'Crank')
-    if (!hasCrank) return
+    if (!hasCrankJoint(linkageDoc)) return
 
     // Clear any existing timer
     if (autoSimulateTimerRef.current) {
@@ -411,7 +437,7 @@ export function useSimulation({
         clearTimeout(autoSimulateTimerRef.current)
       }
     }
-  }, [mechanismVersion, autoSimulateEnabled, pylinkDoc, autoSimulateDelayMs, runSimulation])
+  }, [mechanismVersion, autoSimulateEnabled, linkageDoc, autoSimulateDelayMs, runSimulation])
 
   return {
     isSimulating,

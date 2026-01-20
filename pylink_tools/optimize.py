@@ -2,10 +2,9 @@
 optimize.py - Trajectory optimization for linkage mechanisms.
 
 Core functionality:
-  - Extract optimizable dimensions (link lengths) from a linkage spec
-  - Apply dimension values back to a linkage spec
   - Compute error between computed trajectory and target trajectory
   - Run PSO optimization to fit linkage to target path
+  - Convergence analysis and reporting
 
 Design notes:
   - Static joints are fixed (not optimizable)
@@ -31,385 +30,63 @@ from __future__ import annotations
 
 import copy
 from collections.abc import Callable
-from dataclasses import dataclass
+from typing import Literal
 
 import numpy as np
 
-
-# =============================================================================
-# Schemas / Data Structures
-# =============================================================================
-
-@dataclass
-class DimensionSpec:
-    """
-    Describes optimizable dimensions of a linkage.
-
-    Each dimension corresponds to a link length that can be adjusted
-    during optimization.
-
-    Attributes:
-        names: Human-readable names for each dimension (e.g., "B_distance", "C_distance0")
-        initial_values: Current values of each dimension
-        bounds: (min, max) tuple for each dimension
-        joint_mapping: Maps dimension name -> (joint_name, property_name)
-                       e.g., {"B_distance": ("B", "distance")}
-    """
-    names: list[str]
-    initial_values: list[float]
-    bounds: list[tuple[float, float]]
-    joint_mapping: dict[str, tuple[str, str]]
-
-    def __len__(self) -> int:
-        return len(self.names)
-
-    def to_dict(self) -> dict:
-        return {
-            'names': self.names,
-            'initial_values': self.initial_values,
-            'bounds': self.bounds,
-            'joint_mapping': {k: list(v) for k, v in self.joint_mapping.items()},
-            'n_dimensions': len(self.names),
-        }
-
-    def get_bounds_tuple(self) -> tuple[tuple[float, ...], tuple[float, ...]]:
-        """Return bounds in pylinkage format: ((lower...), (upper...))"""
-        lower = tuple(b[0] for b in self.bounds)
-        upper = tuple(b[1] for b in self.bounds)
-        return (lower, upper)
-
-
-@dataclass
-class TargetTrajectory:
-    """
-    Target positions for optimization.
-
-    Specifies where we want a particular joint to be at each timestep.
-
-    Attributes:
-        joint_name: Which joint to optimize (match its path to target)
-        positions: List of (x, y) positions, one per timestep
-        weights: Optional per-timestep weights (higher = more important)
-                 Defaults to uniform weights if not provided.
-    """
-    joint_name: str
-    positions: list[tuple[float, float]]
-    weights: list[float] | None = None
-
-    def __post_init__(self):
-        # Convert positions to tuples if they're lists
-        self.positions = [tuple(p) for p in self.positions]
-
-        # Set uniform weights if not provided
-        if self.weights is None:
-            self.weights = [1.0] * len(self.positions)
-
-    @property
-    def n_steps(self) -> int:
-        return len(self.positions)
-
-    def to_dict(self) -> dict:
-        return {
-            'joint_name': self.joint_name,
-            'positions': [list(p) for p in self.positions],
-            'weights': self.weights,
-            'n_steps': self.n_steps,
-        }
-
-    @classmethod
-    def from_dict(cls, data: dict) -> TargetTrajectory:
-        return cls(
-            joint_name=data['joint_name'],
-            positions=data['positions'],
-            weights=data.get('weights'),
-        )
-
-
-@dataclass
-class OptimizationResult:
-    """
-    Result of an optimization run.
-
-    Attributes:
-        success: Whether optimization completed successfully
-        optimized_dimensions: Final dimension values {name: value}
-        optimized_pylink_data: Updated pylink_data with optimized dimensions
-        initial_error: Error before optimization
-        final_error: Error after optimization
-        iterations: Number of iterations/evaluations performed
-        convergence_history: Optional list of error values over iterations
-        error: Error message if success=False
-    """
-    success: bool
-    optimized_dimensions: dict[str, float]
-    optimized_pylink_data: dict | None = None
-    initial_error: float = 0.0
-    final_error: float = 0.0
-    iterations: int = 0
-    convergence_history: list[float] | None = None
-    error: str | None = None
-
-    def to_dict(self) -> dict:
-        return {
-            'success': self.success,
-            'optimized_dimensions': self.optimized_dimensions,
-            'optimized_pylink_data': self.optimized_pylink_data,
-            'initial_error': self.initial_error,
-            'final_error': self.final_error,
-            'iterations': self.iterations,
-            'convergence_history': self.convergence_history,
-            'error': self.error,
-        }
-
-
-@dataclass
-class ErrorMetrics:
-    """
-    Detailed error metrics between computed and target trajectory.
-
-    Attributes:
-        total_error: Sum of squared distances
-        mse: Mean squared error
-        rmse: Root mean squared error
-        max_error: Maximum distance at any timestep
-        per_step_errors: Distance error at each timestep
-    """
-    total_error: float
-    mse: float
-    rmse: float
-    max_error: float
-    per_step_errors: list[float]
-
-    def to_dict(self) -> dict:
-        return {
-            'total_error': self.total_error,
-            'mse': self.mse,
-            'rmse': self.rmse,
-            'max_error': self.max_error,
-            'per_step_errors': self.per_step_errors,
-        }
-
-
-# =============================================================================
-# Dimension Extraction
-# =============================================================================
-
-def extract_dimensions(
-    pylink_data: dict,
-    bounds_factor: float = 2.0,
-    min_length: float = 0.1,
-) -> DimensionSpec:
-    """
-    Extract optimizable dimensions (link lengths) from pylink_data.
-
-    Identifies all link lengths that can be adjusted:
-      - Crank: distance (length from parent to crank point)
-      - Revolute: distance0, distance1 (lengths to each parent)
-
-    Static joints are NOT included (they are fixed ground points).
-
-    Args:
-        pylink_data: Full pylink document with 'pylinkage' section
-        bounds_factor: Multiplier for suggested bounds (e.g., 2.0 means
-                       bounds are [value/2, value*2])
-        min_length: Minimum allowed link length
-
-    Returns:
-        DimensionSpec with names, initial values, bounds, and joint mapping
-
-    Example:
-        >>> spec = extract_dimensions(pylink_data)
-        >>> print(spec.names)
-        ['B_distance', 'C_distance0', 'C_distance1']
-        >>> print(spec.initial_values)
-        [1.0, 3.0, 1.0]
-    """
-    pylinkage_data = pylink_data.get('pylinkage', {})
-    joints_data = pylinkage_data.get('joints', [])
-
-    names: list[str] = []
-    initial_values: list[float] = []
-    bounds: list[tuple[float, float]] = []
-    joint_mapping: dict[str, tuple[str, str]] = {}
-
-    for jdata in joints_data:
-        jtype = jdata.get('type')
-        jname = jdata.get('name')
-
-        if jtype == 'Crank':
-            # Crank has a single 'distance' parameter
-            distance = jdata.get('distance', 1.0)
-            dim_name = f'{jname}_distance'
-
-            names.append(dim_name)
-            initial_values.append(distance)
-            bounds.append(_compute_bounds(distance, bounds_factor, min_length))
-            joint_mapping[dim_name] = (jname, 'distance')
-
-        elif jtype == 'Revolute':
-            # Revolute has distance0 and distance1
-            distance0 = jdata.get('distance0', 1.0)
-            distance1 = jdata.get('distance1', 1.0)
-
-            dim_name0 = f'{jname}_distance0'
-            dim_name1 = f'{jname}_distance1'
-
-            names.append(dim_name0)
-            initial_values.append(distance0)
-            bounds.append(_compute_bounds(distance0, bounds_factor, min_length))
-            joint_mapping[dim_name0] = (jname, 'distance0')
-
-            names.append(dim_name1)
-            initial_values.append(distance1)
-            bounds.append(_compute_bounds(distance1, bounds_factor, min_length))
-            joint_mapping[dim_name1] = (jname, 'distance1')
-
-        # Static joints are skipped (fixed ground points)
-
-    return DimensionSpec(
-        names=names,
-        initial_values=initial_values,
-        bounds=bounds,
-        joint_mapping=joint_mapping,
-    )
-
-
-def _compute_bounds(
-    value: float,
-    factor: float,
-    min_length: float,
-) -> tuple[float, float]:
-    """Compute bounds for a dimension value."""
-    lower = max(min_length, value / factor)
-    upper = value * factor
-    return (lower, upper)
-
-
-def extract_dimensions_with_custom_bounds(
-    pylink_data: dict,
-    custom_bounds: dict[str, tuple[float, float]],
-) -> DimensionSpec:
-    """
-    Extract dimensions with user-specified bounds.
-
-    Args:
-        pylink_data: Full pylink document
-        custom_bounds: Dict of {dimension_name: (min, max)}
-                       Dimensions not in this dict use default bounds.
-
-    Returns:
-        DimensionSpec with custom bounds applied
-    """
-    spec = extract_dimensions(pylink_data)
-
-    # Override bounds where specified
-    for i, name in enumerate(spec.names):
-        if name in custom_bounds:
-            spec.bounds[i] = custom_bounds[name]
-
-    return spec
-
-
-# =============================================================================
-# Dimension Application
-# =============================================================================
-
-def apply_dimensions(
-    pylink_data: dict,
-    dimension_values: dict[str, float],
-    dimension_spec: DimensionSpec | None = None,
-) -> dict:
-    """
-    Apply dimension values to pylink_data, returning a new copy.
-
-    Updates the link lengths in the pylinkage.joints list based on
-    the provided dimension values.
-
-    Args:
-        pylink_data: Original pylink document (not modified)
-        dimension_values: Dict of {dimension_name: new_value}
-        dimension_spec: Optional DimensionSpec for validation/mapping.
-                        If not provided, uses naming convention to infer mapping.
-
-    Returns:
-        New pylink_data dict with updated dimensions
-
-    Example:
-        >>> updated = apply_dimensions(pylink_data, {"B_distance": 2.5})
-        >>> # Joint B now has distance=2.5
-    """
-    # Deep copy to avoid mutation
-    updated = copy.deepcopy(pylink_data)
-
-    # Build joint lookup
-    joints_data = updated.get('pylinkage', {}).get('joints', [])
-    joint_by_name = {j['name']: j for j in joints_data}
-
-    # Get mapping from dimension_spec or infer from naming convention
-    if dimension_spec is not None:
-        mapping = dimension_spec.joint_mapping
-    else:
-        mapping = _infer_mapping_from_names(dimension_values.keys())
-
-    # Apply each dimension
-    for dim_name, new_value in dimension_values.items():
-        if dim_name in mapping:
-            joint_name, prop_name = mapping[dim_name]
-            if joint_name in joint_by_name:
-                joint_by_name[joint_name][prop_name] = new_value
-        else:
-            # Try to infer from naming convention
-            parts = dim_name.rsplit('_', 1)
-            if len(parts) == 2:
-                joint_name, prop_name = parts
-                if joint_name in joint_by_name:
-                    joint_by_name[joint_name][prop_name] = new_value
-
-    return updated
-
-
-def apply_dimensions_from_array(
-    pylink_data: dict,
-    values: tuple[float, ...],
-    dimension_spec: DimensionSpec,
-) -> dict:
-    """
-    Apply dimension values from a numeric array (for optimizer callbacks).
-
-    Args:
-        pylink_data: Original pylink document
-        values: Tuple/list of values in same order as dimension_spec.names
-        dimension_spec: Spec defining the mapping
-
-    Returns:
-        Updated pylink_data with new dimensions
-    """
-    if len(values) != len(dimension_spec.names):
-        raise ValueError(
-            f'Expected {len(dimension_spec.names)} values, got {len(values)}',
-        )
-
-    dimension_values = dict(zip(dimension_spec.names, values))
-    return apply_dimensions(pylink_data, dimension_values, dimension_spec)
-
-
-def _infer_mapping_from_names(
-    dim_names: list[str],
-) -> dict[str, tuple[str, str]]:
-    """
-    Infer joint mapping from dimension names using naming convention.
-
-    Expected format: "{joint_name}_{property_name}"
-    e.g., "B_distance" -> ("B", "distance")
-          "C_distance0" -> ("C", "distance0")
-    """
-    mapping = {}
-    for name in dim_names:
-        parts = name.rsplit('_', 1)
-        if len(parts) == 2:
-            joint_name, prop_name = parts
-            mapping[name] = (joint_name, prop_name)
-    return mapping
+from configs.logging_config import get_logger
+from pylink_tools.optimization_helpers import apply_dimensions
+from pylink_tools.optimization_helpers import apply_dimensions_from_array
+from pylink_tools.optimization_helpers import dict_to_dimensions
+from pylink_tools.optimization_helpers import dimensions_to_dict
+from pylink_tools.optimization_helpers import extract_dimensions
+from pylink_tools.optimization_helpers import extract_dimensions_with_custom_bounds
+from pylink_tools.optimization_helpers import presample_valid_positions
+from pylink_tools.optimization_helpers import validate_bounds
+from pylink_tools.optimization_types import ConvergenceStats
+from pylink_tools.optimization_types import DimensionSpec
+from pylink_tools.optimization_types import ErrorMetrics
+from pylink_tools.optimization_types import OptimizationResult
+from pylink_tools.optimization_types import TargetTrajectory
+
+# Module logger
+logger = get_logger(__name__)
+
+# Import types and helpers from refactored modules
+
+# Re-export for backwards compatibility
+__all__ = [
+    # Types
+    'DimensionSpec',
+    'TargetTrajectory',
+    'OptimizationResult',
+    'ErrorMetrics',
+    'ConvergenceStats',
+    # Helper functions
+    'extract_dimensions',
+    'extract_dimensions_with_custom_bounds',
+    'apply_dimensions',
+    'apply_dimensions_from_array',
+    'dimensions_to_dict',
+    'dict_to_dimensions',
+    'validate_bounds',
+    # Error computation
+    'compute_trajectory_error',
+    'compute_trajectory_error_detailed',
+    'evaluate_linkage_fit',
+    # Convergence
+    'analyze_convergence',
+    'format_convergence_report',
+    'log_optimization_progress',
+    # Optimization
+    'create_fitness_function',
+    'create_pylinkage_fitness_function',
+    'presample_valid_positions',
+    'run_scipy_optimization',
+    'run_pso_optimization',
+    'run_pylinkage_pso',
+    'optimize_trajectory',
+]
 
 
 # =============================================================================
@@ -459,10 +136,177 @@ def compute_trajectory_error(
         raise ValueError(f'Unknown metric: {metric}')
 
 
+# =============================================================================
+# Core Error Computation (DRY - shared implementation)
+# =============================================================================
+
+def _compute_errors_core(
+    computed_trajectory: list[tuple[float, float]],
+    target_positions: list[tuple[float, float]],
+    weights: list[float] | None = None,
+) -> tuple[float, float, float, float, list[float]]:
+    """
+    Core error computation - shared by fast and detailed functions.
+
+    Args:
+        computed_trajectory: List of (x, y) computed positions
+        target_positions: List of (x, y) target positions (must be same length)
+        weights: Optional weights per point (defaults to uniform)
+
+    Returns:
+        Tuple of (total_error, mse, rmse, max_error, per_step_errors)
+    """
+    n = len(computed_trajectory)
+    weights = weights or [1.0] * n
+
+    per_step_errors = []
+    weighted_squared_sum = 0.0
+    total_weight = 0.0
+    max_error = 0.0
+
+    for i, (computed, target_pos) in enumerate(zip(computed_trajectory, target_positions)):
+        dx = computed[0] - target_pos[0]
+        dy = computed[1] - target_pos[1]
+        dist = np.sqrt(dx * dx + dy * dy)
+
+        per_step_errors.append(dist)
+        weighted_squared_sum += weights[i] * (dist ** 2)
+        total_weight += weights[i]
+        if dist > max_error:
+            max_error = dist
+
+    mse = weighted_squared_sum / total_weight if total_weight > 0 else 0.0
+    rmse = np.sqrt(mse)
+
+    return weighted_squared_sum, mse, rmse, max_error, per_step_errors
+
+
+def _apply_phase_alignment(
+    computed_trajectory: list[tuple[float, float]],
+    target_positions: list[tuple[float, float]],
+    return_aligned: bool = False,
+    method: Literal['rotation', 'fft', 'frechet'] = 'rotation',
+) -> tuple[float, list[tuple[float, float]] | None]:
+    """
+    Apply phase alignment and return MSE + optionally aligned trajectory.
+
+    Args:
+        computed_trajectory: Computed positions
+        target_positions: Target positions
+        return_aligned: If True, also return the aligned trajectory
+        method: Phase alignment method:
+            - 'rotation': Brute-force all rotations, O(n²), guaranteed optimal
+            - 'fft': FFT cross-correlation, O(n log n), fastest for large n
+            - 'frechet': Fréchet distance, O(n³), avoid in optimization!
+
+    Returns:
+        (mse, aligned_trajectory or None)
+    """
+    from pylink_tools.trajectory_utils import compute_phase_aligned_distance
+
+    result = compute_phase_aligned_distance(
+        target_positions,
+        computed_trajectory,
+        method=method,
+        return_aligned=return_aligned,
+    )
+    return result.distance, result.aligned_trajectory
+
+
+def compute_trajectory_error_fast(
+    computed_trajectory: list[tuple[float, float]],
+    target: TargetTrajectory,
+    metric: str = 'mse',
+    phase_invariant: bool = True,
+    phase_align_method: Literal['rotation', 'fft', 'frechet'] = 'rotation',
+) -> float:
+    """
+    Fast error computation for optimization hot loops.
+
+    This is an optimized version that:
+    - Uses phase alignment MSE directly (no recomputation)
+    - Skips per-step error computation when possible
+    - Only computes the requested metric
+    - Avoids list/object creation overhead
+
+    ~15-30% faster than compute_trajectory_error_detailed for MSE scoring.
+
+    Args:
+        computed_trajectory: List of (x, y) positions from simulation
+        target: TargetTrajectory with target positions
+        metric: Which metric to compute:
+            - 'mse': Mean squared error (DEFAULT, most common)
+            - 'rmse': Root mean squared error
+            - 'total': Sum of weighted squared errors
+            - 'max': Maximum single-point error
+        phase_invariant: If True, find optimal phase alignment
+        phase_align_method: Phase alignment algorithm:
+            - 'rotation': Brute-force, O(n²), guaranteed optimal (DEFAULT)
+            - 'fft': FFT cross-correlation, O(n log n), fastest for large n
+            - 'frechet': Fréchet distance, O(n³), avoid in optimization!
+
+    Returns:
+        Float error value for the requested metric
+
+    Performance Notes:
+        For optimization, 'mse' with phase_invariant=True is fast because
+        phase alignment directly returns MSE - no recomputation needed!
+
+    Note:
+        For detailed analysis (per-step errors, all metrics), use
+        compute_trajectory_error_detailed instead.
+    """
+    n = len(computed_trajectory)
+    if n != len(target.positions):
+        return float('inf')
+
+    if n == 0:
+        return 0.0
+
+    # FAST PATH for phase-invariant MSE/RMSE/total:
+    # Phase alignment directly computes MSE, just use it!
+    if phase_invariant and metric in ('mse', 'rmse', 'total'):
+        mse, _ = _apply_phase_alignment(
+            computed_trajectory, target.positions,
+            return_aligned=False, method=phase_align_method,
+        )
+        if metric == 'mse':
+            return mse
+        elif metric == 'rmse':
+            return np.sqrt(mse)
+        else:  # total
+            # Approximate: MSE * n (assumes uniform weights)
+            return mse * n
+
+    # For 'max' or non-phase-invariant: need to compute per-step errors
+    if phase_invariant:
+        _, aligned = _apply_phase_alignment(
+            computed_trajectory, target.positions,
+            return_aligned=True, method=phase_align_method,
+        )
+        computed_trajectory = aligned
+
+    total, mse, rmse, max_error, _ = _compute_errors_core(
+        computed_trajectory, target.positions, target.weights,
+    )
+
+    if metric == 'max':
+        return max_error
+    elif metric == 'mse':
+        return mse
+    elif metric == 'rmse':
+        return rmse
+    elif metric == 'total':
+        return total
+    else:
+        return mse  # Default to MSE
+
+
 def compute_trajectory_error_detailed(
     computed_trajectory: list[tuple[float, float]],
     target: TargetTrajectory,
-    phase_invariant: bool = False,
+    phase_invariant: bool = True,
+    phase_align_method: Literal['rotation', 'fft', 'frechet'] = 'rotation',
 ) -> ErrorMetrics:
     """
     Compute detailed error metrics between computed and target trajectory.
@@ -471,8 +315,12 @@ def compute_trajectory_error_detailed(
         computed_trajectory: List of (x, y) positions from simulation
         target: TargetTrajectory with target positions and weights
         phase_invariant: If True, find optimal phase alignment before scoring.
-            CRITICAL: Use this when trajectories may start at different points!
+            Use this when trajectories may start at different points!
             Without this, identical paths can have huge errors if out of phase.
+        phase_align_method: Phase alignment algorithm:
+            - 'rotation': Brute-force, O(n²), guaranteed optimal (DEFAULT)
+            - 'fft': FFT cross-correlation, O(n log n), fastest for large n
+            - 'frechet': Fréchet distance, O(n³), slow but handles speed variation
 
     Returns:
         ErrorMetrics with total, mse, rmse, max, and per-step errors
@@ -499,37 +347,18 @@ def compute_trajectory_error_detailed(
 
     # Apply phase alignment if requested
     if phase_invariant:
-        from pylink_tools.trajectory_utils import compute_phase_aligned_distance
-        result = compute_phase_aligned_distance(
-            target.positions,
+        _, aligned = _apply_phase_alignment(
             computed_trajectory,
-            method='rotation',
+            target.positions,
             return_aligned=True,
+            method=phase_align_method,
         )
-        # Use aligned trajectory for detailed error computation
-        computed_trajectory = result.aligned_trajectory
+        computed_trajectory = aligned
 
-    weights = target.weights or [1.0] * n
-
-    per_step_errors = []
-    weighted_squared_sum = 0.0
-    total_weight = 0.0
-
-    for i, (computed, target_pos) in enumerate(zip(computed_trajectory, target.positions)):
-        # Euclidean distance
-        dx = computed[0] - target_pos[0]
-        dy = computed[1] - target_pos[1]
-        dist = np.sqrt(dx * dx + dy * dy)
-
-        per_step_errors.append(dist)
-        weighted_squared_sum += weights[i] * (dist ** 2)
-        total_weight += weights[i]
-
-    # Compute metrics
-    total_error = weighted_squared_sum
-    mse = weighted_squared_sum / total_weight if total_weight > 0 else 0.0
-    rmse = np.sqrt(mse)
-    max_error = max(per_step_errors) if per_step_errors else 0.0
+    # Use shared core computation
+    total_error, mse, rmse, max_error, per_step_errors = _compute_errors_core(
+        computed_trajectory, target.positions, target.weights,
+    )
 
     return ErrorMetrics(
         total_error=total_error,
@@ -544,8 +373,11 @@ def evaluate_linkage_fit(
     pylink_data: dict,
     target: TargetTrajectory,
     n_steps: int | None = None,
-    phase_invariant: bool = False,
-) -> ErrorMetrics:
+    phase_invariant: bool = True,
+    _skip_copy: bool = False,
+    _metric: str | None = None,
+    _phase_align_method: Literal['rotation', 'fft', 'frechet'] = 'rotation',
+) -> ErrorMetrics | float:
     """
     Evaluate how well a linkage fits a target trajectory.
 
@@ -560,9 +392,20 @@ def evaluate_linkage_fit(
         n_steps: Number of simulation steps (uses target.n_steps if not provided)
         phase_invariant: If True, find optimal phase alignment before scoring.
             RECOMMENDED for real-world targets where starting point may differ.
+        _skip_copy: Internal use only. If True, skip deepcopy for performance.
+            Only use this when pylink_data is a dedicated working copy that
+            can be safely mutated (e.g., in optimization hot loops).
+        _metric: Internal use only. If set, use fast path and return only
+            the requested metric as a float (for optimization hot loops).
+            Values: 'mse', 'rmse', 'total', 'max'. ~30% faster than full path.
+        _phase_align_method: Internal use only. Phase alignment algorithm:
+            - 'rotation': Brute-force, O(n²), guaranteed optimal (DEFAULT)
+            - 'fft': FFT cross-correlation, O(n log n), fastest for large n
+            - 'frechet': Fréchet distance, O(n³), avoid in optimization!
 
     Returns:
-        ErrorMetrics describing the fit quality
+        ErrorMetrics describing the fit quality, OR
+        float if _metric is specified (fast path for optimization)
 
     Note:
         n_steps is CRITICAL - it determines simulation resolution and MUST
@@ -576,15 +419,27 @@ def evaluate_linkage_fit(
         n_steps = target.n_steps
 
     # Update n_steps in pylink_data
-    eval_data = copy.deepcopy(pylink_data)
-    eval_data['n_steps'] = n_steps
+    if _skip_copy:
+        # Performance path: assume pylink_data is a reusable working copy
+        eval_data = pylink_data
+        eval_data['n_steps'] = n_steps
+    else:
+        # Safe path: deep copy to avoid mutation
+        eval_data = copy.deepcopy(pylink_data)
+        eval_data['n_steps'] = n_steps
 
     # CRITICAL: Use skip_sync=True to use the dimension values we set,
     # not overwrite them from stale meta.joints visual positions!
-    result = compute_trajectory(eval_data, verbose=False, skip_sync=True)
+    result = compute_trajectory(
+        eval_data,
+        verbose=False,
+        skip_sync=True,
+    )
 
     if not result.success:
         # Return infinite error if simulation fails
+        if _metric is not None:
+            return float('inf')
         return ErrorMetrics(
             total_error=float('inf'),
             mse=float('inf'),
@@ -602,85 +457,28 @@ def evaluate_linkage_fit(
     # Convert from [[x,y], ...] to [(x,y), ...]
     computed_tuples = [tuple(pos) for pos in computed]
 
-    return compute_trajectory_error_detailed(computed_tuples, target, phase_invariant=phase_invariant)
+    # Fast path: only compute requested metric (for optimization hot loops)
+    # ~30% faster by avoiding per_step_errors list, rmse, max computations
+    if _metric is not None:
+        return compute_trajectory_error_fast(
+            computed_tuples, target,
+            metric=_metric,
+            phase_invariant=phase_invariant,
+            phase_align_method=_phase_align_method,
+        )
 
-
-# =============================================================================
-# Utility Functions
-# =============================================================================
-
-def dimensions_to_dict(
-    values: tuple[float, ...],
-    spec: DimensionSpec,
-) -> dict[str, float]:
-    """Convert dimension array to named dict."""
-    return dict(zip(spec.names, values))
-
-
-def dict_to_dimensions(
-    values_dict: dict[str, float],
-    spec: DimensionSpec,
-) -> tuple[float, ...]:
-    """Convert named dict to dimension array (in spec order)."""
-    return tuple(
-        values_dict.get(name, spec.initial_values[i])
-        for i, name in enumerate(spec.names)
+    # Full path: compute all metrics
+    return compute_trajectory_error_detailed(
+        computed_tuples,
+        target,
+        phase_invariant=phase_invariant,
+        phase_align_method=_phase_align_method,
     )
-
-
-def validate_bounds(
-    values: tuple[float, ...],
-    spec: DimensionSpec,
-) -> list[str]:
-    """
-    Check if values are within bounds.
-
-    Returns:
-        List of violation messages (empty if all valid)
-    """
-    violations = []
-    for i, (value, (lower, upper)) in enumerate(zip(values, spec.bounds)):
-        if value < lower:
-            violations.append(f'{spec.names[i]}: {value} < {lower} (min)')
-        elif value > upper:
-            violations.append(f'{spec.names[i]}: {value} > {upper} (max)')
-    return violations
 
 
 # =============================================================================
 # Convergence Logging / Analysis
 # =============================================================================
-
-@dataclass
-class ConvergenceStats:
-    """
-    Statistics about optimization convergence.
-
-    Useful for analyzing and debugging optimization runs.
-    """
-    initial_error: float
-    final_error: float
-    best_error: float
-    improvement_pct: float
-    n_iterations: int
-    n_evaluations: int
-    converged: bool
-    history: list[float]
-    improvement_per_iteration: list[float]
-
-    def to_dict(self) -> dict:
-        return {
-            'initial_error': self.initial_error,
-            'final_error': self.final_error,
-            'best_error': self.best_error,
-            'improvement_pct': self.improvement_pct,
-            'n_iterations': self.n_iterations,
-            'n_evaluations': self.n_evaluations,
-            'converged': self.converged,
-            'history': self.history,
-            'improvement_per_iteration': self.improvement_per_iteration,
-        }
-
 
 def analyze_convergence(
     history: list[float],
@@ -843,6 +641,8 @@ def create_fitness_function(
     metric: str = 'mse',
     verbose: bool = False,
     phase_invariant: bool = False,
+    phase_align_method: Literal['rotation', 'fft', 'frechet'] = 'rotation',
+    use_cache: bool = False,
 ) -> Callable[[tuple[float, ...]], float]:
     """
     Create a fitness function for optimization.
@@ -860,6 +660,12 @@ def create_fitness_function(
             RECOMMENDED when target may have different starting point than
             simulation. Adds O(n) overhead per evaluation but prevents
             false errors from phase mismatch.
+        phase_align_method: Phase alignment algorithm (only used if phase_invariant=True):
+            - 'rotation': Brute-force, O(n²), guaranteed optimal (DEFAULT)
+            - 'fft': FFT cross-correlation, O(n log n), fastest for large n
+            - 'frechet': Fréchet distance, O(n³), avoid in optimization!
+        use_cache: If True, cache results with LRU cache (useful when optimizer
+            may revisit same points). Cache uses rounded dimension values.
 
     Returns:
         Callable that takes dimension tuple and returns float error
@@ -875,8 +681,51 @@ def create_fitness_function(
         - Target comes from external source (captured data, hand-drawn)
         - Target was generated with different initial conditions
         - You're not sure about phase alignment
+
+    Performance note:
+        This function creates a reusable working copy of pylink_data and uses
+        in-place mutations to avoid expensive deepcopy operations on every
+        evaluation. This can provide 2-3x speedup for optimization.
     """
     eval_count = [0]  # Mutable counter for tracking evaluations
+    cache_hits = [0]  # Track cache hit rate
+
+    # Create a single working copy for in-place mutations (OPTIMIZATION)
+    # This avoids 2x deepcopy per evaluation that was happening before
+    working_copy = copy.deepcopy(pylink_data)
+
+    # Detect format: hypergraph (linkage.edges) vs legacy (pylinkage.joints)
+    is_hypergraph = 'linkage' in working_copy and 'edges' in working_copy.get('linkage', {})
+
+    # Cache for memoization (optional)
+    result_cache: dict[tuple, float] = {} if use_cache else None
+
+    if is_hypergraph:
+        # Hypergraph format: dimensions map to edge distances
+        # Use edge_mapping if available, fall back to joint_mapping for backwards compatibility
+        mapping = getattr(dimension_spec, 'edge_mapping', None) or dimension_spec.joint_mapping
+        edges_data = working_copy['linkage']['edges']
+
+        def _apply_dimensions_fast(dimensions: tuple[float, ...]) -> None:
+            """Apply dimensions in-place to working_copy edges (hypergraph path)."""
+            for i, dim_name in enumerate(dimension_spec.names):
+                if dim_name in mapping:
+                    edge_id, prop_name = mapping[dim_name]
+                    if edge_id in edges_data:
+                        edges_data[edge_id][prop_name] = dimensions[i]
+    else:
+        # Legacy format: dimensions map to joint properties
+        mapping = dimension_spec.joint_mapping
+        joints_data = working_copy.get('pylinkage', {}).get('joints', [])
+        joint_by_name = {j['name']: j for j in joints_data}
+
+        def _apply_dimensions_fast(dimensions: tuple[float, ...]) -> None:
+            """Apply dimensions in-place to working_copy joints (legacy path)."""
+            for i, dim_name in enumerate(dimension_spec.names):
+                if dim_name in mapping:
+                    joint_name, prop_name = mapping[dim_name]
+                    if joint_name in joint_by_name:
+                        joint_by_name[joint_name][prop_name] = dimensions[i]
 
     def fitness(dimensions: tuple[float, ...]) -> float:
         """
@@ -890,44 +739,57 @@ def create_fitness_function(
         """
         eval_count[0] += 1
 
+        # Check cache if enabled
+        if result_cache is not None:
+            # Round to 6 decimal places for cache key
+            cache_key = tuple(round(d, 6) for d in dimensions)
+            if cache_key in result_cache:
+                cache_hits[0] += 1
+                return result_cache[cache_key]
+
         try:
-            # Apply dimensions to get updated pylink_data
-            updated_data = apply_dimensions_from_array(
-                pylink_data, dimensions, dimension_spec,
-            )
+            # Fast in-place dimension application
+            _apply_dimensions_fast(dimensions)
 
-            # Evaluate fit (with optional phase alignment)
-            metrics = evaluate_linkage_fit(
-                updated_data, target, phase_invariant=phase_invariant,
+            # Evaluate fit using fast path - only computes requested metric
+            # This uses compute_trajectory_error_fast which:
+            # - Uses phase alignment MSE directly (no recomputation)
+            # - Skips per_step_errors list creation
+            # - Avoids rmse/max computation when not needed
+            # ~30% faster than full metrics computation
+            error = evaluate_linkage_fit(
+                working_copy,
+                target,
+                phase_invariant=phase_invariant,
+                _skip_copy=True,  # Performance: use working copy directly
+                _metric=metric,   # Performance: only compute requested metric
+                _phase_align_method=phase_align_method,
             )
-
-            # Get requested metric
-            if metric == 'mse':
-                error = metrics.mse
-            elif metric == 'rmse':
-                error = metrics.rmse
-            elif metric == 'total':
-                error = metrics.total_error
-            elif metric == 'max':
-                error = metrics.max_error
-            else:
-                error = metrics.mse
 
             if verbose and eval_count[0] % 50 == 0:
-                print(f'  Eval #{eval_count[0]}: error={error:.4f}, dims={dimensions[:3]}...')
+                cache_info = f', cache_hits={cache_hits[0]}' if result_cache is not None else ''
+                logger.debug(f'Eval #{eval_count[0]}: error={error:.4f}, dims={dimensions[:3]}...{cache_info}')
+
+            # Store in cache if enabled
+            if result_cache is not None:
+                cache_key = tuple(round(d, 6) for d in dimensions)
+                result_cache[cache_key] = error
 
             return error
 
         except Exception as e:
             if verbose:
-                print(f'  Eval #{eval_count[0]} failed: {e}')
+                logger.warning(f'Eval #{eval_count[0]} failed: {e}')
             return float('inf')
 
     # Attach metadata to function
     fitness.eval_count = eval_count
+    fitness.cache_hits = cache_hits
     fitness.dimension_spec = dimension_spec
     fitness.target = target
     fitness.phase_invariant = phase_invariant
+    fitness.phase_align_method = phase_align_method
+    fitness.result_cache = result_cache
 
     return fitness
 
@@ -1012,6 +874,8 @@ def run_scipy_optimization(
     max_iterations: int = 100,
     tolerance: float = 1e-6,
     verbose: bool = False,
+    phase_invariant: bool = True,
+    phase_align_method: Literal['rotation', 'fft', 'frechet'] = 'rotation',
 ) -> OptimizationResult:
     """
     Run optimization using scipy.optimize.minimize.
@@ -1028,6 +892,11 @@ def run_scipy_optimization(
         max_iterations: Maximum iterations
         tolerance: Convergence tolerance
         verbose: Print progress
+        phase_invariant: If True, use phase-aligned scoring
+        phase_align_method: Phase alignment algorithm:
+            - 'rotation': Brute-force, O(n²), guaranteed optimal (DEFAULT)
+            - 'fft': FFT cross-correlation, O(n log n), fastest for large n
+            - 'frechet': Fréchet distance, O(n³), avoid in optimization!
 
     Returns:
         OptimizationResult with optimized dimensions
@@ -1054,6 +923,7 @@ def run_scipy_optimization(
     # Create fitness function
     fitness = create_fitness_function(
         pylink_data, target, dimension_spec, metric=metric, verbose=verbose,
+        phase_invariant=phase_invariant, phase_align_method=phase_align_method,
     )
 
     # Compute initial error
@@ -1061,9 +931,9 @@ def run_scipy_optimization(
     initial_error = fitness(initial_values)
 
     if verbose:
-        print(f'Starting scipy optimization ({method})')
-        print(f'  Dimensions: {len(dimension_spec)}')
-        print(f'  Initial error: {initial_error:.4f}')
+        logger.info(f'Starting scipy optimization ({method})')
+        logger.info(f'  Dimensions: {len(dimension_spec)}')
+        logger.info(f'  Initial error: {initial_error:.4f}')
 
     # Convert bounds to scipy format: [(low, high), ...]
     scipy_bounds = dimension_spec.bounds
@@ -1075,7 +945,7 @@ def run_scipy_optimization(
         error = fitness(tuple(xk))
         history.append(error)
         if verbose and len(history) % 10 == 0:
-            print(f'  Iteration {len(history)}: error={error:.4f}')
+            logger.info(f'  Iteration {len(history)}: error={error:.4f}')
 
     # Run optimization
     try:
@@ -1113,10 +983,10 @@ def run_scipy_optimization(
         optimized_dims = dimensions_to_dict(optimized_values, dimension_spec)
 
         if verbose:
-            print(f'  Converged: {result.success}')
-            print(f'  Final error: {final_error:.4f}')
-            print(f'  Iterations: {result.nit}')
-            print(f'  Function evals: {result.nfev}')
+            logger.info(f'  Converged: {result.success}')
+            logger.info(f'  Final error: {final_error:.4f}')
+            logger.info(f'  Iterations: {result.nit}')
+            logger.info(f'  Function evals: {result.nfev}')
 
         return OptimizationResult(
             success=result.success,
@@ -1145,7 +1015,10 @@ def run_pso_optimization(
     iterations: int = 512,
     metric: str = 'mse',
     verbose: bool = False,
-    phase_invariant: bool = False,
+    phase_invariant: bool = True,
+    phase_align_method: Literal['rotation', 'fft', 'frechet'] = 'rotation',
+    init_mode: str = 'random',
+    init_samples: int = 128,
 ) -> OptimizationResult:
     """
     Run Particle Swarm Optimization to fit linkage to target trajectory.
@@ -1166,20 +1039,38 @@ def run_pso_optimization(
         phase_invariant: If True, use phase-aligned scoring.
             RECOMMENDED when target may start at different phase than simulation.
             Prevents false errors from phase mismatch at cost of O(n) per eval.
+        phase_align_method: Phase alignment algorithm:
+            - 'rotation': Brute-force, O(n²), guaranteed optimal (DEFAULT)
+            - 'fft': FFT cross-correlation, O(n log n), fastest for large n
+            - 'frechet': Fréchet distance, O(n³), avoid in optimization!
+        init_mode: Particle initialization strategy:
+            - 'random': Random positions in bounds (default, original behavior)
+            - 'sobol': Pre-sample using Sobol sequence, filter valid, use best
+            - 'behnken': Pre-sample using Box-Behnken design (requires 3+ dims)
+        init_samples: Number of samples to generate for presampling modes
 
     Returns:
         OptimizationResult with optimized dimensions
 
     Example:
-        >>> result = run_pso_optimization(pylink_data, target, n_particles=50, iterations=100)
-        >>> if result.success:
-        ...     updated_linkage = result.optimized_pylink_data
+        >>> # Standard random initialization
+        >>> result = run_pso_optimization(pylink_data, target, n_particles=50)
+        >>> # With Sobol presampling for better convergence
+        >>> result = run_pso_optimization(
+        ...     pylink_data, target, n_particles=50,
+        ...     init_mode='sobol', init_samples=256
+        ... )
 
     Note on phase_invariant:
         Set to True when working with:
         - External/captured target trajectories
         - Hand-drawn or digitized paths
         - Any case where starting point alignment is uncertain
+
+    Note on init_mode:
+        Using 'sobol' or 'behnken' presampling can dramatically improve
+        convergence for constrained mechanisms where random positions
+        often produce invalid (infinite error) configurations.
     """
     # Extract dimensions if not provided
     if dimension_spec is None:
@@ -1192,10 +1083,19 @@ def run_pso_optimization(
             error='No optimizable dimensions found',
         )
 
+    logger.info(f'Starting PSO optimization with phase_invariant={phase_invariant}')
+    logger.info(f'  Dimensions: {len(dimension_spec)}')
+    logger.info(f'  Particles: {n_particles}')
+    logger.info(f'  Iterations: {iterations}')
+    logger.info(f'  Metric: {metric}')
+    logger.info(f'  Phase invariant: {phase_invariant}')
+    logger.info(f'  Init mode: {init_mode}')
+
     # Create fitness function
     fitness = create_fitness_function(
         pylink_data, target, dimension_spec,
-        metric=metric, verbose=verbose, phase_invariant=phase_invariant,
+        metric=metric, verbose=verbose,
+        phase_invariant=phase_invariant, phase_align_method=phase_align_method,
     )
 
     # Compute initial error
@@ -1203,14 +1103,35 @@ def run_pso_optimization(
     initial_error = fitness(initial_values)
 
     if verbose:
-        print('Starting PSO optimization')
-        print(f'  Dimensions: {len(dimension_spec)}')
-        print(f'  Particles: {n_particles}')
-        print(f'  Iterations: {iterations}')
-        print(f'  Initial error: {initial_error:.4f}')
+        logger.info('Starting PSO optimization')
+        logger.info(f'  Dimensions: {len(dimension_spec)}')
+        logger.info(f'  Particles: {n_particles}')
+        logger.info(f'  Iterations: {iterations}')
+        logger.info(f'  Initial error: {initial_error:.4f}')
 
     # Get bounds
     bounds = dimension_spec.get_bounds_tuple()
+
+    # Pre-sample positions if using advanced init mode
+    init_positions = None
+    if init_mode in ('sobol', 'behnken'):
+        try:
+            init_positions, init_scores = presample_valid_positions(
+                pylink_data=pylink_data,
+                target=target,
+                dimension_spec=dimension_spec,
+                n_samples=init_samples,
+                n_best=n_particles,
+                mode=init_mode,
+                metric=metric,
+                phase_invariant=phase_invariant,
+            )
+            if verbose and len(init_positions) > 0:
+                logger.info(f'  Pre-sampled {len(init_positions)} valid positions')
+                logger.info(f'  Best pre-sample score: {init_scores[0]:.4f}')
+        except Exception as e:
+            logger.warning(f'Presampling failed: {e}. Falling back to random init.')
+            init_positions = None
 
     # Run PSO
     try:
@@ -1221,6 +1142,7 @@ def run_pso_optimization(
             n_particles=n_particles,
             iterations=iterations,
             verbose=verbose,
+            init_positions=init_positions,
         )
 
         # Build optimized pylink_data
@@ -1232,8 +1154,8 @@ def run_pso_optimization(
         optimized_dims = dimensions_to_dict(best_dims, dimension_spec)
 
         if verbose:
-            print(f'  Final error: {best_score:.4f}')
-            print(f'  Improvement: {(1 - best_score/initial_error)*100:.1f}%')
+            logger.info(f'  Final error: {best_score:.4f}')
+            logger.info(f'  Improvement: {(1 - best_score/initial_error)*100:.1f}%')
 
         return OptimizationResult(
             success=True,
@@ -1248,7 +1170,7 @@ def run_pso_optimization(
     except Exception as e:
         import traceback
         if verbose:
-            traceback.print_exc()
+            logger.error(f'PSO optimization failed: {e}', exc_info=True)
         return OptimizationResult(
             success=False,
             optimized_dimensions={},
@@ -1264,7 +1186,11 @@ def run_pylinkage_pso(
     n_particles: int = 32,
     iterations: int = 512,
     metric: str = 'mse',
-    verbose: bool = False,
+    verbose: bool = True,
+    phase_invariant: bool = True,
+    phase_align_method: Literal['rotation', 'fft', 'frechet'] = 'rotation',
+    init_mode: str = 'random',
+    init_samples: int = 128,
 ) -> OptimizationResult:
     """
     Run Particle Swarm Optimization using pylinkage's native PSO implementation.
@@ -1274,12 +1200,6 @@ def run_pylinkage_pso(
       - Building and validating the linkage at each iteration
       - Rejecting invalid configurations (returns inf penalty)
       - Efficient loci computation
-
-    **EXPERIMENTAL**: This method explores the bounds space broadly, which means
-    many random dimension combinations may produce invalid linkages (returning inf).
-    For most use cases, prefer:
-      - run_pso_optimization(): Custom PSO that starts from valid config
-      - run_scipy_optimization(): Gradient-based, faster convergence
 
     Note: pylinkage uses pyswarms with ring topology which requires
     n_particles >= 18 (neighborhood size k=17). Smaller values will
@@ -1293,15 +1213,33 @@ def run_pylinkage_pso(
         iterations: Number of PSO iterations
         metric: Error metric for fitness function
         verbose: Print progress
+        phase_invariant: If True, use phase-aligned scoring.
+            RECOMMENDED when target may start at different phase than simulation.
+            Prevents false errors from phase mismatch at cost of O(n) per eval.
+        phase_align_method: Phase alignment algorithm:
+            - 'rotation': Brute-force, O(n²), guaranteed optimal (DEFAULT)
+            - 'fft': FFT cross-correlation, O(n log n), fastest for large n
+            - 'frechet': Fréchet distance, O(n³), avoid in optimization!
+        init_mode: Particle initialization strategy:
+            - 'random': Small perturbations around initial config (original behavior)
+            - 'sobol': Pre-sample using Sobol sequence, filter valid, use best
+            - 'behnken': Pre-sample using Box-Behnken design (requires 3+ dims)
+        init_samples: Number of samples to generate for presampling modes
 
     Returns:
         OptimizationResult with optimized dimensions
+
+    Note on init_mode:
+        Using 'sobol' or 'behnken' presampling can dramatically improve
+        convergence for pylinkage PSO, which historically struggled with
+        random initialization landing in invalid regions.
     """
+    verbose = True
     # Pylinkage/pyswarms requires minimum particles for ring topology
     MIN_PARTICLES = 20
     if n_particles < MIN_PARTICLES:
         if verbose:
-            print(f'  Note: Increasing n_particles from {n_particles} to {MIN_PARTICLES} (pylinkage minimum)')
+            logger.info(f'  Note: Increasing n_particles from {n_particles} to {MIN_PARTICLES} (pylinkage minimum)')
         n_particles = MIN_PARTICLES
     import pylinkage as pl
     from pylink_tools.kinematic import (
@@ -1344,15 +1282,17 @@ def run_pylinkage_pso(
         )
 
     # Save initial state
-    init_pos = linkage.get_coords()
+    init_coords = linkage.get_coords()
     init_constraints = linkage.get_num_constraints()
 
     if verbose:
-        print('Starting pylinkage PSO optimization')
-        print(f'  Dimensions: {len(dimension_spec)}')
-        print(f'  Initial constraints: {init_constraints}')
-        print(f'  Particles: {n_particles}')
-        print(f'  Iterations: {iterations}')
+        logger.info('Starting pylinkage PSO optimization')
+        logger.info(f'  Dimensions: {len(dimension_spec)}')
+        logger.info(f'  Initial constraints: {init_constraints}')
+        logger.info(f'  Particles: {n_particles}')
+        logger.info(f'  Iterations: {iterations}')
+        logger.info(f'  Phase invariant: {phase_invariant}')
+        logger.info(f'  Init mode: {init_mode}')
 
     # Find target joint index in linkage.joints
     target_joint_name = target.joint_name
@@ -1366,53 +1306,110 @@ def run_pylinkage_pso(
         # Default to last joint
         target_joint_idx = len(linkage.joints) - 1
         if verbose:
-            print(f"  Warning: Target joint '{target_joint_name}' not found, using last joint")
+            logger.warning(f"Target joint '{target_joint_name}' not found, using last joint")
 
-    # Create fitness function with @kinematic_minimization decorator
-    @pl.kinematic_minimization
-    def fitness_func(loci, **_kwargs):
-        """
-        Compute error between linkage trajectory and target.
+    # Track fitness function calls for debugging
+    fitness_call_count = [0]
 
-        loci: List of step positions, each step is tuple of (x,y) for each joint
+    # Log n_steps for debugging
+    logger.info(f'  n_steps for simulation: {n_steps}')
+    logger.info(f'  target trajectory points: {len(target.positions)}')
+
+    # Create fitness function WITHOUT @kinematic_minimization decorator
+    # The decorator hardcodes 96 iterations which doesn't match our n_steps
+    # Instead, we manually control the simulation with the correct n_steps
+    def fitness_func(linkage_obj, params, init_pos_arg=None):
         """
-        # Extract target joint trajectory from loci
-        # loci[step_idx] = ((x1,y1), (x2,y2), ...) positions of all joints at this step
+        Fitness function for pylinkage PSO.
+
+        Args:
+            linkage_obj: The linkage to evaluate
+            params: Dimension values to set
+            init_pos_arg: Initial joint positions (optional)
+        """
+        fitness_call_count[0] += 1
+
         try:
+            # Set initial coordinates if provided
+            if init_pos_arg is not None:
+                linkage_obj.set_coords(init_pos_arg)
+
+            # Set the constraint parameters
+            linkage_obj.set_num_constraints(params)
+
+            # Run simulation with OUR n_steps (not pylinkage's hardcoded 96)
+            try:
+                linkage_obj.rebuild()
+                loci = list(linkage_obj.step(iterations=n_steps))
+            except Exception as e:
+                if fitness_call_count[0] <= 3:
+                    logger.debug(f'    [fitness #{fitness_call_count[0]}] rebuild/step failed: {e}')
+                return float('inf')
+
+            if not loci or len(loci) != n_steps:
+                if fitness_call_count[0] <= 3:
+                    logger.debug(f'    [fitness #{fitness_call_count[0]}] loci len mismatch: {len(loci) if loci else 0} vs {n_steps}')
+                return float('inf')
+            # Extract target joint trajectory from loci
+            # loci[step_idx] = ((x1,y1), (x2,y2), ...) positions of all joints at this step
             computed_trajectory = []
             for step_positions in loci:
                 if target_joint_idx < len(step_positions):
                     pos = step_positions[target_joint_idx]
                     computed_trajectory.append(pos)
                 else:
+                    if fitness_call_count[0] <= 3:
+                        logger.debug(f'    [fitness #{fitness_call_count[0]}] target_joint_idx out of range')
                     return float('inf')
 
             if len(computed_trajectory) != len(target.positions):
+                if fitness_call_count[0] <= 3:
+                    logger.debug(f'    [fitness #{fitness_call_count[0]}] len mismatch: {len(computed_trajectory)} vs {len(target.positions)}')
                 return float('inf')
 
-            # Compute weighted sum of squared errors
-            total_error = 0.0
-            weights = target.weights or [1.0] * len(target.positions)
-
-            for i, (computed, target_pos) in enumerate(zip(computed_trajectory, target.positions)):
-                if computed is None or computed[0] is None:
+            # Check for invalid positions
+            for idx, pos in enumerate(computed_trajectory):
+                if pos is None or pos[0] is None:
+                    if fitness_call_count[0] <= 3:
+                        logger.debug(f'    [fitness #{fitness_call_count[0]}] invalid position at idx={idx}')
                     return float('inf')
-                dx = computed[0] - target_pos[0]
-                dy = computed[1] - target_pos[1]
-                total_error += weights[i] * (dx * dx + dy * dy)
 
-            if metric == 'mse':
-                return total_error / len(target.positions)
+            # Use phase-invariant scoring if requested
+            if phase_invariant:
+                # Use fast path - directly returns the requested metric
+                result = compute_trajectory_error_fast(
+                    computed_trajectory,
+                    target,
+                    metric=metric,
+                    phase_invariant=True,
+                    phase_align_method=phase_align_method,
+                )
             else:
-                return total_error
+                # Direct point-to-point comparison (faster but phase-sensitive)
+                total_error = 0.0
+                weights = target.weights or [1.0] * len(target.positions)
 
-        except Exception:
+                for i, (computed, target_pos) in enumerate(zip(computed_trajectory, target.positions)):
+                    dx = computed[0] - target_pos[0]
+                    dy = computed[1] - target_pos[1]
+                    total_error += weights[i] * (dx * dx + dy * dy)
+
+                if metric == 'mse':
+                    result = total_error / len(target.positions)
+                else:
+                    result = total_error
+
+            return result
+
+        except Exception as e:
+            if fitness_call_count[0] <= 3:
+                logger.debug(f'    [fitness #{fitness_call_count[0]}] EXCEPTION: {e}')
             return float('inf')
 
     # Get bounds in pylinkage format
     bounds = dimension_spec.get_bounds_tuple()
 
-    # Compute initial error
+    # Compute initial error (use same phase_invariant setting as optimization)
     initial_error = float('inf')
     try:
         linkage.rebuild()
@@ -1422,42 +1419,130 @@ def run_pylinkage_pso(
                 step[target_joint_idx] if target_joint_idx < len(step) else (0, 0)
                 for step in loci_init
             ]
-            metrics = compute_trajectory_error_detailed(computed, target)
+            metrics = compute_trajectory_error_detailed(
+                computed,
+                target,
+                phase_invariant=phase_invariant,
+            )
             initial_error = metrics.mse if metric == 'mse' else metrics.total_error
     except Exception:
         pass
 
     if verbose:
-        print(f'  Initial error: {initial_error:.4f}')
+        logger.info(f'  Initial error: {initial_error:.4f}')
 
-    # Run pylinkage PSO
-    # CRITICAL: Use 'init_pos' to set initial particle positions near known valid config
-    # Without this, particles initialize randomly in bounds and never find valid configs
-    # Shape: (n_particles, dimensions) - cluster particles around valid starting point
+    # Get bounds arrays
     init_constraints_array = np.array(init_constraints)
     lower_bounds = np.array(bounds[0])
     upper_bounds = np.array(bounds[1])
     bound_range = upper_bounds - lower_bounds
 
-    # Initialize particles with small perturbations around the known valid position
-    # Use ~10% of bounds range as initial spread (much tighter than random initialization)
-    init_spread = 0.10
+    # Log detailed bounds information
+    logger.info('  Dimension bounds:')
+    for i, name in enumerate(dimension_spec.names):
+        logger.info(f'    {name}: [{lower_bounds[i]:.2f}, {upper_bounds[i]:.2f}] (initial: {init_constraints_array[i]:.2f})')
+
+    # Verify initial constraints are within bounds
+    for i, name in enumerate(dimension_spec.names):
+        if init_constraints_array[i] < lower_bounds[i] or init_constraints_array[i] > upper_bounds[i]:
+            logger.warning(f'    WARNING: {name} initial value {init_constraints_array[i]:.2f} is OUTSIDE bounds!')
+
+    # Initialize particle positions based on init_mode
     init_pos = np.zeros((n_particles, len(init_constraints)))
-    for i in range(n_particles):
-        if i == 0:
-            # First particle is exactly at the known valid position
-            init_pos[i] = init_constraints_array
-        else:
-            # Other particles: small random perturbations around valid position
-            perturbation = (np.random.random(len(init_constraints)) - 0.5) * 2 * init_spread * bound_range
-            init_pos[i] = np.clip(
-                init_constraints_array + perturbation,
-                lower_bounds,
-                upper_bounds,
+
+    if init_mode in ('sobol', 'behnken'):
+        # Pre-sample using DOE methods to find valid configurations
+        try:
+            presampled_positions, presampled_scores = presample_valid_positions(
+                pylink_data=pylink_data,
+                target=target,
+                dimension_spec=dimension_spec,
+                n_samples=init_samples,
+                n_best=n_particles,
+                mode=init_mode,
+                metric=metric,
+                phase_invariant=phase_invariant,
             )
 
-    if verbose:
-        print(f'  Init spread: {init_spread*100:.0f}% of bounds range')
+            if len(presampled_positions) > 0:
+                n_presampled = min(len(presampled_positions), n_particles)
+                init_pos[:n_presampled] = presampled_positions[:n_presampled]
+
+                # Fill remaining with perturbations around best presampled position
+                if n_presampled < n_particles:
+                    best_pos = presampled_positions[0]
+                    init_spread = 0.15
+                    for i in range(n_presampled, n_particles):
+                        perturbation = (np.random.random(len(init_constraints)) - 0.5) * 2 * init_spread * bound_range
+                        init_pos[i] = np.clip(best_pos + perturbation, lower_bounds, upper_bounds)
+
+                if verbose:
+                    logger.info(f'  Using {n_presampled} pre-sampled positions (best score: {presampled_scores[0]:.4f})')
+            else:
+                # No valid presampled positions, fall back to random
+                logger.warning('Presampling found no valid positions, falling back to random init')
+                init_mode = 'random'
+        except Exception as e:
+            logger.warning(f'Presampling failed: {e}. Falling back to random init.')
+            init_mode = 'random'
+
+    if init_mode == 'random':
+        # Original behavior: small perturbations around known valid position
+        init_spread = 0.25
+        for i in range(n_particles):
+            if i == 0:
+                init_pos[i] = init_constraints_array
+            else:
+                perturbation = (np.random.random(len(init_constraints)) - 0.5) * 2 * init_spread * bound_range
+                init_pos[i] = np.clip(
+                    init_constraints_array + perturbation,
+                    lower_bounds,
+                    upper_bounds,
+                )
+        if verbose:
+            logger.info(f'  Init spread: {init_spread*100:.0f}% of bounds range')
+
+    # Log init_pos statistics (debug level for details)
+    logger.debug(f'  Init positions shape: {init_pos.shape}')
+    logger.debug(f'  Init positions range: min={init_pos.min(axis=0)}, max={init_pos.max(axis=0)}')
+
+    # Verify all init positions are within bounds
+    out_of_bounds_count = 0
+    for i in range(n_particles):
+        for d in range(len(init_constraints)):
+            if init_pos[i, d] < lower_bounds[d] or init_pos[i, d] > upper_bounds[d]:
+                out_of_bounds_count += 1
+    if out_of_bounds_count > 0:
+        logger.warning(f'  WARNING: {out_of_bounds_count} init positions are outside bounds!')
+
+    # Test fitness of first few init positions (debug level)
+    logger.debug('  Testing fitness of first 3 init positions:')
+    for i in range(min(3, n_particles)):
+        # Build a test evaluation
+        test_dims = tuple(init_pos[i])
+        linkage.set_num_constraints(test_dims)
+        try:
+            linkage.rebuild()
+            test_loci = list(linkage.step(iterations=n_steps))
+            if test_loci:
+                test_traj = [step[target_joint_idx] if target_joint_idx < len(step) else None for step in test_loci]
+                valid = all(pos is not None and pos[0] is not None for pos in test_traj)
+                if valid:
+                    test_error = compute_trajectory_error_detailed(test_traj, target, phase_invariant=phase_invariant)
+                    logger.debug(f'    Position {i}: dims={[f"{d:.2f}" for d in test_dims]} -> error={test_error.mse:.4f} ✓')
+                else:
+                    logger.debug(f'    Position {i}: dims={[f"{d:.2f}" for d in test_dims]} -> INVALID')
+            else:
+                logger.debug(f'    Position {i}: dims={[f"{d:.2f}" for d in test_dims]} -> NO LOCI')
+        except Exception as e:
+            logger.debug(f'    Position {i}: dims={[f"{d:.2f}" for d in test_dims]} -> EXCEPTION: {type(e).__name__}')
+
+    # Reset linkage to initial state before optimization
+    linkage.set_num_constraints(init_constraints)
+    linkage.set_coords(init_coords)
+
+    logger.debug('  Calling pylinkage particle_swarm_optimization...')
+    logger.debug(f'    bounds: lower={bounds[0]}, upper={bounds[1]}')
 
     try:
         results = pl.particle_swarm_optimization(
@@ -1487,9 +1572,9 @@ def run_pylinkage_pso(
             optimized_dims = dimensions_to_dict(best_dims, dimension_spec)
 
             if verbose:
-                print(f'  Final error: {best_score:.4f}')
-                if initial_error != float('inf'):
-                    print(f'  Improvement: {(1 - best_score/initial_error)*100:.1f}%')
+                logger.info(f'  Final error: {best_score:.4f}')
+                if initial_error != float('inf') and initial_error > 0:
+                    logger.info(f'  Improvement: {(1 - best_score/initial_error)*100:.1f}%')
 
             return OptimizationResult(
                 success=True,
@@ -1509,9 +1594,8 @@ def run_pylinkage_pso(
             )
 
     except Exception as e:
-        import traceback
         if verbose:
-            traceback.print_exc()
+            logger.error(f'pylinkage PSO failed: {e}', exc_info=True)
         return OptimizationResult(
             success=False,
             optimized_dimensions={},
@@ -1522,7 +1606,7 @@ def run_pylinkage_pso(
         # Reset linkage to initial state
         try:
             linkage.set_num_constraints(init_constraints)
-            linkage.set_coords(init_pos)
+            linkage.set_coords(init_coords)
         except Exception:
             pass
 
@@ -1537,6 +1621,7 @@ def _run_pso_internal(
     c1: float = 1.5,     # Cognitive parameter
     c2: float = 1.5,     # Social parameter
     verbose: bool = False,
+    init_positions: np.ndarray | None = None,
 ) -> tuple[float, tuple[float, ...], list[float]]:
     """
     Internal PSO implementation.
@@ -1553,6 +1638,9 @@ def _run_pso_internal(
         c1: Cognitive parameter (personal best attraction)
         c2: Social parameter (global best attraction)
         verbose: Print progress
+        init_positions: Optional pre-computed initial positions from presampling.
+            If provided, these positions are used instead of random initialization.
+            Shape: (n_init, n_dims) where n_init <= n_particles.
 
     Returns:
         (best_score, best_position, convergence_history)
@@ -1562,11 +1650,19 @@ def _run_pso_internal(
     upper_bounds = np.array(bounds[1])
 
     # Initialize particles
-    # First particle starts at initial values, rest are random
     positions = np.random.uniform(
         lower_bounds, upper_bounds, (n_particles, n_dims),
     )
-    positions[0] = np.array(initial_values)
+
+    if init_positions is not None and len(init_positions) > 0:
+        # Use pre-sampled positions (already validated as producing valid mechanisms)
+        n_presampled = min(len(init_positions), n_particles)
+        positions[:n_presampled] = init_positions[:n_presampled]
+        if verbose:
+            logger.info(f'  Using {n_presampled} pre-sampled positions, {n_particles - n_presampled} random')
+    else:
+        # Original behavior: first particle at initial values, rest random
+        positions[0] = np.array(initial_values)
 
     # Initialize velocities (small random values)
     max_velocity = (upper_bounds - lower_bounds) * 0.2
@@ -1631,7 +1727,7 @@ def _run_pso_internal(
         history.append(global_best_score)
 
         if verbose and (iteration + 1) % 10 == 0:
-            print(f'  Iteration {iteration + 1}/{iterations}: best_error={global_best_score:.4f}')
+            logger.info(f'  Iteration {iteration + 1}/{iterations}: best_error={global_best_score:.4f}')
 
     return global_best_score, tuple(global_best_position), history
 
@@ -1643,7 +1739,7 @@ def optimize_trajectory(
     custom_bounds: dict[str, tuple[float, float]] | None = None,
     method: str = 'pylinkage',
     metric: str = 'mse',
-    verbose: bool = False,
+    verbose: bool = True,
     **kwargs,
 ) -> OptimizationResult:
     """
@@ -1663,11 +1759,22 @@ def optimize_trajectory(
                 - "scipy": scipy.optimize.minimize with L-BFGS-B (faster)
                 - "powell": scipy Powell method (gradient-free)
                 - "nelder-mead": Nelder-Mead simplex (gradient-free)
+                - "nlopt" / "nlopt_mlsl" / "mlsl": NLopt MLSL with L-BFGS (global)
+                - "scip": SCIP mixed-integer solver (for discrete params)
         metric: Error metric ("mse", "rmse", "total", "max")
         verbose: Print progress
         **kwargs: Method-specific arguments:
-                  PSO: n_particles (32), iterations (512, max 10000)
+                  Common: phase_invariant (True), phase_align_method ('rotation'|'fft'|'frechet')
+                  PSO: n_particles (32), iterations (512),
+                       init_mode ('random'|'sobol'|'behnken'), init_samples (128)
                   scipy: max_iterations (100), tolerance (1e-6)
+                  nlopt: max_eval (1000), local_max_eval (100), ftol_rel (1e-6)
+                  scip: time_limit (300), gap_limit (0.01)
+
+    TODO (medium-effort enhancements):
+        - Add `timeout` parameter for PSO/scipy methods (only SCIP has time_limit)
+        - Add `callback` parameter for progress monitoring and early stopping
+        - Add `warm_start` parameter to initialize from previous OptimizationResult
 
     Returns:
         OptimizationResult with optimized dimensions and updated pylink_data
@@ -1690,14 +1797,18 @@ def optimize_trajectory(
             dimension_spec = extract_dimensions(pylink_data)
 
     if verbose:
-        print('Optimizing trajectory fit')
-        print(f'  Target joint: {target.joint_name}')
-        print(f'  Target steps: {target.n_steps}')
-        print(f'  Dimensions: {dimension_spec.names}')
-        print(f'  Method: {method}')
+        logger.info('Optimizing trajectory fit')
+        logger.info(f'  Target joint: {target.joint_name}')
+        logger.info(f'  Target steps: {target.n_steps}')
+        logger.info(f'  Dimensions: {dimension_spec.names}')
+        logger.info(f'  Method: {method}')
 
     # Route to appropriate optimizer
     method_lower = method.lower()
+
+    # Extract common parameters
+    phase_invariant = kwargs.get('phase_invariant', True)
+    phase_align_method = kwargs.get('phase_align_method', 'rotation')
 
     if method_lower == 'pso':
         return run_pso_optimization(
@@ -1708,15 +1819,14 @@ def optimize_trajectory(
             verbose=verbose,
             n_particles=kwargs.get('n_particles', 32),
             iterations=kwargs.get('iterations', 512),
+            phase_invariant=phase_invariant,
+            phase_align_method=phase_align_method,
+            init_mode=kwargs.get('init_mode', 'random'),
+            init_samples=kwargs.get('init_samples', 128),
         )
 
     elif method_lower == 'pylinkage':
-        # NOTE: pylinkage's native PSO (run_pylinkage_pso) has issues with particle initialization
-        # where random exploration almost never finds valid linkage configurations.
-        # Until fixed, route to our custom PSO which works reliably.
-        if verbose:
-            print('  Note: Using custom PSO (native pylinkage PSO has initialization issues)')
-        return run_pso_optimization(
+        return run_pylinkage_pso(
             pylink_data=pylink_data,
             target=target,
             dimension_spec=dimension_spec,
@@ -1724,6 +1834,10 @@ def optimize_trajectory(
             verbose=verbose,
             n_particles=kwargs.get('n_particles', 32),
             iterations=kwargs.get('iterations', 512),
+            phase_invariant=phase_invariant,
+            phase_align_method=phase_align_method,
+            init_mode=kwargs.get('init_mode', 'random'),
+            init_samples=kwargs.get('init_samples', 128),
         )
 
     elif method_lower in ('scipy', 'l-bfgs-b'):
@@ -1736,6 +1850,8 @@ def optimize_trajectory(
             verbose=verbose,
             max_iterations=kwargs.get('max_iterations', 100),
             tolerance=kwargs.get('tolerance', 1e-6),
+            phase_invariant=phase_invariant,
+            phase_align_method=phase_align_method,
         )
 
     elif method_lower == 'powell':
@@ -1748,6 +1864,8 @@ def optimize_trajectory(
             verbose=verbose,
             max_iterations=kwargs.get('max_iterations', 100),
             tolerance=kwargs.get('tolerance', 1e-6),
+            phase_invariant=phase_invariant,
+            phase_align_method=phase_align_method,
         )
 
     elif method_lower == 'nelder-mead':
@@ -1760,11 +1878,76 @@ def optimize_trajectory(
             verbose=verbose,
             max_iterations=kwargs.get('max_iterations', 100),
             tolerance=kwargs.get('tolerance', 1e-6),
+            phase_invariant=phase_invariant,
+            phase_align_method=phase_align_method,
+        )
+
+    elif method_lower in ('nlopt', 'nlopt_mlsl', 'mlsl'):
+        # NLopt MLSL with L-BFGS local search (global optimizer)
+        try:
+            from optimizers.nlopt_mlsl import run_nlopt_mlsl, NLoptMLSLConfig
+        except ImportError as e:
+            return OptimizationResult(
+                success=False,
+                optimized_dimensions={},
+                error=f'Failed to import nlopt_mlsl: {e}',
+            )
+
+        config = kwargs.get('config')
+        if config is None:
+            config = NLoptMLSLConfig(
+                max_eval=kwargs.get('max_eval', 1000),
+                local_max_eval=kwargs.get('local_max_eval', 100),
+                ftol_rel=kwargs.get('ftol_rel', 1e-6),
+            )
+
+        return run_nlopt_mlsl(
+            pylink_data=pylink_data,
+            target=target,
+            dimension_spec=dimension_spec,
+            config=config,
+            metric=metric,
+            verbose=verbose,
+            phase_invariant=phase_invariant,
+            phase_align_method=phase_align_method,
+        )
+
+    elif method_lower == 'scip':
+        # SCIP mixed-integer nonlinear programming
+        try:
+            from optimizers.scip_optimizer import run_scip_optimization, SCIPConfig
+        except ImportError as e:
+            return OptimizationResult(
+                success=False,
+                optimized_dimensions={},
+                error=f'Failed to import scip_optimizer: {e}',
+            )
+
+        config = kwargs.get('config')
+        if config is None:
+            config = SCIPConfig(
+                time_limit=kwargs.get('time_limit', 300.0),
+                gap_limit=kwargs.get('gap_limit', 0.01),
+            )
+
+        return run_scip_optimization(
+            pylink_data=pylink_data,
+            target=target,
+            dimension_spec=dimension_spec,
+            config=config,
+            metric=metric,
+            verbose=verbose,
+            phase_invariant=phase_invariant,
+            phase_align_method=phase_align_method,
         )
 
     else:
+        available_methods = [
+            'pso', 'pylinkage', 'scipy', 'l-bfgs-b', 'powell', 'nelder-mead',
+            'nlopt', 'nlopt_mlsl', 'mlsl', 'scip',
+        ]
         return OptimizationResult(
             success=False,
             optimized_dimensions={},
-            error=f'Unknown optimization method: {method}',
+            error=f"Unknown optimization method: {method}. Available: {', '.join(available_methods)}",
         )

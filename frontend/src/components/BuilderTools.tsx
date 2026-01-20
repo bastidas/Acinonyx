@@ -7,6 +7,7 @@ import {
 import CloseIcon from '@mui/icons-material/Close'
 import { graphColors, statusColors, colors, jointColors } from '../theme'
 import acinonyxLogo from '../assets/acinonyx_logo.png'
+import { Edge, EdgeId, NodeId } from '../types'
 
 
 // Threshold distance for merge detection (in units)
@@ -277,13 +278,29 @@ export interface ToolInfo {
 }
 
 export const TOOLS: ToolInfo[] = [
+  // Row 1: Core editing tools
+  {
+    id: 'draw_link',
+    label: 'Create Link',
+    icon: '╱',
+    description: 'Click two points to create a new link between them.',
+    shortcut: 'C'
+  },
   {
     id: 'select',
     label: 'Select',
     icon: '⎚',
     description: 'Click to select individual joints or links. Drag to move.',
-    shortcut: 'V'
+    shortcut: 'S'
   },
+  {
+    id: 'delete',
+    label: 'Delete',
+    icon: '⌫',
+    description: 'Click a joint or link to delete it. Deleting a link removes orphan nodes. Deleting a node removes connected links.',
+    shortcut: 'X'
+  },
+  // Row 2: Selection modes
   {
     id: 'group_select',
     label: 'Group Select',
@@ -299,19 +316,13 @@ export const TOOLS: ToolInfo[] = [
     shortcut: 'M'
   },
   {
-    id: 'draw_link',
-    label: 'Draw Link',
-    icon: '╱',
-    description: 'Click two points to create a new link between them.',
-    shortcut: 'L'
+    id: 'measure',
+    label: 'Measure',
+    icon: '⌗',
+    description: 'Click two points to measure the distance between them.',
+    shortcut: 'R'
   },
-  {
-    id: 'add_joint',
-    label: 'Add Joint',
-    icon: '⊕',
-    description: 'Click on an existing link to add a joint at that position.',
-    shortcut: 'J'
-  },
+  // Row 3: Drawing tools
   {
     id: 'draw_polygon',
     label: 'Draw Polygon',
@@ -327,26 +338,20 @@ export const TOOLS: ToolInfo[] = [
     shortcut: 'E'
   },
   {
-    id: 'measure',
-    label: 'Measure',
-    icon: '⌗',  // Abstract grid/measurement icon
-    description: 'Click two points to measure the distance between them.',
-    shortcut: 'R'
-  },
-  {
-    id: 'delete',
-    label: 'Delete',
-    icon: '⌫',  // Delete/backspace icon
-    description: 'Click a joint or link to delete it. Deleting a link removes orphan nodes. Deleting a node removes connected links.',
-    shortcut: 'X'
-  },
-  {
     id: 'draw_path',
-    label: 'Draw Path',
-    icon: '⌇',  // Target path icon
-    description: 'Draw a target path for trajectory optimization. Click to add points, double-click or press Enter to finish.',
+    label: 'Draw Trajectory',
+    icon: '⌇',
+    description: 'Draw a target trajectory for optimization. Click to add points, double-click or press Enter to finish.',
     shortcut: 'T'
   }
+  // TODO: Re-enable Add Joint feature later
+  // {
+  //   id: 'add_joint',
+  //   label: 'Add Joint',
+  //   icon: '⊕',
+  //   description: 'Click on an existing link to add a joint at that position.',
+  //   shortcut: 'J'
+  // },
 ]
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -686,67 +691,144 @@ export const findElementsInBox = (
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// LINK METADATA TYPE (for helper functions)
+// EDGE HELPER FUNCTIONS
+// These work with the hypergraph Edge type from types/pylink.ts
+// Reference: https://github.com/HugoFara/pylinkage/tree/main/src/pylinkage/hypergraph
 // ═══════════════════════════════════════════════════════════════════════════════
 
+/**
+ * Check if an edge connects to a specific node
+ */
+export const edgeConnectsNode = (edge: Edge, nodeId: NodeId): boolean => {
+  return edge.source === nodeId || edge.target === nodeId
+}
+
+/**
+ * Check if a node has any connections (is connected to any edges)
+ * @param nodeId - The ID of the node to check
+ * @param edges - Record of edge IDs to their data
+ * @returns true if the node is connected to at least one edge
+ */
+export const hasConnections = (
+  nodeId: NodeId,
+  edges: Record<EdgeId, Edge>
+): boolean => {
+  return Object.values(edges).some(edge => edgeConnectsNode(edge, nodeId))
+}
+
+/**
+ * Check if a node is orphaned (has no connections to any edges)
+ * @param nodeId - The ID of the node to check
+ * @param edges - Record of edge IDs to their data
+ * @returns true if the node has no connections
+ */
+export const isOrphan = (
+  nodeId: NodeId,
+  edges: Record<EdgeId, Edge>
+): boolean => {
+  return !hasConnections(nodeId, edges)
+}
+
+/**
+ * Check if a joint is orphaned using legacy LinkMetaData format
+ * @param jointName - The name of the joint to check
+ * @param links - Record of link names to their metadata (legacy format)
+ * @returns true if the joint has no connections
+ */
+export const isOrphanLegacy = (
+  jointName: string,
+  links: Record<string, LinkMetaData>
+): boolean => {
+  return !Object.values(links).some(link => link.connects.includes(jointName))
+}
+
+/**
+ * Get all edges that connect to a specific node
+ * @param nodeId - The ID of the node
+ * @param edges - Record of edge IDs to their data
+ * @returns Array of edge IDs that connect to this node
+ */
+export const getEdgesConnectedToNode = (
+  nodeId: NodeId,
+  edges: Record<EdgeId, Edge>
+): EdgeId[] => {
+  return Object.entries(edges)
+    .filter(([_, edge]) => edgeConnectsNode(edge, nodeId))
+    .map(([edgeId]) => edgeId)
+}
+
+/**
+ * Get all nodes that an edge connects
+ * @param edgeId - The ID of the edge
+ * @param edges - Record of edge IDs to their data
+ * @returns Array of node IDs that this edge connects, or empty array if edge not found
+ */
+export const getNodesConnectedByEdge = (
+  edgeId: EdgeId,
+  edges: Record<EdgeId, Edge>
+): NodeId[] => {
+  const edge = edges[edgeId]
+  return edge ? [edge.source, edge.target] : []
+}
+
+/**
+ * Get the connection count for a node (how many edges connect to it)
+ * @param nodeId - The ID of the node
+ * @param edges - Record of edge IDs to their data
+ * @returns Number of edges connected to this node
+ */
+export const getConnectionCount = (
+  nodeId: NodeId,
+  edges: Record<EdgeId, Edge>
+): number => {
+  return getEdgesConnectedToNode(nodeId, edges).length
+}
+
+/**
+ * Find all orphan nodes that would result from removing an edge
+ * @param edgeId - The ID of the edge to be removed
+ * @param edges - Record of edge IDs to their data
+ * @returns Array of node IDs that would become orphaned
+ */
+export const findOrphansAfterEdgeRemoval = (
+  edgeId: EdgeId,
+  edges: Record<EdgeId, Edge>
+): NodeId[] => {
+  const edge = edges[edgeId]
+  if (!edge) return []
+
+  // Create a copy of edges without the target edge
+  const remainingEdges = { ...edges }
+  delete remainingEdges[edgeId]
+
+  // Check each node the edge connects to see if it would become orphaned
+  const connectedNodes = [edge.source, edge.target]
+  return connectedNodes.filter(nodeId => isOrphan(nodeId, remainingEdges))
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// LEGACY COMPATIBILITY (deprecated - will be removed after migration)
+// These maintain compatibility with code still using the old LinkMetaData type
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/** @deprecated Use Edge from types/pylink.ts instead */
 export interface LinkMetaData {
   color: string
   connects: string[]  // Array of joint names this link connects
   isGround?: boolean  // True if this is a ground/anchored link
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// DELETE HELPER FUNCTIONS
-// These are small, reusable functions for graph manipulation
-// ═══════════════════════════════════════════════════════════════════════════════
-
-/**
- * Check if a joint has any connections (is connected to any links)
- * @param jointName - The name of the joint to check
- * @param links - Record of link names to their metadata
- * @returns true if the joint is connected to at least one link
- */
-export const hasConnections = (
-  jointName: string,
-  links: Record<string, LinkMetaData>
-): boolean => {
-  return Object.values(links).some(link => link.connects.includes(jointName))
-}
-
-/**
- * Check if a joint is orphaned (has no connections to any links)
- * @param jointName - The name of the joint to check
- * @param links - Record of link names to their metadata
- * @returns true if the joint has no connections
- */
-export const isOrphan = (
-  jointName: string,
-  links: Record<string, LinkMetaData>
-): boolean => {
-  return !hasConnections(jointName, links)
-}
-
-/**
- * Get all links that connect to a specific joint
- * @param jointName - The name of the joint
- * @param links - Record of link names to their metadata
- * @returns Array of link names that connect to this joint
- */
+/** @deprecated Use getEdgesConnectedToNode */
 export const getLinksConnectedToJoint = (
   jointName: string,
   links: Record<string, LinkMetaData>
 ): string[] => {
   return Object.entries(links)
     .filter(([_, linkMeta]) => linkMeta.connects.includes(jointName))
-    .map(([linkName, _]) => linkName)
+    .map(([linkName]) => linkName)
 }
 
-/**
- * Get all joints that a link connects
- * @param linkName - The name of the link
- * @param links - Record of link names to their metadata
- * @returns Array of joint names that this link connects, or empty array if link not found
- */
+/** @deprecated Use getNodesConnectedByEdge */
 export const getJointsConnectedByLink = (
   linkName: string,
   links: Record<string, LinkMetaData>
@@ -755,25 +837,7 @@ export const getJointsConnectedByLink = (
   return link ? [...link.connects] : []
 }
 
-/**
- * Get the connection count for a joint (how many links connect to it)
- * @param jointName - The name of the joint
- * @param links - Record of link names to their metadata
- * @returns Number of links connected to this joint
- */
-export const getConnectionCount = (
-  jointName: string,
-  links: Record<string, LinkMetaData>
-): number => {
-  return getLinksConnectedToJoint(jointName, links).length
-}
-
-/**
- * Find all orphan joints that would result from removing a link
- * @param linkName - The name of the link to be removed
- * @param links - Record of link names to their metadata
- * @returns Array of joint names that would become orphaned
- */
+/** @deprecated Use findOrphansAfterEdgeRemoval */
 export const findOrphansAfterLinkRemoval = (
   linkName: string,
   links: Record<string, LinkMetaData>
@@ -786,7 +850,9 @@ export const findOrphansAfterLinkRemoval = (
   delete remainingLinks[linkName]
 
   // Check each joint the link connects to see if it would become orphaned
-  return link.connects.filter(jointName => isOrphan(jointName, remainingLinks))
+  return link.connects.filter(jointName =>
+    !Object.values(remainingLinks).some(l => l.connects.includes(jointName))
+  )
 }
 
 /**
@@ -849,7 +915,7 @@ export const findOrphansAfterMultipleLinkRemovals = (
   })
 
   // Check which affected joints would become orphaned
-  return Array.from(affectedJoints).filter(jointName => isOrphan(jointName, remainingLinks))
+  return Array.from(affectedJoints).filter(jointName => isOrphanLegacy(jointName, remainingLinks))
 }
 
 /**

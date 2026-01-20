@@ -232,26 +232,41 @@ def plot_trajectory_overlay(
     """
     fig, ax = plt.subplots(figsize=style.figsize, dpi=style.dpi)
 
-    # Define distinct colors for trajectories
-    traj_colors = {
-        'Initial': style.current_color,    # Teal blue
-        'Optimized': style.optimized_color,  # Purple
+    # Define distinct colors and styles for trajectories
+    # Each trajectory gets a unique combination: color + linestyle + marker
+    traj_styles = {
+        'Initial': {
+            'color': style.current_color,     # Teal blue
+            'linestyle': ':',                 # Dotted
+            'marker': 's',                    # Square (filled)
+            'marker_fill': 'full',
+            'linewidth': 2.0,
+            'zorder': 3,
+        },
     }
 
-    # Fallback colors for other trajectories
-    extra_colors = list(style.accent_colors)
+    # Fallback colors and styles for solver results
+    solver_styles = [
+        {'color': style.optimized_color, 'linestyle': '-', 'marker': 'o', 'marker_fill': 'full'},  # Purple solid
+        {'color': '#27AE60', 'linestyle': '-', 'marker': '^', 'marker_fill': 'full'},  # Green solid
+        {'color': '#2980B9', 'linestyle': '-', 'marker': 'v', 'marker_fill': 'full'},  # Blue solid
+        {'color': '#8E44AD', 'linestyle': '-', 'marker': 'D', 'marker_fill': 'full'},  # Purple solid
+        {'color': '#F39C12', 'linestyle': '-', 'marker': 'p', 'marker_fill': 'full'},  # Orange solid
+    ]
+    solver_idx = 0
 
-    # Plot target FIRST - CORAL RED, DASHED
+    # Plot target FIRST - CORAL RED, DASHED with X markers
+    # Target is highly visible but "underneath" other lines
     target_pos = np.array(target.positions)
     ax.plot(
         target_pos[:, 0], target_pos[:, 1],
-        color=style.target_color, linewidth=style.target_linewidth + 0.5,
-        linestyle='--', label='Target', zorder=1, alpha=0.9,
+        color=style.target_color, linewidth=style.target_linewidth + 1.0,
+        linestyle='--', label='Target', zorder=1, alpha=0.85,
     )
     ax.scatter(
         target_pos[:, 0], target_pos[:, 1],
-        color=style.target_color, s=style.marker_size * 0.7,
-        marker='x', linewidths=2, zorder=2,
+        color=style.target_color, s=style.marker_size * 0.8,
+        marker='x', linewidths=2.5, zorder=2, alpha=0.9,
     )
 
     # Plot each trajectory with distinct style
@@ -259,28 +274,35 @@ def plot_trajectory_overlay(
         traj_arr = np.array(traj)
         label = labels.get(name, name) if labels else name
 
-        # Get color for this trajectory
-        if name in traj_colors:
-            color = traj_colors[name]
-        elif extra_colors:
-            color = extra_colors.pop(0)
+        # Get style for this trajectory
+        if name in traj_styles:
+            ts = traj_styles[name]
         else:
-            color = style.accent_colors[i % len(style.accent_colors)]
+            # Use solver style (cycling through available styles)
+            ts = solver_styles[solver_idx % len(solver_styles)]
+            solver_idx += 1
 
-        # Different line style for initial vs optimized
-        linestyle = '-' if name == 'Optimized' else '-.'
-        marker = 'o' if name == 'Optimized' else 's'
+        color = ts.get('color', style.accent_colors[i % len(style.accent_colors)])
+        linestyle = ts.get('linestyle', '-')
+        marker = ts.get('marker', 'o')
+        marker_fill = ts.get('marker_fill', 'full')
+        linewidth = ts.get('linewidth', style.current_linewidth)
+        zorder_base = ts.get('zorder', 3 + i * 2)
 
         ax.plot(
             traj_arr[:, 0], traj_arr[:, 1],
-            color=color, linewidth=style.current_linewidth,
-            alpha=0.85, label=label, zorder=3 + i, linestyle=linestyle,
+            color=color, linewidth=linewidth,
+            alpha=0.85, label=label, zorder=zorder_base, linestyle=linestyle,
         )
+
+        # Marker scatter with appropriate fill
+        facecolor = color if marker_fill == 'full' else 'none'
         ax.scatter(
             traj_arr[:, 0], traj_arr[:, 1],
-            color=color, s=style.marker_size * 0.5,
-            marker=marker, alpha=0.7, zorder=4 + i,
-            edgecolors='white', linewidths=0.5,
+            color=color, s=style.marker_size * 0.6,
+            marker=marker, alpha=0.75, zorder=zorder_base + 1,
+            facecolors=facecolor, edgecolors=color if marker_fill == 'none' else 'white',
+            linewidths=1.5 if marker_fill == 'none' else 0.5,
         )
 
     ax.set_title(title, fontsize=14, fontweight='bold')
@@ -348,7 +370,7 @@ def plot_dimension_bounds(
             edgecolor='#2C3E50', linewidth=1,
         )
 
-        # Initial value marker - GREEN
+        # Initial value marker - GREEN (filled circle)
         if initial_values and name in initial_values:
             initial = initial_values[name]
         else:
@@ -356,39 +378,43 @@ def plot_dimension_bounds(
 
         ax.scatter(
             [initial], [i], color=style.initial_color,
-            s=style.marker_size * 2, marker='|', linewidths=4,
+            s=style.marker_size * 1.8, marker='o',
             zorder=5, label='Initial' if not legend_added['initial'] else '',
+            edgecolors='white', linewidths=1.5,
         )
         legend_added['initial'] = True
 
-        # Target value marker - CORAL RED
+        # Target value marker - CORAL RED (filled square)
         if target_values and name in target_values:
             target = target_values[name]
             ax.scatter(
                 [target], [i], color=style.target_color,
-                s=style.marker_size * 2, marker='|', linewidths=4,
+                s=style.marker_size * 2.0, marker='s',
                 zorder=6, label='Target' if not legend_added['target'] else '',
+                edgecolors='white', linewidths=1.5,
             )
             legend_added['target'] = True
 
-        # Optimized value marker - PURPLE
+        # Optimized value marker - PURPLE (open diamond, won't cover others)
         if optimized_values and name in optimized_values:
             opt = optimized_values[name]
             ax.scatter(
                 [opt], [i], color=style.optimized_color,
-                s=style.marker_size * 2, marker='|', linewidths=4,
-                zorder=7, label='Optimized' if not legend_added['optimized'] else '',
+                s=style.marker_size * 3.0, marker='D',
+                facecolors='none', linewidths=2.5,
+                zorder=8, label='Optimized' if not legend_added['optimized'] else '',
             )
             legend_added['optimized'] = True
 
-        # Current value marker - TEAL (if different from initial)
+        # Current value marker - TEAL (open triangle, if different from initial)
         if current_values and name in current_values:
             current = current_values[name]
             if abs(current - initial) > 1e-6:
                 ax.scatter(
                     [current], [i], color=style.current_color,
-                    s=style.marker_size * 2, marker='|', linewidths=4,
-                    zorder=8, label='Current' if not legend_added['current'] else '',
+                    s=style.marker_size * 2.5, marker='^',
+                    facecolors='none', linewidths=2.5,
+                    zorder=9, label='Current' if not legend_added['current'] else '',
                 )
                 legend_added['current'] = True
 

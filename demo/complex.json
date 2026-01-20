@@ -1,0 +1,210 @@
+{
+  "name": "complex_multilink",
+  "version": "2.0.0",
+  "description": "Complex mechanism: 10 joints, 16 links, ~15 optimizable dimensions",
+  "linkage": {
+    "name": "complex_multilink",
+    "nodes": {
+      "crank_anchor": {
+        "id": "crank_anchor",
+        "position": [62.67, 20.33],
+        "role": "fixed",
+        "jointType": "revolute",
+        "name": "crank_anchor"
+      },
+      "rocker_anchor": {
+        "id": "rocker_anchor",
+        "position": [122.67, 20.33],
+        "role": "fixed",
+        "jointType": "revolute",
+        "name": "rocker_anchor"
+      },
+      "crank": {
+        "id": "crank",
+        "position": [82.0, 25.5],
+        "role": "crank",
+        "jointType": "revolute",
+        "angle": 0.2618,
+        "name": "crank"
+      },
+      "coupler_rocker_joint": {
+        "id": "coupler_rocker_joint",
+        "position": [118.1, 60.1],
+        "role": "follower",
+        "jointType": "revolute",
+        "name": "coupler_rocker_joint"
+      },
+      "joint_4": {
+        "id": "joint_4",
+        "position": [95.0, 95.9],
+        "role": "follower",
+        "jointType": "revolute",
+        "name": "joint_4"
+      },
+      "joint_5": {
+        "id": "joint_5",
+        "position": [140.7, 114.3],
+        "role": "follower",
+        "jointType": "revolute",
+        "name": "joint_5"
+      },
+      "joint_6": {
+        "id": "joint_6",
+        "position": [129.0, 125.4],
+        "role": "follower",
+        "jointType": "revolute",
+        "name": "joint_6"
+      },
+      "joint_7": {
+        "id": "joint_7",
+        "position": [168.7, 132.3],
+        "role": "follower",
+        "jointType": "revolute",
+        "name": "joint_7"
+      },
+      "joint_8": {
+        "id": "joint_8",
+        "position": [157.8, 154.6],
+        "role": "follower",
+        "jointType": "revolute",
+        "name": "joint_8"
+      },
+      "final_joint": {
+        "id": "final_joint",
+        "position": [196.0, 182.6],
+        "role": "follower",
+        "jointType": "revolute",
+        "name": "final_joint"
+      }
+    },
+    "edges": {
+      "ground": {
+        "id": "ground",
+        "source": "crank_anchor",
+        "target": "rocker_anchor",
+        "distance": 60.0
+      },
+      "crank_link": {
+        "id": "crank_link",
+        "source": "crank_anchor",
+        "target": "crank",
+        "distance": 20.0
+      },
+      "coupler": {
+        "id": "coupler",
+        "source": "crank",
+        "target": "coupler_rocker_joint",
+        "distance": 50.0
+      },
+      "rocker": {
+        "id": "rocker",
+        "source": "coupler_rocker_joint",
+        "target": "rocker_anchor",
+        "distance": 40.0
+      },
+      "link_4": {
+        "id": "link_4",
+        "source": "crank",
+        "target": "joint_4",
+        "distance": 71.6
+      },
+      "link_5": {
+        "id": "link_5",
+        "source": "coupler_rocker_joint",
+        "target": "joint_4",
+        "distance": 42.7
+      },
+      "link_6": {
+        "id": "link_6",
+        "source": "joint_4",
+        "target": "joint_5",
+        "distance": 49.2
+      },
+      "link_7": {
+        "id": "link_7",
+        "source": "coupler_rocker_joint",
+        "target": "joint_5",
+        "distance": 58.7
+      },
+      "link_8": {
+        "id": "link_8",
+        "source": "joint_5",
+        "target": "joint_6",
+        "distance": 16.1
+      },
+      "link_9": {
+        "id": "link_9",
+        "source": "joint_6",
+        "target": "joint_4",
+        "distance": 45.0
+      },
+      "link_10": {
+        "id": "link_10",
+        "source": "joint_6",
+        "target": "joint_7",
+        "distance": 40.3
+      },
+      "link_11": {
+        "id": "link_11",
+        "source": "joint_5",
+        "target": "joint_7",
+        "distance": 33.3
+      },
+      "link_12": {
+        "id": "link_12",
+        "source": "joint_6",
+        "target": "joint_8",
+        "distance": 41.0
+      },
+      "link_13": {
+        "id": "link_13",
+        "source": "joint_7",
+        "target": "joint_8",
+        "distance": 24.8
+      },
+      "link_14": {
+        "id": "link_14",
+        "source": "joint_8",
+        "target": "final_joint",
+        "distance": 47.3
+      },
+      "link_15": {
+        "id": "link_15",
+        "source": "joint_7",
+        "target": "final_joint",
+        "distance": 57.3
+      }
+    },
+    "hyperedges": {}
+  },
+  "meta": {
+    "nodes": {
+      "crank": {"color": "#ff7f0e", "zlevel": 0, "showPath": true},
+      "coupler_rocker_joint": {"color": "#2ca02c", "zlevel": 0, "showPath": true},
+      "joint_4": {"color": "#9467bd", "zlevel": 0, "showPath": true},
+      "joint_5": {"color": "#8c564b", "zlevel": 0, "showPath": true},
+      "joint_6": {"color": "#e377c2", "zlevel": 0, "showPath": true},
+      "joint_7": {"color": "#7f7f7f", "zlevel": 0, "showPath": true},
+      "joint_8": {"color": "#bcbd22", "zlevel": 0, "showPath": true},
+      "final_joint": {"color": "#17becf", "zlevel": 0, "showPath": true}
+    },
+    "edges": {
+      "ground": {"color": "#7f7f7f", "isGround": true},
+      "crank_link": {"color": "#ff7f0e"},
+      "coupler": {"color": "#2ca02c"},
+      "rocker": {"color": "#1f77b4"},
+      "link_4": {"color": "#9467bd"},
+      "link_5": {"color": "#8c564b"},
+      "link_6": {"color": "#e377c2"},
+      "link_7": {"color": "#7f7f7f"},
+      "link_8": {"color": "#bcbd22"},
+      "link_9": {"color": "#17becf"},
+      "link_10": {"color": "#1f77b4"},
+      "link_11": {"color": "#ff7f0e"},
+      "link_12": {"color": "#2ca02c"},
+      "link_13": {"color": "#d62728"},
+      "link_14": {"color": "#9467bd"},
+      "link_15": {"color": "#8c564b"}
+    }
+  }
+}

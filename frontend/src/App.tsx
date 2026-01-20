@@ -1,4 +1,4 @@
-import React, { useState } from 'react'
+import React, { useState, useEffect, useCallback } from 'react'
 import {
   Box,
   Container,
@@ -10,9 +10,9 @@ import {
   Tab
 } from '@mui/material'
 import acinonyxLogo from './assets/acinonyx_logo.png'
-import PylinkBuilderTab from './components/PylinkBuilderTab'
-import ForceGraphViewTab from './components/ForceGraphViewTab'
+import BuilderTab from './components/BuilderTab'
 import StatusAboutTab from './components/StatusAboutTab'
+import LogViewer from './components/LogViewer'
 import { muiThemeConfig } from './theme'
 import './theme.css'
 
@@ -20,6 +20,26 @@ const theme = createTheme(muiThemeConfig)
 
 function App() {
   const [currentTab, setCurrentTab] = useState(0)
+  const [logViewerOpen, setLogViewerOpen] = useState(false)
+
+  // Global keyboard shortcut for ~ to open log viewer
+  const handleGlobalKeyDown = useCallback((event: KeyboardEvent) => {
+    // Ignore when typing in input fields
+    if (event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement) {
+      return
+    }
+
+    // Toggle log viewer with ~ (backtick/tilde key)
+    if (event.key === '`' || event.key === '~') {
+      event.preventDefault()
+      setLogViewerOpen(prev => !prev)
+    }
+  }, [])
+
+  useEffect(() => {
+    document.addEventListener('keydown', handleGlobalKeyDown)
+    return () => document.removeEventListener('keydown', handleGlobalKeyDown)
+  }, [handleGlobalKeyDown])
 
   const handleTabChange = (_event: React.SyntheticEvent, newValue: number) => {
     setCurrentTab(newValue)
@@ -139,15 +159,19 @@ function App() {
             }}
           >
             <Tab label="Pylink Builder" />
-            <Tab label="Graph View" />
             <Tab label="Status & About" />
           </Tabs>
         </Box>
 
-        {currentTab === 0 && <PylinkBuilderTab />}
-        {currentTab === 1 && <ForceGraphViewTab />}
-        {currentTab === 2 && <StatusAboutTab />}
+        {currentTab === 0 && <BuilderTab />}
+        {currentTab === 1 && <StatusAboutTab />}
       </Container>
+
+      {/* Log Viewer - toggled with ~ key */}
+      <LogViewer
+        open={logViewerOpen}
+        onClose={() => setLogViewerOpen(false)}
+      />
     </ThemeProvider>
   )
 }

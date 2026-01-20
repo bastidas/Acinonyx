@@ -1,9 +1,14 @@
+/// <reference types="vitest" />
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import { FRONTEND_PORT, BACKEND_PORT } from '../configs/appconfig.js'
 
 export default defineConfig({
   plugins: [react()],
+  test: {
+    globals: true,
+    environment: 'node',
+  },
   server: {
     port: FRONTEND_PORT,
     proxy: {

@@ -1,12 +1,25 @@
 # Acinonyx 🐆
 
-A Python application for simulating and visualizing mechanical linkage systems - fast and agile like a cheetah.
+**Design tools for planar mechanisms and automata.**
 
-This project provides tools for creating, simulating, and visualizing mechanical linkage systems with exceptional performance. It includes:
+An *automaton* is a mechanical device—often shaped like a human or animal—that moves as if by its own power, yet contains only gears, linkages, and levers. Acinonyx helps you design the multi-link mechanisms that bring these creations to life.
 
-- **Mechanical Link Simulation**: Define and simulate multi-link mechanical systems using pylinkage
-- **Visualization Tools**: Generate static plots and animations of linkage motion using a React frontend
-- **REST API**: FastAPI backend for graph operations and trajectory computation
+> **The problem:** Given a planar path (or set of paths), construct a mechanism that traces those paths while satisfying design constraints.
+
+This is an inverse problem in mechanism synthesis—and Acinonyx provides the simulation, visualization, and optimization tools to solve it.
+
+---
+
+*The name comes from Greek: **akinetos** (ἀκίνητος) meaning "unmoved" + **onyx** (ὄνυξ) meaning "claw"—the genus of the cheetah, swift and precise.*
+
+---
+
+### Features
+
+- **Mechanism Builder**: Interactive graph-based editor for designing multi-link planar mechanisms
+- **Trajectory Simulation**: Compute and visualize joint paths using [pylinkage](https://github.com/HugoFara/pylinkage)
+- **Path Optimization**: Fit mechanisms to target curves with global optimization
+- **Modern Stack**: React frontend + FastAPI backend with real-time updates
 
 ## Requirements
 
@@ -83,18 +96,47 @@ All tests should pass without errors.
 
 ### Quick Start
 
-Use the provided run script to start both backend and frontend:
+There are two scripts to start the development environment:
+
+#### Option A: `run.sh` (Recommended for Unix/macOS)
+
+The full-featured bash script with environment checks, colored output, and automatic browser opening:
 
 ```bash
-# On Unix/MacOS:
+# On Unix/macOS:
 chmod +x run.sh
 ./run.sh
 ```
 
-The script will:
+**Features:**
+- Checks Python, Node.js, and npm versions
+- Auto-detects and resolves port conflicts
+- Installs missing dependencies if needed
+- Opens browser automatically when ready
+- Streams colored logs from both servers
+- Use `./run.sh -q` or `./run.sh --quick` to skip dependency checks
+
+#### Option B: `start_dev.py` (Cross-platform)
+
+A simpler Python script that works on any platform:
+
+```bash
+python start_dev.py
+```
+
+**Features:**
+- Cross-platform (works on Windows, macOS, Linux)
+
+- Graceful shutdown with Ctrl+C
+
+**Note:** This script assumes dependencies are already installed and ports are available.
+
+---
+
+Both scripts will:
 1. Start the FastAPI backend server on `http://localhost:8021` (configured in `configs/appconfig.py`)
 2. Start the Vite development server on `http://localhost:5173`
-3. Open the web GUI in your browser
+3. Handle graceful shutdown on Ctrl+C
 
 ### Manual Start
 

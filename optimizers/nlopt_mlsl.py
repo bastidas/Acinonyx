@@ -20,7 +20,6 @@ from dataclasses import dataclass
 from dataclasses import field
 from typing import Literal
 from typing import TYPE_CHECKING
-
 import numpy as np
 
 if TYPE_CHECKING:

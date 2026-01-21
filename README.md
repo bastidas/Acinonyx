@@ -50,6 +50,8 @@ cd acinonyx
 
 ### 2. Set Up Python Environment
 
+We recommend using Python 3.11.x 
+
 #### Option A: Using Conda
 
 ```bash
@@ -79,6 +81,19 @@ pip install -e .
 cd frontend
 npm install
 cd ..
+```
+
+#### Option C: Using pyenv
+
+Requires [pyenv-virtualenv](https://github.com/pyenv/pyenv-virtualenv) plugin.
+
+```bash
+pyenv install 3.11.9
+pyenv virtualenv 3.11.9 acinonyx
+pyenv activate acinonyx
+
+# Install dependencies
+pip install -e .
 ```
 
 ### 4. Verify Installation

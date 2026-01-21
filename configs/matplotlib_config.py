@@ -15,7 +15,7 @@ def configure_matplotlib_for_backend():
     This should be called BEFORE importing matplotlib.pyplot
     to avoid issues in headless environments.
     """
-    # Check if we're in a headless environment
+    # Check if we're in a headless environment (Linux/Mac without X11)
     if os.environ.get('DISPLAY') is None and os.name != 'nt':
         # Use Agg backend for non-interactive rendering
         matplotlib.use('Agg')

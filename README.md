@@ -45,7 +45,7 @@ All port settings are centralized in `appconfig.py` - modify this file if you ne
 
 ```bash
 git clone <repository-url>
-cd automata
+cd acinonyx
 ```
 
 ### 2. Set Up Python Environment
@@ -54,14 +54,14 @@ cd automata
 
 ```bash
 conda env create -f environment.yml
-conda activate automata
+conda activate acinonyx
 ```
 
 #### Option B: Using pip
 
 ```bash
 # Create virtual environment
-python -m venv automtata
+python -m venv acinonyx
 
 # Activate environment
 # On Windows:
@@ -146,7 +146,7 @@ If you prefer to run the servers manually:
 
 ```bash
 # Activate your environment first
-conda activate automata  # or: source venv/bin/activate
+conda activate acinonyx  # or: source venv/bin/activate
 
 # Start backend
 cd backend
@@ -189,7 +189,7 @@ TODO
 ### Run Tests
 
 ```bash
-conda activate automata
+conda activate acinonyx
 pytest tests/ -v
 ```
 
@@ -246,9 +246,9 @@ npm run format
 
 **1. Module not found errors**
 - Ensure your conda environment is activated:
-  * for example if using pyenv `pyenv activate automata`
-  * * for example if using anaconda `conda activate automata`
-- Verify installation: `pip list | grep automata`
+  * for example if using pyenv `pyenv activate acinonyx`
+  * * for example if using anaconda `conda activate acinonyx`
+- Verify installation: `pip list | grep acinonyx`
 
 **2. Frontend not loading**
 - Check Node.js version: `node --version` (should be >= 18)

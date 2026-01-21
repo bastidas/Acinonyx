@@ -3,20 +3,17 @@ optimization_demo.py - Demo script for linkage trajectory optimization.
 
 This script demonstrates the full optimization workflow:
 1. Load/create a test 4-bar linkage mechanism
-2. Create a target trajectory by RANDOMIZING dimensions (not shifting!)
+2. Create a target trajectory by randomizing link dimensions (and validating it is solvable)
 3. Run optimization to find the correct dimensions
 4. Visualize results and save to user/demo/
 
-=============================================================================
-KEY INSIGHT: How to Create an Achievable Target
-=============================================================================
 
 approach:
-  - RANDOMIZE the link dimensions (e.g., ±30% of original)
+  - Randomize the link dimensions
   - Compute the trajectory with those randomized dimensions
-  - Use THAT as the target
-  - Start from the ORIGINAL dimensions and try to find the randomized ones
-  - This is an "inverse problem" with a KNOWN achievable solution!
+  - Use that as the target
+  - Start from the original dimensions and try to find the randomized ones
+  - This is an "inverse problem" with a KNOWN achievable solution
 
 =============================================================================
 HYPERPARAMETERS AND CONSTANTS
@@ -52,11 +49,13 @@ from pathlib import Path
 
 import numpy as np
 
+from configs.appconfig import USER_DIR
 from pylink_tools.kinematic import compute_trajectory
 from pylink_tools.optimize import analyze_convergence
 from pylink_tools.optimize import apply_dimensions
 from pylink_tools.optimize import extract_dimensions
 from pylink_tools.optimize import format_convergence_report
+from pylink_tools.optimize import PSOConfig
 from pylink_tools.optimize import run_pso_optimization
 from pylink_tools.optimize import TargetTrajectory
 from viz_tools.opt_viz import plot_convergence_history
@@ -65,6 +64,7 @@ from viz_tools.opt_viz import plot_linkage_state
 from viz_tools.opt_viz import plot_optimization_summary
 from viz_tools.opt_viz import plot_trajectory_comparison
 from viz_tools.opt_viz import plot_trajectory_overlay
+from configs.appconfig import USER_DIR
 
 # Add project root to path
 project_root = Path(__file__).parent.parent
@@ -92,25 +92,15 @@ N_STEPS = 24              # Number of simulation timesteps per revolution
 # --- Error Metric ---
 METRIC = 'mse'            # Error metric: "mse", "rmse", "total", "max"
 
-# --- Target Generation (The CORRECT Approach!) ---
-# Instead of shifting (impossible), we randomize dimensions (achievable)
-# NOTE: Not all dimension combinations produce valid mechanisms!
+# --- Target Generation ---
+# NOTE: Not all dimension combinations produce valid mechanisms
 # Larger ranges increase difficulty; smaller ranges are more likely to be valid.
-DIMENSION_RANDOMIZE_RANGE = 0.15  # ±15% of original value (conservative)
-# e.g., if crank is 20, target could be anywhere from 17 to 23
+DIMENSION_RANDOMIZE_RANGE = 0.35  # ±35% of original value (conservative)
 
 # --- Output ---
-OUTPUT_DIR = project_root / 'user' / 'demo'
+OUTPUT_DIR = USER_DIR / 'demo'
 TIMESTAMP = datetime.now().strftime('%Y%m%d_%H%M%S')
 
-# =============================================================================
-# IMPORTS
-# =============================================================================
-
-
-# =============================================================================
-# HELPER FUNCTIONS
-# =============================================================================
 
 def load_test_4bar():
     """Load the test 4-bar linkage from tests/4bar_test.json."""
@@ -144,7 +134,7 @@ def create_achievable_target(
     3. Compute the trajectory with those randomized dimensions
     4. Return that as the target
 
-    This creates an "inverse problem" with a KNOWN solution!
+    This creates an "inverse problem" with a viable and known solution
 
     IMPORTANT: Not all dimension combinations result in valid mechanisms.
     We retry until we find valid dimensions.
@@ -300,7 +290,7 @@ def main():
     # -------------------------------------------------------------------------
     print_section('Step 2: Create Achievable Target')
 
-    print(f'\nTarget generation strategy: RANDOMIZE dimensions by ±{DIMENSION_RANDOMIZE_RANGE*100:.0f}%')
+    print(f'\nTarget generation strategy: randomize dimensions by ±{DIMENSION_RANDOMIZE_RANGE*100:.0f}%')
     print('(This ensures the target trajectory is actually achievable!)')
 
     target_joint = 'coupler_rocker_joint'  # The "output" joint we want to optimize
@@ -310,7 +300,7 @@ def main():
         target_joint,
         dim_spec,
         randomize_range=DIMENSION_RANDOMIZE_RANGE,
-        seed=RANDOM_SEED,
+        seed=RANDOM_SEED
     )
 
     print(f'\nTarget joint: {target.joint_name}')
@@ -328,29 +318,13 @@ def main():
     # -------------------------------------------------------------------------
     print_section('Step 3: Visualize Initial State')
 
-    # Plot initial linkage state
-    plot_linkage_state(
+    # Plot combined initial and target linkage state
+    from viz_tools.opt_viz import plot_linkage_comparison
+    plot_linkage_comparison(
         pylink_data,
-        title='Initial 4-Bar Linkage (Starting Point)',
-        out_path=OUTPUT_DIR / f'01_initial_linkage_{TIMESTAMP}.png',
-        show_trajectory=True,
-    )
-
-    # Plot target linkage state
-    plot_linkage_state(
         target_pylink_data,
-        title='Target Mechanism (Goal)',
-        out_path=OUTPUT_DIR / f'02_target_linkage_{TIMESTAMP}.png',
-        show_trajectory=True,
-    )
-
-    # Plot dimension bounds
-    plot_dimension_bounds(
-        dim_spec,
-        initial_values=initial_dims,
-        target_values=target_dims,
-        title='Optimization Bounds (Initial and Target)',
-        out_path=OUTPUT_DIR / f'03_dimension_bounds_{TIMESTAMP}.png',
+        title='Initial vs Target Linkage',
+        out_path=OUTPUT_DIR / f'01_initial_vs_target_linkage_{TIMESTAMP}.png',
     )
 
     # Compute initial trajectory
@@ -361,7 +335,7 @@ def main():
     plot_trajectory_comparison(
         current_traj, target,
         title='Initial vs Target Trajectory',
-        out_path=OUTPUT_DIR / f'04_initial_vs_target_{TIMESTAMP}.png',
+        out_path=OUTPUT_DIR / f'02_initial_vs_target_{TIMESTAMP}.png',
         show_error_vectors=True,
     )
 
@@ -380,13 +354,18 @@ def main():
     print('\nRunning optimization...')
     print('(Trying to recover the target dimensions from trajectory alone)\n')
 
+    # Configure PSO optimizer
+    pso_config = PSOConfig(
+        n_particles=N_PARTICLES,
+        iterations=N_ITERATIONS,
+    )
+
     # Run PSO optimization
     opt_result = run_pso_optimization(
         pylink_data=pylink_data,
         target=target,
         dimension_spec=dim_spec,
-        n_particles=N_PARTICLES,
-        iterations=N_ITERATIONS,
+        config=pso_config,
         metric=METRIC,
         verbose=True,
     )
@@ -428,7 +407,7 @@ def main():
         plot_convergence_history(
             opt_result.convergence_history,
             title='Optimization Convergence',
-            out_path=OUTPUT_DIR / f'05_convergence_{TIMESTAMP}.png',
+            out_path=OUTPUT_DIR / f'03_convergence_{TIMESTAMP}.png',
         )
 
     # Plot optimized linkage state
@@ -437,21 +416,13 @@ def main():
             opt_result.optimized_pylink_data,
             target=target,
             title='Optimized Linkage vs Target Trajectory',
-            out_path=OUTPUT_DIR / f'06_optimized_linkage_{TIMESTAMP}.png',
+            out_path=OUTPUT_DIR / f'04_optimized_linkage_{TIMESTAMP}.png',
         )
 
         # Get optimized trajectory
         opt_traj_result = compute_trajectory(opt_result.optimized_pylink_data, verbose=False, skip_sync=True)
         if opt_traj_result.success:
             optimized_traj = opt_traj_result.trajectories[target_joint]
-
-            # Plot trajectory comparison after optimization
-            plot_trajectory_comparison(
-                optimized_traj, target,
-                title='Optimized vs Target Trajectory',
-                out_path=OUTPUT_DIR / f'07_optimized_vs_target_{TIMESTAMP}.png',
-                show_error_vectors=True,
-            )
 
             # Plot all trajectories overlaid
             plot_trajectory_overlay(
@@ -461,14 +432,14 @@ def main():
                 },
                 target=target,
                 title='Trajectory Comparison: Initial vs Optimized vs Target',
-                out_path=OUTPUT_DIR / f'08_trajectory_overlay_{TIMESTAMP}.png',
+                out_path=OUTPUT_DIR / f'07_trajectory_overlay_{TIMESTAMP}.png',
             )
 
     # Plot optimization summary
     plot_optimization_summary(
         opt_result, dim_spec,
         title='Optimization Summary',
-        out_path=OUTPUT_DIR / f'09_optimization_summary_{TIMESTAMP}.png',
+        out_path=OUTPUT_DIR / f'05_optimization_summary_{TIMESTAMP}.png',
     )
 
     # Plot final bounds with results
@@ -478,7 +449,7 @@ def main():
         target_values=target_dims,
         optimized_values=opt_result.optimized_dimensions,
         title='Dimension Bounds with Final Results',
-        out_path=OUTPUT_DIR / f'10_bounds_with_results_{TIMESTAMP}.png',
+        out_path=OUTPUT_DIR / f'06_bounds_with_results_{TIMESTAMP}.png',
     )
 
     # -------------------------------------------------------------------------
@@ -567,9 +538,6 @@ def main():
         print('\n✗ POOR: Trajectory error >= 10.0 - Poor fit, may need more iterations or different bounds')
 
 
-# =============================================================================
-# ENTRY POINT
-# =============================================================================
 
 if __name__ == '__main__':
     main()

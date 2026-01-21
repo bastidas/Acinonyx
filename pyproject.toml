@@ -3,9 +3,9 @@ requires = ["setuptools>=64.0.0", "setuptools_scm[toml]>=6.2", "pip >= 21.3"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "automata"
+name = "acinonyx"
 dynamic = ["version"]
-description = "Application to template automata"
+description = "Design tools for planar mechanisms and automata"
 readme = "README.md"
 requires-python = ">=3.11"
 license = {text =  "??"}

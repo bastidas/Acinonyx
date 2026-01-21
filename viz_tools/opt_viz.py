@@ -7,11 +7,7 @@ Provides functions to visualize:
   - Linkage state at different iterations
   - Convergence progress
 
-Color scheme uses high-contrast, colorblind-friendly colors:
-  - Target: Bright Coral (#FF6B6B)
-  - Initial/Current: Deep Teal (#2D9CDB)
-  - Optimized: Rich Purple (#9B59B6)
-  - Bounds: Slate Gray (#7F8C8D)
+Uses seaborn for consistent styling and colorblind-friendly color palettes.
 """
 from __future__ import annotations
 
@@ -20,6 +16,7 @@ from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
+import seaborn as sns
 
 # Try to import project modules
 try:
@@ -32,44 +29,40 @@ except ImportError:
 
 
 # =============================================================================
-# Style Configuration - HIGH CONTRAST COLORS
+# Style Configuration - SEABORN STYLING
 # =============================================================================
+
+# Set consistent seaborn style for all plots
+sns.set_theme(style='whitegrid', context='notebook', palette='colorblind')
+sns.set_palette('colorblind')
 
 @dataclass
 class OptVizStyle:
     """
     Style configuration for optimization visualizations.
 
-    Uses high-contrast, colorblind-friendly colors:
-      - target_color: Bright coral red - clearly distinct
-      - current_color: Deep teal blue - professional look
-      - initial_color: Forest green - natural starting point
-      - optimized_color: Rich purple - achievement/result
-      - bounds_color: Neutral slate - background information
+    Uses seaborn's colorblind-friendly palette for all colors.
     """
-    # HIGH CONTRAST COLORS (easily distinguishable)
-    target_color: str = '#FF6B6B'      # Bright coral red
-    current_color: str = '#2D9CDB'     # Deep teal blue
-    initial_color: str = '#27AE60'     # Forest green
-    optimized_color: str = '#9B59B6'   # Rich purple
-    bounds_color: str = '#7F8C8D'      # Slate gray
+    # Get seaborn's colorblind palette
+    _palette = sns.color_palette('colorblind', 10)
+    
+    # Assign semantic colors from palette
+    target_color: str = sns.color_palette('colorblind')[3]      # Red/coral
+    current_color: str = sns.color_palette('colorblind')[0]     # Blue
+    initial_color: str = sns.color_palette('colorblind')[2]     # Green
+    optimized_color: str = sns.color_palette('colorblind')[4]   # Purple
+    bounds_color: str = sns.color_palette('gray', 5)[2]         # Gray
 
     # Additional colors for multi-trajectory plots
-    accent_colors: tuple[str, ...] = (
-        '#F39C12',  # Orange
-        '#1ABC9C',  # Turquoise
-        '#E74C3C',  # Red
-        '#3498DB',  # Blue
-        '#9B59B6',  # Purple
-    )
+    accent_colors: tuple = tuple(sns.color_palette('colorblind', 10))
 
     # Line properties
-    target_linewidth: float = 3.0      # Thicker for visibility
+    target_linewidth: float = 3.0
     current_linewidth: float = 2.5
     trajectory_alpha: float = 0.85
 
     # Marker properties
-    marker_size: float = 80            # Larger for visibility
+    marker_size: float = 80
     start_marker: str = 'o'
     end_marker: str = 's'
 
@@ -129,32 +122,33 @@ def plot_trajectory_comparison(
     n_points = len(current)
     n_target = len(target_pos)
 
-    # Plot trajectory lines FIRST (so they're behind)
+    # Plot trajectory lines (use ax.plot to preserve point order)
     if show_lines:
-        # Target trajectory - DASHED, THICK, CORAL RED
+        # Target trajectory - DASHED
         ax.plot(
             target_pos[:, 0], target_pos[:, 1],
             color=style.target_color, linewidth=style.target_linewidth,
-            alpha=style.trajectory_alpha, linestyle='--', zorder=2,
-            label=label_target,
+            alpha=style.trajectory_alpha, linestyle='--', 
+            label=label_target, zorder=2,
         )
 
-        # Current trajectory - SOLID, TEAL BLUE
+        # Current trajectory - SOLID
         ax.plot(
             current[:, 0], current[:, 1],
             color=style.current_color, linewidth=style.current_linewidth,
-            alpha=style.trajectory_alpha, linestyle='-', zorder=3,
-            label=label_current,
+            alpha=style.trajectory_alpha, linestyle='-',
+            label=label_current, zorder=3,
         )
 
-    # Plot error vectors (from current to target) - LIGHT GRAY
+    # Plot error vectors (from current to target)
     if show_error_vectors:
+        gray_color = sns.color_palette('gray', 5)[1]
         for i in range(min(n_points, n_target)):
             ax.annotate(
                 '', xy=(target_pos[i, 0], target_pos[i, 1]),
                 xytext=(current[i, 0], current[i, 1]),
                 arrowprops=dict(
-                    arrowstyle='->', color='#BDC3C7',
+                    arrowstyle='->', color=gray_color,
                     alpha=0.5, lw=1.5,
                 ),
             )
@@ -197,12 +191,13 @@ def plot_trajectory_comparison(
         full_title += f' (Iteration {iteration})'
     full_title += f'\nMSE: {mse:.4f} | Mean Error: {mean_error:.3f} | Max Error: {max_error:.3f}'
 
+    # Apply seaborn styling to labels
     ax.set_title(full_title, fontsize=14, fontweight='bold')
     ax.set_xlabel('X Position', fontsize=12)
     ax.set_ylabel('Y Position', fontsize=12)
-    ax.grid(True, alpha=0.3, linestyle=':')
     ax.set_aspect('equal')
     ax.legend(loc='upper right', fontsize=11, framealpha=0.9)
+    sns.despine(ax=ax)
 
     plt.tight_layout()
     _save_or_show(fig, out_path, style.dpi)
@@ -255,8 +250,7 @@ def plot_trajectory_overlay(
     ]
     solver_idx = 0
 
-    # Plot target FIRST - CORAL RED, DASHED with X markers
-    # Target is highly visible but "underneath" other lines
+    # Plot target FIRST (use ax.plot to preserve point order)
     target_pos = np.array(target.positions)
     ax.plot(
         target_pos[:, 0], target_pos[:, 1],
@@ -308,9 +302,9 @@ def plot_trajectory_overlay(
     ax.set_title(title, fontsize=14, fontweight='bold')
     ax.set_xlabel('X Position', fontsize=12)
     ax.set_ylabel('Y Position', fontsize=12)
-    ax.grid(True, alpha=0.3, linestyle=':')
     ax.set_aspect('equal')
     ax.legend(loc='upper right', fontsize=11, framealpha=0.9)
+    sns.despine(ax=ax)
 
     plt.tight_layout()
     _save_or_show(fig, out_path, style.dpi)
@@ -363,11 +357,12 @@ def plot_dimension_bounds(
         lower, upper = bounds
         width = upper - lower
 
-        # Bounds bar - SLATE GRAY
+        # Bounds bar using seaborn palette
+        edge_color = sns.color_palette('dark', 1)[0]
         ax.barh(
             i, width, left=lower, height=style.bar_height,
             color=style.bounds_color, alpha=style.bar_alpha,
-            edgecolor='#2C3E50', linewidth=1,
+            edgecolor=edge_color, linewidth=1,
         )
 
         # Initial value marker - GREEN (filled circle)
@@ -452,7 +447,7 @@ def plot_dimension_bounds(
     x_range = x_max - x_min
     ax.set_xlim(x_min - x_range * 0.15, x_max + x_range * 0.15)
 
-    ax.grid(True, alpha=0.3, axis='x', linestyle=':')
+    sns.despine(ax=ax, left=True)
 
     plt.tight_layout()
     _save_or_show(fig, out_path, style.dpi)
@@ -566,12 +561,13 @@ def plot_linkage_state(
     trajectories = result.trajectories
     joint_types = result.joint_types
 
-    # Distinct colors for each joint
+    # Distinct colors for each joint from seaborn palette
+    palette = sns.color_palette('colorblind', 10)
     joint_colors = {
-        'crank_anchor': '#2C3E50',      # Dark slate
-        'rocker_anchor': '#2C3E50',     # Dark slate
-        'crank': '#F39C12',             # Orange
-        'coupler_rocker_joint': style.current_color,  # Teal
+        'crank_anchor': sns.color_palette('dark', 1)[0],
+        'rocker_anchor': sns.color_palette('dark', 1)[0],
+        'crank': palette[1],
+        'coupler_rocker_joint': style.current_color,
     }
 
     for i, (joint_name, positions) in enumerate(trajectories.items()):
@@ -619,7 +615,7 @@ def plot_linkage_state(
                 label=f'{joint_name} ({joint_type})', zorder=5,
             )
 
-    # Plot target trajectory if provided - CORAL RED, DASHED
+    # Plot target trajectory if provided
     if target:
         target_pos = np.array(target.positions)
         ax.plot(
@@ -636,9 +632,140 @@ def plot_linkage_state(
     ax.set_title(title, fontsize=14, fontweight='bold')
     ax.set_xlabel('X Position', fontsize=12)
     ax.set_ylabel('Y Position', fontsize=12)
-    ax.grid(True, alpha=0.3, linestyle=':')
     ax.set_aspect('equal')
     ax.legend(loc='upper right', fontsize=9, framealpha=0.9)
+    sns.despine(ax=ax)
+
+    plt.tight_layout()
+    _save_or_show(fig, out_path, style.dpi)
+
+
+def plot_linkage_comparison(
+    pylink_data_initial: dict,
+    pylink_data_target: dict,
+    title: str = 'Linkage Comparison: Initial vs Target',
+    out_path: str | Path | None = None,
+    style: OptVizStyle = DEFAULT_STYLE,
+) -> None:
+    """
+    Plot two linkages overlaid for comparison.
+    
+    Uses very different markers and linestyles:
+    - Initial: Open circles, dotted lines, transparent
+    - Target: Open squares, dashed lines, solid
+    
+    Args:
+        pylink_data_initial: Initial pylink document
+        pylink_data_target: Target pylink document  
+        title: Plot title
+        out_path: Path to save figure
+        style: Visualization style
+    """
+    from pylink_tools.kinematic import compute_trajectory
+    
+    fig, ax = plt.subplots(figsize=style.figsize, dpi=style.dpi)
+
+    # Compute trajectories for both linkages
+    result_initial = compute_trajectory(pylink_data_initial, verbose=False, skip_sync=True)
+    result_target = compute_trajectory(pylink_data_target, verbose=False, skip_sync=True)
+
+    if not result_initial.success:
+        ax.text(
+            0.5, 0.5, f'Failed to compute initial trajectory:\n{result_initial.error}',
+            ha='center', va='center', transform=ax.transAxes,
+            fontsize=12, color='red',
+        )
+        plt.tight_layout()
+        _save_or_show(fig, out_path, style.dpi)
+        return
+        
+    if not result_target.success:
+        ax.text(
+            0.5, 0.5, f'Failed to compute target trajectory:\n{result_target.error}',
+            ha='center', va='center', transform=ax.transAxes,
+            fontsize=12, color='red',
+        )
+        plt.tight_layout()
+        _save_or_show(fig, out_path, style.dpi)
+        return
+
+    trajectories_initial = result_initial.trajectories
+    joint_types_initial = result_initial.joint_types
+    trajectories_target = result_target.trajectories
+    joint_types_target = result_target.joint_types
+
+    # Get seaborn palette colors
+    palette = sns.color_palette('colorblind', 10)
+    
+    # Plot INITIAL linkage with open markers, dotted lines, very transparent
+    initial_color = style.current_color  # Blue
+    
+    for i, (joint_name, positions) in enumerate(trajectories_initial.items()):
+        pos_arr = np.array(positions)
+        joint_type = joint_types_initial.get(joint_name, 'Unknown')
+        
+        # Use very transparent dotted lines for trajectory paths
+        ax.plot(
+            pos_arr[:, 0], pos_arr[:, 1],
+            color=initial_color, alpha=0.2, linewidth=1.5,
+            linestyle=':', zorder=1,
+        )
+        
+        # Open circle markers for joints
+        if joint_type == 'Static':
+            marker = '^'
+            size = style.marker_size * 1.5
+        else:
+            marker = 'o'
+            size = style.marker_size * 0.8
+            
+        # Plot with open (unfilled) markers
+        label = f'Initial {joint_name}' if i == 0 else None
+        ax.scatter(
+            [pos_arr[0, 0]], [pos_arr[0, 1]],
+            facecolors='none', edgecolors=initial_color,
+            s=size, marker=marker, linewidths=2,
+            alpha=0.7, zorder=3,
+            label='Initial Joints' if i == 0 else None,
+        )
+    
+    # Plot TARGET linkage with open markers, dashed lines, more visible
+    target_color = style.target_color  # Red/coral
+    
+    for i, (joint_name, positions) in enumerate(trajectories_target.items()):
+        pos_arr = np.array(positions)
+        joint_type = joint_types_target.get(joint_name, 'Unknown')
+        
+        # Dashed lines for trajectory paths
+        ax.plot(
+            pos_arr[:, 0], pos_arr[:, 1],
+            color=target_color, alpha=0.6, linewidth=2.0,
+            linestyle='--', zorder=2,
+        )
+        
+        # Open square markers for joints
+        if joint_type == 'Static':
+            marker = '^'
+            size = style.marker_size * 1.5
+        else:
+            marker = 's'  # Square for target
+            size = style.marker_size * 0.9
+            
+        # Plot with open (unfilled) markers
+        ax.scatter(
+            [pos_arr[0, 0]], [pos_arr[0, 1]],
+            facecolors='none', edgecolors=target_color,
+            s=size, marker=marker, linewidths=2.5,
+            alpha=0.9, zorder=4,
+            label='Target Joints' if i == 0 else None,
+        )
+
+    ax.set_title(title, fontsize=14, fontweight='bold')
+    ax.set_xlabel('X Position', fontsize=12)
+    ax.set_ylabel('Y Position', fontsize=12)
+    ax.set_aspect('equal')
+    ax.legend(loc='upper right', fontsize=11, framealpha=0.9)
+    sns.despine(ax=ax)
 
     plt.tight_layout()
     _save_or_show(fig, out_path, style.dpi)
@@ -669,7 +796,7 @@ def plot_convergence_history(
 
     iterations = np.arange(len(history))
 
-    # Main line - TEAL BLUE
+    # Main line
     ax.plot(
         iterations, history, color=style.current_color,
         linewidth=2.5, alpha=0.9,
@@ -710,24 +837,27 @@ def plot_convergence_history(
     # Add improvement annotation
     if len(history) > 1 and history[0] != 0:
         improvement = (history[0] - history[-1]) / history[0] * 100
+        bg_color = sns.color_palette('pastel', 1)[0]
+        edge_color = sns.color_palette('gray', 3)[1]
         ax.annotate(
             f'Error Reduction: {improvement:.1f}%',
             xy=(0.98, 0.98), xycoords='axes fraction',
             ha='right', va='top', fontsize=12, fontweight='bold',
             bbox=dict(
-                boxstyle='round,pad=0.5', facecolor='#F8F9FA',
-                edgecolor='#BDC3C7', alpha=0.9,
+                boxstyle='round,pad=0.5', facecolor=bg_color,
+                edgecolor=edge_color, alpha=0.9,
             ),
         )
 
     ax.set_xlabel('Iteration', fontsize=12)
     ax.set_ylabel('Error (MSE)', fontsize=12)
     ax.set_title(title, fontsize=14, fontweight='bold')
-    ax.grid(True, alpha=0.3, linestyle=':')
     ax.legend(loc='upper right', fontsize=10, framealpha=0.9)
 
     if log_scale and min(history) > 0:
         ax.set_yscale('log')
+    
+    sns.despine(ax=ax)
 
     plt.tight_layout()
     _save_or_show(fig, out_path, style.dpi)
@@ -761,7 +891,8 @@ def plot_optimization_summary(
     ax1 = fig.add_subplot(2, 2, 1)
     if result.convergence_history:
         ax1.plot(
-            result.convergence_history, color=style.current_color,
+            result.convergence_history, 
+            color=style.current_color,
             linewidth=2.5, alpha=0.9,
         )
 
@@ -776,7 +907,7 @@ def plot_optimization_summary(
         ax1.set_xlabel('Iteration', fontsize=11)
         ax1.set_ylabel('Error', fontsize=11)
         ax1.set_title('Convergence History', fontsize=12, fontweight='bold')
-        ax1.grid(True, alpha=0.3, linestyle=':')
+        sns.despine(ax=ax1)
     else:
         ax1.text(0.5, 0.5, 'No history available', ha='center', va='center', fontsize=12)
 
@@ -808,7 +939,7 @@ def plot_optimization_summary(
     ax2.set_ylabel('Value', fontsize=11)
     ax2.set_title('Dimension Comparison', fontsize=12, fontweight='bold')
     ax2.legend(fontsize=10)
-    ax2.grid(True, alpha=0.3, axis='y', linestyle=':')
+    sns.despine(ax=ax2)
 
     # Error metrics (bottom left)
     ax3 = fig.add_subplot(2, 2, 3)
@@ -837,12 +968,14 @@ def plot_optimization_summary(
     ╚══════════════════════════════════════════╝
     """
 
+    bg_color = sns.color_palette('pastel', 1)[0]
+    edge_color = sns.color_palette('gray', 3)[1]
     ax3.text(
         0.1, 0.9, metrics_text, transform=ax3.transAxes,
         fontsize=11, verticalalignment='top', fontfamily='monospace',
         bbox=dict(
-            boxstyle='round,pad=0.5', facecolor='#F8F9FA',
-            edgecolor='#BDC3C7', alpha=0.9,
+            boxstyle='round,pad=0.5', facecolor=bg_color,
+            edgecolor=edge_color, alpha=0.9,
         ),
     )
 
@@ -928,14 +1061,14 @@ def create_optimization_animation(
         if result.success and target.joint_name in result.trajectories:
             current = np.array(result.trajectories[target.joint_name])
 
-            # Plot target - CORAL, DASHED
+            # Plot target
             ax.plot(
                 target_pos[:, 0], target_pos[:, 1],
                 color=style.target_color, linewidth=style.target_linewidth,
                 linestyle='--', label='Target',
             )
 
-            # Plot current - TEAL, SOLID
+            # Plot current
             ax.plot(
                 current[:, 0], current[:, 1],
                 color=style.current_color, linewidth=style.current_linewidth,

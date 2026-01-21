@@ -94,9 +94,9 @@ TIMESTAMP = datetime.now().strftime('%Y%m%d_%H%M%S')
 # Change COMPARISON_MODE to switch what's being compared.
 # Each mode defines a list of (name, solver_func, kwargs) tuples.
 
-# COMPARISON_MODE = 'init_modes'  # <-- CHANGE THIS TO SWITCH COMPARISONS
+COMPARISON_MODE = 'init_modes'  # <-- CHANGE THIS TO SWITCH COMPARISONS
 # COMPARISON_MODE = 'phase_methods'  # <-- CHANGE THIS TO SWITCH COMPARISONS
-COMPARISON_MODE = 'solvers'  # <-- CHANGE THIS TO SWITCH COMPARISONS
+# COMPARISON_MODE = 'solvers'  # <-- CHANGE THIS TO SWITCH COMPARISONS
 # COMPARISON_MODE = 'nlopt_mlsl'  # <-- CHANGE THIS TO SWITCH COMPARISONS
 # COMPARISON_MODE = 'quick'
 # Available modes:
@@ -850,7 +850,7 @@ def main():
     # Step 5: Visualize
     # -------------------------------------------------------------------------
     print_section('Step 5: Visualize Results')
-
+    
     visualize_comparison(
         results=results,
         target=target,

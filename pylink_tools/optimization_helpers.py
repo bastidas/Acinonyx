@@ -367,106 +367,43 @@ def validate_bounds(
     return violations
 
 
+# =============================================================================
+# DEPRECATED: Sampling functions have moved to target_gen.sampling
+# These are kept for backward compatibility but will be removed in a future version
+# =============================================================================
+
 def get_combinatoric_gradations(
     names: list[str],
     bounds: list[tuple[float, float]],
     n: int,
 ) -> dict[str, list[float]]:
     """
-    Generate N evenly-spaced values for each link within its bounds.
-
-    Creates a dictionary where each key is a link name and each value
-    is a list of N values ranging from the lower to upper bound.
-
-    Args:
-        names: List of link/dimension names
-        bounds: List of (lower, upper) tuples, one per name
-        n: Number of gradations to generate for each link
-
-    Returns:
-        Dict mapping link name -> list of N values from low to high
-
-    Example:
-        >>> names = ['crank', 'coupler', 'rocker']
-        >>> bounds = [(10, 20), (30, 50), (15, 25)]
-        >>> gradations = get_link_gradations(names, bounds, n=3)
-        >>> gradations
-        {
-            'crank': [10.0, 15.0, 20.0],
-            'coupler': [30.0, 40.0, 50.0],
-            'rocker': [15.0, 20.0, 25.0]
-        }
+    DEPRECATED: Use target_gen.sampling.get_combinatoric_gradations instead.
+    
+    This function has been moved to the target_gen.sampling module for better organization.
     """
-    import numpy as np
-
-    if len(names) != len(bounds):
-        raise ValueError(f'Length mismatch: {len(names)} names vs {len(bounds)} bounds')
-
-    if n < 1:
-        raise ValueError(f'n must be >= 1, got {n}')
-
-    gradations = {}
-    for name, (lower, upper) in zip(names, bounds):
-        if n == 1:
-            # Single value: use midpoint
-            gradations[name] = [(lower + upper) / 2]
-        else:
-            # N evenly-spaced values from lower to upper (inclusive)
-            gradations[name] = list(np.linspace(lower, upper, n))
-
-    return gradations
+    from target_gen.sampling import get_combinatoric_gradations as _new_func
+    logger.warning(
+        'get_combinatoric_gradations has moved to target_gen.sampling. '
+        'Please update your imports: from target_gen.sampling import get_combinatoric_gradations'
+    )
+    return _new_func(names, bounds, n)
 
 
 def get_mech_variations(
     gradations: dict[str, list[float]],
 ) -> list[dict[str, float]]:
     """
-    Generate all combinatorial variations of mechanism dimensions.
-
-    Takes the gradation values for each link and produces the Cartesian
-    product of all combinations.
-
-    Args:
-        gradations: Dict from get_link_gradations, mapping link name -> list of values
-
-    Returns:
-        List of dicts, each representing one mechanism configuration.
-        Each dict maps link name -> specific value.
-
-    Example:
-        >>> gradations = {
-        ...     'crank': [10.0, 20.0],
-        ...     'coupler': [30.0, 40.0],
-        ... }
-        >>> variations = get_mech_variations(gradations)
-        >>> len(variations)
-        4
-        >>> variations[0]
-        {'crank': 10.0, 'coupler': 30.0}
-        >>> variations[3]
-        {'crank': 20.0, 'coupler': 40.0}
-
-    Note:
-        The number of variations grows exponentially: N^(num_links).
-        For 3 links with N=10, you get 1000 variations.
-        For 5 links with N=10, you get 100,000 variations.
+    DEPRECATED: Use target_gen.sampling.get_mech_variations instead.
+    
+    This function has been moved to the target_gen.sampling module for better organization.
     """
-    import itertools
-
-    if not gradations:
-        return []
-
-    # Get ordered list of names and their value lists
-    names = list(gradations.keys())
-    value_lists = [gradations[name] for name in names]
-
-    # Generate Cartesian product of all value combinations
-    variations = []
-    for combo in itertools.product(*value_lists):
-        variation = dict(zip(names, combo))
-        variations.append(variation)
-
-    return variations
+    from target_gen.sampling import get_mech_variations as _new_func
+    logger.warning(
+        'get_mech_variations has moved to target_gen.sampling. '
+        'Please update your imports: from target_gen.sampling import get_mech_variations'
+    )
+    return _new_func(gradations)
 
 
 def get_mech_variations_from_spec(
@@ -477,143 +414,16 @@ def get_mech_variations_from_spec(
     seed: int | None = None,
 ) -> list[dict[str, float]]:
     """
-    Generate mechanism variations from a DimensionSpec using various sampling strategies.
-
-    Args:
-        spec: DimensionSpec containing names and bounds
-        n: Meaning depends on mode:
-           - 'full_combinatoric': Number of gradations per dimension (N^d total points)
-           - 'behnken': Number of center points (ignored if center is specified)
-           - 'sobol': Total number of sample points to generate
-        mode: Sampling strategy, one of:
-           - 'full_combinatoric': Cartesian product of evenly-spaced values.
-                 WARNING: Grows as N^d (e.g., 5 dims × 10 gradations = 100,000 points)
-           - 'behnken': Box-Behnken design. Efficient for 3+ factors,
-                 generates ~2*d*(d-1) + center points. Good for response surface modeling.
-           - 'sobol': Sobol quasi-random sequence. Low-discrepancy
-                 sampling that fills space uniformly. Good for global exploration.
-        center: For 'behnken' mode only - number of center points (default: auto)
-        seed: For 'sobol' mode only - random seed for reproducibility
-
-    Returns:
-        List of mechanism configuration dicts
-
-    Example:
-        >>> spec = extract_dimensions(pylink_data)
-        >>> # Full combinatoric (careful - grows fast!)
-        >>> variations = get_mech_variations_from_spec(spec, n=5, mode='full_combinatoric')
-        >>> # Box-Behnken (efficient for response surfaces)
-        >>> variations = get_mech_variations_from_spec(spec, n=3, mode='behnken')
-        >>> # Sobol sequence (good space coverage)
-        >>> variations = get_mech_variations_from_spec(spec, n=100, mode='sobol')
-
-    References:
-    - Box-Behnken: https://pydoe3.readthedocs.io/en/latest/reference/response_surface/
-    - Sobol: https://pydoe3.readthedocs.io/en/latest/reference/low_discrepancy_sequences/
+    DEPRECATED: Use target_gen.sampling.get_mech_variations_from_spec instead.
+    
+    This function has been moved to the target_gen.sampling module for better organization.
     """
-
-    num_dims = len(spec.names)
-    if num_dims == 0:
-        return []
-
-    # Convert bounds to numpy arrays for easier manipulation
-    import numpy as np
-    lower_bounds = np.array([b[0] for b in spec.bounds])
-    upper_bounds = np.array([b[1] for b in spec.bounds])
-
-    if mode == 'full_combinatoric':
-        # Original behavior: Cartesian product of gradations
-        gradations = get_combinatoric_gradations(spec.names, spec.bounds, n)
-        return get_mech_variations(gradations)
-
-    elif mode == 'behnken':
-        # Box-Behnken design - efficient for response surface modeling
-        if num_dims < 3:
-            logger.warning(
-                f'Box-Behnken requires at least 3 factors, got {num_dims}. '
-                'Falling back to full_combinatoric.',
-            )
-            gradations = get_combinatoric_gradations(spec.names, spec.bounds, n)
-            return get_mech_variations(gradations)
-
-        try:
-            from pyDOE3 import bbdesign
-        except ImportError as e:
-            logger.error(
-                f'pyDOE3 not installed. Install with: pip install pyDOE3. Error: {e}',
-            )
-            raise ImportError(
-                "pyDOE3 is required for 'behnken' mode. Install with: pip install pyDOE3",
-            ) from e
-
-        try:
-            # Generate Box-Behnken design (returns values in [-1, 1])
-            if center is not None:
-                design = bbdesign(num_dims, center=center)
-            else:
-                design = bbdesign(num_dims)
-
-            # Scale from [-1, 1] to actual bounds
-            # x_scaled = lower + (x + 1) / 2 * (upper - lower)
-            scaled_design = lower_bounds + (design + 1) / 2 * (upper_bounds - lower_bounds)
-
-            # Convert to list of dicts
-            variations = []
-            for row in scaled_design:
-                variation = dict(zip(spec.names, row.tolist()))
-                variations.append(variation)
-
-            logger.info(f'Box-Behnken design generated {len(variations)} points for {num_dims} factors')
-            return variations
-
-        except Exception as e:
-            logger.error(f'Box-Behnken design failed: {e}')
-            raise
-
-    elif mode == 'sobol':
-        # Sobol quasi-random sequence - good space-filling properties
-        # Note: Sobol rounds n up to the next power of 2 by default
-        try:
-            from pyDOE3 import sobol_sequence
-        except ImportError as e:
-            logger.error(
-                f'pyDOE3 not installed. Install with: pip install pyDOE3. Error: {e}',
-            )
-            raise ImportError(
-                "pyDOE3 is required for 'sobol' mode. Install with: pip install pyDOE3",
-            ) from e
-
-        try:
-            # Generate Sobol sequence with bounds scaling built-in
-            # sobol_sequence(n, d, scramble, seed, bounds, skip, use_pow_of_2)
-            # bounds format: array of (min, max) pairs per dimension
-            bounds_array = np.array(spec.bounds)  # Shape: (num_dims, 2)
-
-            design = sobol_sequence(
-                n=n,
-                d=num_dims,
-                scramble=True,  # Scrambling improves statistical properties
-                seed=seed,
-                bounds=bounds_array,  # pyDOE3 handles scaling for us
-            )
-
-            # Convert to list of dicts
-            variations = []
-            for row in design:
-                variation = dict(zip(spec.names, row.tolist()))
-                variations.append(variation)
-
-            logger.info(f'Sobol sequence generated {len(variations)} points for {num_dims} dimensions')
-            return variations
-
-        except Exception as e:
-            logger.error(f'Sobol sequence generation failed: {e}')
-            raise
-
-    else:
-        raise ValueError(
-            f"Unknown mode '{mode}'. Choose from: 'full_combinatoric', 'behnken', 'sobol'",
-        )
+    from target_gen.sampling import get_mech_variations_from_spec as _new_func
+    logger.warning(
+        'get_mech_variations_from_spec has moved to target_gen.sampling. '
+        'Please update your imports: from target_gen.sampling import get_mech_variations_from_spec'
+    )
+    return _new_func(spec, n, mode, center, seed)
 
 
 def presample_valid_positions(
@@ -628,103 +438,13 @@ def presample_valid_positions(
     phase_invariant: bool = True,
 ):
     """
-    Pre-sample the design space and return the best valid configurations.
-
-    This function generates sample points using DOE methods (Sobol, Box-Behnken,
-    or full combinatoric), evaluates each with the fitness function, filters
-    to keep only valid configurations, and returns the best ones sorted by score.
-
-    Use this to initialize PSO particles in valid regions of the search space,
-    dramatically improving convergence for constrained mechanisms.
-
-    Args:
-        pylink_data: Base linkage configuration
-        target: Target trajectory to match
-        dimension_spec: Dimensions to sample
-        n_samples: How many samples to generate (for Sobol/combinatoric)
-        n_best: Maximum number of best positions to return
-        mode: Sampling strategy:
-            - 'sobol': Sobol quasi-random sequence (good space coverage)
-            - 'behnken': Box-Behnken design (good for response surfaces, 3+ dims)
-            - 'full_combinatoric': Full grid (warning: grows as N^d)
-        metric: Error metric for scoring ('mse', 'rmse', 'total', 'max')
-        seed: Random seed for reproducibility
-        phase_invariant: Use phase-aligned scoring
-
-    Returns:
-        (positions, scores): Tuple of:
-            - positions: ndarray of shape (n_valid, n_dims) with best valid positions
-            - scores: ndarray of shape (n_valid,) with corresponding fitness scores
-            where n_valid <= n_best (may be fewer if not enough valid samples found)
-
-    Example:
-        >>> positions, scores = presample_valid_positions(
-        ...     pylink_data, target, dim_spec,
-        ...     n_samples=256, n_best=64, mode='sobol'
-        ... )
-        >>> print(f"Found {len(positions)} valid configurations")
-        >>> print(f"Best score: {scores[0]:.4f}")
+    DEPRECATED: Use target_gen.sampling.presample_valid_positions instead.
+    
+    This function has been moved to the target_gen.sampling module for better organization.
     """
-    import numpy as np
-    from pylink_tools.optimize import create_fitness_function
-
-    # Generate samples using the specified DOE method
-    try:
-        variations = get_mech_variations_from_spec(
-            spec=dimension_spec,
-            n=n_samples,
-            mode=mode,
-            seed=seed,
-        )
-    except Exception as e:
-        logger.warning(f"Presampling with mode='{mode}' failed: {e}. Using random sampling.")
-        # Fallback to random sampling
-        lower = np.array([b[0] for b in dimension_spec.bounds])
-        upper = np.array([b[1] for b in dimension_spec.bounds])
-        if seed is not None:
-            np.random.seed(seed)
-        random_samples = np.random.uniform(lower, upper, (n_samples, len(dimension_spec)))
-        variations = [
-            dict(zip(dimension_spec.names, row))
-            for row in random_samples
-        ]
-
-    logger.info(f"Presampling {len(variations)} configurations using mode='{mode}'")
-
-    # Create fitness function
-    fitness = create_fitness_function(
-        pylink_data, target, dimension_spec,
-        metric=metric, phase_invariant=phase_invariant,
+    from target_gen.sampling import presample_valid_positions as _new_func
+    logger.warning(
+        'presample_valid_positions has moved to target_gen.sampling. '
+        'Please update your imports: from target_gen.sampling import presample_valid_positions'
     )
-
-    # Evaluate all samples and keep valid ones
-    results = []
-    n_invalid = 0
-    for var in variations:
-        # Convert dict to tuple in spec order
-        dims = tuple(var[name] for name in dimension_spec.names)
-        score = fitness(dims)
-
-        if np.isfinite(score):
-            results.append((score, dims))
-        else:
-            n_invalid += 1
-
-    valid_rate = (len(results) / len(variations) * 100) if variations else 0
-    logger.info(f'Presampling: {len(results)}/{len(variations)} valid ({valid_rate:.1f}%), {n_invalid} invalid')
-
-    if not results:
-        logger.warning('No valid configurations found during presampling!')
-        return np.array([]).reshape(0, len(dimension_spec)), np.array([])
-
-    # Sort by score (best first) and take top n_best
-    results.sort(key=lambda x: x[0])
-    best_results = results[:n_best]
-
-    # Convert to numpy arrays
-    positions = np.array([r[1] for r in best_results])
-    scores = np.array([r[0] for r in best_results])
-
-    logger.info(f'Presampling: returning {len(positions)} best positions (best score: {scores[0]:.4f})')
-
-    return positions, scores
+    return _new_func(pylink_data, target, dimension_spec, n_samples, n_best, mode, metric, seed, phase_invariant)

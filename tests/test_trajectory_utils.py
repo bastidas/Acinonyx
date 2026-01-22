@@ -13,8 +13,8 @@ import pytest
 
 from pylink_tools.trajectory_utils import analyze_trajectory
 from pylink_tools.trajectory_utils import compute_phase_aligned_distance
-from pylink_tools.trajectory_utils import compute_trajectory_similarity
 from pylink_tools.trajectory_utils import compute_trajectory_hot
+from pylink_tools.trajectory_utils import compute_trajectory_similarity
 from pylink_tools.trajectory_utils import prepare_trajectory_for_optimization
 from pylink_tools.trajectory_utils import resample_trajectory
 from pylink_tools.trajectory_utils import smooth_trajectory

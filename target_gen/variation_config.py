@@ -20,10 +20,10 @@ from dataclasses import field
 class DimensionVariationConfig:
     """
     Per-dimension variation settings for target generation.
-    
+
     Controls which dimensions to vary and by how much when creating
     achievable targets.
-    
+
     Attributes:
         default_variation_range: Global ±percentage variation (0.5 = ±50%)
             Applied to all dimensions not explicitly configured.
@@ -34,14 +34,14 @@ class DimensionVariationConfig:
             e.g., {"coupler_distance": (False, 0, 0)} to disable variation.
         exclude_dimensions: List of dimension names to exclude entirely.
             Convenience alternative to setting overrides with enabled=False.
-    
+
     Example:
         >>> # Default ±50% variation for all dimensions except coupler
         >>> config = DimensionVariationConfig(
         ...     default_variation_range=0.5,
         ...     exclude_dimensions=["coupler_distance"]
         ... )
-        
+
         >>> # Fine-grained control
         >>> config = DimensionVariationConfig(
         ...     default_variation_range=0.3,
@@ -55,28 +55,28 @@ class DimensionVariationConfig:
     default_enabled: bool = True
     dimension_overrides: dict[str, tuple[bool, float, float]] = field(default_factory=dict)
     exclude_dimensions: list[str] = field(default_factory=list)
-    
+
     def get_variation_for_dimension(
-        self, 
+        self,
         dim_name: str,
     ) -> tuple[bool, float, float]:
         """
         Get variation settings for a specific dimension.
-        
+
         Args:
             dim_name: Name of the dimension
-            
+
         Returns:
             (enabled, min_pct, max_pct) tuple
         """
         # Check explicit overrides first
         if dim_name in self.dimension_overrides:
             return self.dimension_overrides[dim_name]
-        
+
         # Check exclusion list
         if dim_name in self.exclude_dimensions:
             return (False, 0.0, 0.0)
-        
+
         # Return defaults
         return (
             self.default_enabled,
@@ -89,11 +89,11 @@ class DimensionVariationConfig:
 class StaticJointMovementConfig:
     """
     Configuration for moving static joints.
-    
+
     By default, static joints (ground/frame joints) are truly static.
     This config allows testing scenarios where static joints can move
     within specified bounds.
-    
+
     Attributes:
         enabled: Master switch for static joint movement.
         max_x_movement: Default maximum X movement (absolute units, e.g., mm).
@@ -103,7 +103,7 @@ class StaticJointMovementConfig:
             e.g., {"ground": (True, 5.0, 5.0)} to allow ±5 movement.
         linked_joints: Pairs of joints that must move together.
             e.g., [("ground", "frame")] means if ground moves, frame moves too.
-    
+
     Example:
         >>> # Allow static joints to move up to ±10 units
         >>> config = StaticJointMovementConfig(
@@ -111,7 +111,7 @@ class StaticJointMovementConfig:
         ...     max_x_movement=10.0,
         ...     max_y_movement=10.0,
         ... )
-        
+
         >>> # Only allow frame joint to move, not ground
         >>> config = StaticJointMovementConfig(
         ...     enabled=True,
@@ -126,26 +126,26 @@ class StaticJointMovementConfig:
     max_y_movement: float = 10.0
     joint_overrides: dict[str, tuple[bool, float, float]] = field(default_factory=dict)
     linked_joints: list[tuple[str, str]] = field(default_factory=list)
-    
+
     def get_movement_for_joint(
         self,
         joint_name: str,
     ) -> tuple[bool, float, float]:
         """
         Get movement settings for a specific joint.
-        
+
         Args:
             joint_name: Name of the joint
-            
+
         Returns:
             (enabled, max_x, max_y) tuple
         """
         if not self.enabled:
             return (False, 0.0, 0.0)
-        
+
         if joint_name in self.joint_overrides:
             return self.joint_overrides[joint_name]
-        
+
         return (True, self.max_x_movement, self.max_y_movement)
 
 
@@ -153,13 +153,13 @@ class StaticJointMovementConfig:
 class TopologyChangeConfig:
     """
     Configuration for topology modifications (FUTURE/STUB).
-    
+
     This is a placeholder for future functionality to add/remove
     links and nodes during target generation.
-    
+
     WARNING: This functionality is NOT YET IMPLEMENTED. Setting enabled=True
     will raise NotImplementedError when create_achievable_target is called.
-    
+
     Attributes:
         enabled: Master switch (must be False for now).
         add_node_probability: Probability of adding a node (0.0-1.0).
@@ -169,7 +169,7 @@ class TopologyChangeConfig:
         min_nodes: Minimum number of nodes to preserve.
         max_nodes: Maximum number of nodes allowed.
         preserve_crank: Never remove the crank joint.
-    
+
     Future implementation roadmap:
         Phase 1: Implement validate_topology_change() with safety checks
         Phase 2: Implement RemoveLinkChange (simplest - just removes an edge)
@@ -191,11 +191,11 @@ class TopologyChangeConfig:
 class AchievableTargetConfig:
     """
     Master configuration for achievable target generation.
-    
+
     This is the main configuration object passed to create_achievable_target().
     It aggregates all sub-configurations for dimension variation, static joint
     movement, and topology changes.
-    
+
     Attributes:
         dimension_variation: Config for which dimensions to vary and by how much.
         static_joint_movement: Config for moving static joints (disabled by default).
@@ -205,11 +205,11 @@ class AchievableTargetConfig:
             The function will try the configured range first, then each fallback
             in order until a valid configuration is found.
         random_seed: Seed for reproducibility (None for random).
-    
+
     Example:
         >>> # Default configuration: ±50% dimension variation
         >>> config = AchievableTargetConfig()
-        
+
         >>> # Conservative: ±25% variation with more retries
         >>> config = AchievableTargetConfig(
         ...     dimension_variation=DimensionVariationConfig(
@@ -217,7 +217,7 @@ class AchievableTargetConfig:
         ...     ),
         ...     max_attempts=256,
         ... )
-        
+
         >>> # Per-dimension control
         >>> config = AchievableTargetConfig(
         ...     dimension_variation=DimensionVariationConfig(
@@ -231,22 +231,22 @@ class AchievableTargetConfig:
         ... )
     """
     dimension_variation: DimensionVariationConfig = field(
-        default_factory=DimensionVariationConfig
+        default_factory=DimensionVariationConfig,
     )
     static_joint_movement: StaticJointMovementConfig = field(
-        default_factory=StaticJointMovementConfig
+        default_factory=StaticJointMovementConfig,
     )
     topology_changes: TopologyChangeConfig = field(
-        default_factory=TopologyChangeConfig
+        default_factory=TopologyChangeConfig,
     )
     max_attempts: int = 128
     fallback_ranges: list[float] = field(default_factory=lambda: [0.15, 0.15, 0.15])
     random_seed: int | None = None
-    
+
     def __post_init__(self):
         """Validate configuration after initialization."""
         if self.topology_changes.enabled:
             raise NotImplementedError(
-                "Topology changes are not yet implemented. "
-                "Set topology_changes.enabled=False."
+                'Topology changes are not yet implemented. '
+                'Set topology_changes.enabled=False.',
             )

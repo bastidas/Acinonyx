@@ -13,11 +13,11 @@ License: NLopt is under LGPL license (permissive for commercial use)
 """
 from __future__ import annotations
 
-import copy
+# import copy
 import logging
 import time
 from dataclasses import dataclass
-from dataclasses import field
+# from dataclasses import field
 from typing import Literal
 from typing import TYPE_CHECKING
 
@@ -31,11 +31,6 @@ if TYPE_CHECKING:
     )
 
 logger = logging.getLogger(__name__)
-
-
-# =============================================================================
-# Configuration
-# =============================================================================
 
 @dataclass
 class NLoptMLSLConfig:
@@ -63,10 +58,6 @@ class NLoptMLSLConfig:
     gradient_epsilon: float = 1e-6  # For finite difference gradient
     stopval: float = 0.0  # Stop early if error reaches this (0 = disabled)
 
-
-# =============================================================================
-# Main Interface
-# =============================================================================
 
 def run_nlopt_mlsl(
     pylink_data: dict,
@@ -136,6 +127,7 @@ def run_nlopt_mlsl(
     """
     from pylink_tools.optimization_types import OptimizationResult
     from pylink_tools.optimization_helpers import extract_dimensions, apply_dimensions
+    from pylink_tools.optimize import create_fitness_function
 
     # Import here to provide clear error if not installed
     try:
@@ -168,13 +160,14 @@ def run_nlopt_mlsl(
             error='No dimensions to optimize',
         )
 
-    # Create fitness function
-    from pylink_tools.optimize import create_fitness_function
     fitness_func = create_fitness_function(
-        pylink_data, target, dimension_spec,
-        metric=metric, verbose=False,
+        pylink_data,
+        target,
+        dimension_spec,
+        metric=metric,
+        verbose=False,
         phase_invariant=phase_invariant,
-        phase_align_method=phase_align_method,
+        phase_align_method=phase_align_method
     )
 
     # Compute initial error
@@ -260,6 +253,7 @@ def run_nlopt_mlsl(
     global_opt.set_maxeval(config.max_eval)
     global_opt.set_local_optimizer(local_opt)
 
+    # Set population if specified
     if config.population > 0:
         global_opt.set_population(config.population)
 

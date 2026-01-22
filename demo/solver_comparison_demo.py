@@ -31,7 +31,7 @@ from optimizers.nlopt_mlsl import NLoptMLSLConfig
 from optimizers.nlopt_mlsl import run_nlopt_mlsl
 from pylink_tools.kinematic import compute_trajectory
 from pylink_tools.optimize import extract_dimensions
-from pylink_tools.optimize import extract_dimensions_from_edges
+from pylink_tools.optimization_helpers import extract_dimensions_from_edges
 from pylink_tools.optimize import run_pso_optimization
 from pylink_tools.optimize import run_pylinkage_pso
 from pylink_tools.optimize import run_scipy_optimization
@@ -61,11 +61,14 @@ RANDOM_SEED = 42  # Set to None for truly random results
 # 'intermediate' - 6-link mechanism (5 joints, 6 links, ~5 dimensions)
 # 'complex'      - Multi-link mechanism (10 joints, 16 links, ~15 dimensions)
 # 'leg'          - Leg mechanism (17 joints, 28 links, ~28 dimensions)
-MECHANISM_TYPE = 'complex'  # <-- CHANGE THIS TO SWITCH MECHANISMS
+MECHANISM_TYPE = 'simple'  # <-- CHANGE THIS TO SWITCH MECHANISMS
 
 # --- PSO Optimization Parameters ---
 N_PARTICLES = 64         # Number of particles in swarm (32-128 typical)
 N_ITERATIONS = 64       # Number of optimization iterations (50-500 typical)
+
+#MLSL Parameters
+MAX_EVAL = 128          # Maximum number of function evaluations
 
 # --- Bounds Parameters ---
 BOUNDS_FACTOR = 1.2       # Bounds = [value/factor, value*factor]
@@ -115,7 +118,7 @@ CUSTOM_SOLVERS = [
 ]
 
 
-def get_solver_configs(mode: str) -> list[tuple[str, callable, dict]]:
+def get_solver_configs(mode: str, initial_mechanism: dict | None = None) -> list[tuple[str, callable, dict]]:
     """
     Get solver configurations based on comparison mode.
 
@@ -167,6 +170,37 @@ def get_solver_configs(mode: str) -> list[tuple[str, callable, dict]]:
 
     elif mode == 'nlopt_mlsl':
         # Compare NLopt MLSL variants: LDS sampling and local algorithms
+        
+        # Diagnostic: Check viable ratio to understand landscape feasibility
+        try:
+            from target_gen.sampling import generate_valid_samples
+            from pylink_tools.optimization_helpers import extract_dimensions
+            
+            dimension_spec = extract_dimensions(initial_mechanism)
+            n_test_samples = 64  # Test with 64 samples for diagnostic
+            
+            print(f"\n  Checking landscape viability (testing {n_test_samples} Sobol samples)...")
+            viable_samples, _, n_attempts = generate_valid_samples(
+                pylink_data=initial_mechanism,
+                dimension_spec=dimension_spec,
+                n_requested=n_test_samples,
+                max_attempts=500,
+                mode='sobol',
+                validation='viability',
+                selection='first',
+                seed=42,
+            )
+            viable_ratio = len(viable_samples) / n_attempts if n_attempts > 0 else 0
+            print(f"  Viable ratio: {viable_ratio:.1%} ({len(viable_samples)}/{n_attempts} samples)")
+            
+            if viable_ratio < 0.5:
+                print("  ⚠️  WARNING: Low viable ratio indicates 'swiss cheese' landscape.")
+                print("      Consider using gradient-free local optimizers (bobyqa, sbplx).")
+            elif viable_ratio > 0.9:
+                print("  ✓ High viable ratio - landscape is mostly feasible.")
+        except Exception as e:
+            print(f"  Could not check viable ratio: {e}")
+        
         #
         # WHY MLSL+LDS MAY FAIL:
         # 1. Linkage geometry constraints: Many dimension combinations create
@@ -189,34 +223,49 @@ def get_solver_configs(mode: str) -> list[tuple[str, callable, dict]]:
         # Gradient-based: lbfgs, slsqp (require 2*dim extra evals per gradient)
         # Gradient-free: bobyqa, sbplx (no gradient overhead, often faster)
         return [
-            # LDS vs non-LDS with default L-BFGS
+          
             (
-                'MLSL+LDS (lbfgs, grad)', run_nlopt_mlsl, {
-                    'config': NLoptMLSLConfig(use_lds=True, local_algorithm='lbfgs', max_eval=2000),
+                'MLSL (lbfgs)', run_nlopt_mlsl, {
+                    'config': NLoptMLSLConfig(use_lds=False, local_algorithm='lbfgs', max_eval=MAX_EVAL),
                 },
             ),
+           
             (
-                'MLSL (lbfgs, grad)', run_nlopt_mlsl, {
-                    'config': NLoptMLSLConfig(use_lds=False, local_algorithm='lbfgs', max_eval=2000),
+                'MLSL (slsqp, grad)', run_nlopt_mlsl, {
+                    'config': NLoptMLSLConfig(use_lds=False, local_algorithm='slsqp', max_eval=MAX_EVAL),
+                },
+            ),
+
+
+            # LDS with gradient-based (may fail on swiss cheese landscapes)
+            (
+                'MLSL+LDS (lbfgs)', run_nlopt_mlsl, {
+                    'config': NLoptMLSLConfig(use_lds=True, local_algorithm='lbfgs', max_eval=MAX_EVAL),
                 },
             ),
             # Gradient-based local algorithms
             (
                 'MLSL+LDS (slsqp, grad)', run_nlopt_mlsl, {
-                    'config': NLoptMLSLConfig(use_lds=True, local_algorithm='slsqp', max_eval=2000),
+                    'config': NLoptMLSLConfig(use_lds=True, local_algorithm='slsqp', max_eval=MAX_EVAL),
                 },
             ),
             # Gradient-free local algorithms (often faster due to no gradient overhead)
             (
                 'MLSL+LDS (bobyqa, no-grad)', run_nlopt_mlsl, {
-                    'config': NLoptMLSLConfig(use_lds=True, local_algorithm='bobyqa', max_eval=2000),
+                    'config': NLoptMLSLConfig(use_lds=True, local_algorithm='bobyqa', max_eval=MAX_EVAL),
                 },
             ),
+            # Non-LDS with random sampling
             (
-                'MLSL+LDS (sbplx, no-grad)', run_nlopt_mlsl, {
-                    'config': NLoptMLSLConfig(use_lds=True, local_algorithm='sbplx', max_eval=2000),
+                'MLSL (bobyqa)', run_nlopt_mlsl, {
+                    'config': NLoptMLSLConfig(use_lds=False, local_algorithm='bobyqa', max_eval=MAX_EVAL),
                 },
             ),
+            # (
+            #     'MLSL+LDS (sbplx, no-grad)', run_nlopt_mlsl, {
+            #         'config': NLoptMLSLConfig(use_lds=True, local_algorithm='sbplx', max_eval=MAX_EVAL),
+            #     },
+            # ),
         ]
 
     elif mode == 'quick':
@@ -671,7 +720,7 @@ def main():
     print(f'  - Bounds factor: {BOUNDS_FACTOR}')
 
     # Get solver configurations based on mode
-    solver_configs = get_solver_configs(COMPARISON_MODE)
+    solver_configs = get_solver_configs(COMPARISON_MODE, initial_mechanism=pylink_data)
     print(f'\nSolvers to compare ({len(solver_configs)}):')
     for name, func, kwargs in solver_configs:
         kwargs_str = ', '.join(f'{k}={v}' for k, v in kwargs.items()) if kwargs else 'defaults'

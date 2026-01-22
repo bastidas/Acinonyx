@@ -16,29 +16,23 @@ from pathlib import Path
 import pytest
 
 from pylink_tools.kinematic import compute_trajectory
-from pylink_tools.optimization_helpers import (
-    apply_dimensions,
-    apply_dimensions_from_array,
-    dict_to_dimensions,
-    dimensions_to_dict,
-    extract_dimensions,
-    validate_bounds,
-)
-from pylink_tools.optimization_types import (
-    ConvergenceStats,
-    DimensionSpec,
-    OptimizationResult,
-    TargetTrajectory,
-)
-from pylink_tools.optimize import (
-    analyze_convergence,
-    create_fitness_function,
-    evaluate_linkage_fit,
-    format_convergence_report,
-    log_optimization_progress,
-    run_pso_optimization,
-    run_scipy_optimization,
-)
+from pylink_tools.optimization_helpers import apply_dimensions
+from pylink_tools.optimization_helpers import apply_dimensions_from_array
+from pylink_tools.optimization_helpers import dict_to_dimensions
+from pylink_tools.optimization_helpers import dimensions_to_dict
+from pylink_tools.optimization_helpers import extract_dimensions
+from pylink_tools.optimization_helpers import validate_bounds
+from pylink_tools.optimization_types import ConvergenceStats
+from pylink_tools.optimization_types import DimensionSpec
+from pylink_tools.optimization_types import OptimizationResult
+from pylink_tools.optimization_types import TargetTrajectory
+from pylink_tools.optimize import analyze_convergence
+from pylink_tools.optimize import create_fitness_function
+from pylink_tools.optimize import evaluate_linkage_fit
+from pylink_tools.optimize import format_convergence_report
+from pylink_tools.optimize import log_optimization_progress
+from pylink_tools.optimize import run_pso_optimization
+from pylink_tools.optimize import run_scipy_optimization
 from pylink_tools.trajectory_utils import compute_trajectory_error
 from target_gen.achievable_target import create_achievable_target
 from target_gen.variation_config import AchievableTargetConfig

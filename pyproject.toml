@@ -63,7 +63,7 @@ python_functions = "test_*"
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["configs*", "demo*", "structs*", "backend*", "frontend*", "link*", "optimizers*", "pylink_tools*", "viz_tools*", "tests*"]
+include = ["configs*", "demo*", "structs*", "backend*", "frontend*", "link*", "optimizers*", "pylink_tools*", "target_gen*", "viz_tools*", "tests*"]
 
 [tool.black]
 line-length = 120

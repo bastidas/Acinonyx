@@ -73,7 +73,7 @@ export const AnimateToolbar: React.FC<AnimateToolbarProps> = ({
 }) => {
   // Use darkMode prop directly (app uses body class, not MUI theme)
   const isDark = darkMode
-  
+
   const hasCrank = canSimulate(joints)
   const canAnimate = trajectoryData !== null && trajectoryData.nSteps > 0 && stretchingLinks.length === 0
   const hasStretchingLinks = stretchingLinks.length > 0
@@ -121,8 +121,8 @@ export const AnimateToolbar: React.FC<AnimateToolbarProps> = ({
   // Step frame backward
   const stepBackward = () => {
     if (!canAnimate) return
-    const prevFrame = animationState.currentFrame === 0 
-      ? animationState.totalFrames - 1 
+    const prevFrame = animationState.currentFrame === 0
+      ? animationState.totalFrames - 1
       : animationState.currentFrame - 1
     setFrame(prevFrame)
   }
@@ -197,7 +197,7 @@ export const AnimateToolbar: React.FC<AnimateToolbarProps> = ({
       {/* ═══════════════════════════════════════════════════════════════════════
           FURTHEST LEFT: Hide Paths Button
           ═══════════════════════════════════════════════════════════════════════ */}
-      <Tooltip 
+      <Tooltip
         title={
           <Box sx={{ p: 0.5 }}>
             <Typography variant="body2" sx={{ fontWeight: 600 }}>
@@ -208,8 +208,8 @@ export const AnimateToolbar: React.FC<AnimateToolbarProps> = ({
               Individual paths can be controlled per-joint in the Edit Joint modal.
             </Typography>
           </Box>
-        } 
-        placement="top" 
+        }
+        placement="top"
         arrow
       >
         <span>
@@ -222,8 +222,8 @@ export const AnimateToolbar: React.FC<AnimateToolbarProps> = ({
               backgroundColor: showTrajectory ? colors.pathActive.bg : colors.buttonBg,
               color: showTrajectory ? colors.pathActive.color : colors.textMuted,
               '&:hover': {
-                backgroundColor: showTrajectory 
-                  ? (isDark ? 'rgba(156, 39, 176, 0.35)' : 'rgba(156, 39, 176, 0.25)') 
+                backgroundColor: showTrajectory
+                  ? (isDark ? 'rgba(156, 39, 176, 0.35)' : 'rgba(156, 39, 176, 0.25)')
                   : colors.buttonHover,
               },
               '&.Mui-disabled': {
@@ -240,22 +240,22 @@ export const AnimateToolbar: React.FC<AnimateToolbarProps> = ({
       {/* ═══════════════════════════════════════════════════════════════════════
           FURTHER LEFT: Continuous Simulation Button
           ═══════════════════════════════════════════════════════════════════════ */}
-      <Tooltip 
+      <Tooltip
         title={
           <Box sx={{ p: 0.5 }}>
             <Typography variant="body2" sx={{ fontWeight: 600 }}>
               {autoSimulateEnabled ? 'Disable' : 'Enable'} Continuous Simulation
             </Typography>
             <Typography variant="caption" sx={{ opacity: 0.8, display: 'block', mt: 0.5 }}>
-              When enabled, the trajectory is automatically recomputed whenever 
+              When enabled, the trajectory is automatically recomputed whenever
               you modify the mechanism (move joints, change links, etc).
             </Typography>
             <Typography variant="caption" sx={{ opacity: 0.6, display: 'block', mt: 0.25 }}>
               Disable for complex mechanisms to improve editing performance.
             </Typography>
           </Box>
-        } 
-        placement="top" 
+        }
+        placement="top"
         arrow
       >
         <span>
@@ -268,8 +268,8 @@ export const AnimateToolbar: React.FC<AnimateToolbarProps> = ({
               backgroundColor: autoSimulateEnabled ? colors.simActive.bg : colors.buttonBg,
               color: autoSimulateEnabled ? colors.simActive.color : colors.textMuted,
               '&:hover': {
-                backgroundColor: autoSimulateEnabled 
-                  ? (isDark ? 'rgba(33, 150, 243, 0.35)' : 'rgba(33, 150, 243, 0.25)') 
+                backgroundColor: autoSimulateEnabled
+                  ? (isDark ? 'rgba(33, 150, 243, 0.35)' : 'rgba(33, 150, 243, 0.25)')
                   : colors.buttonHover,
               },
               '&.Mui-disabled': {
@@ -286,7 +286,7 @@ export const AnimateToolbar: React.FC<AnimateToolbarProps> = ({
       {/* ═══════════════════════════════════════════════════════════════════════
           LEFT: Step Back Button
           ═══════════════════════════════════════════════════════════════════════ */}
-      <Tooltip 
+      <Tooltip
         title={
           <Box sx={{ p: 0.5 }}>
             <Typography variant="body2" sx={{ fontWeight: 600 }}>Previous Frame</Typography>
@@ -295,8 +295,8 @@ export const AnimateToolbar: React.FC<AnimateToolbarProps> = ({
               Loops to the last frame when at the beginning.
             </Typography>
           </Box>
-        } 
-        placement="top" 
+        }
+        placement="top"
         arrow
       >
         <span>
@@ -325,21 +325,21 @@ export const AnimateToolbar: React.FC<AnimateToolbarProps> = ({
           CENTER: Play Button with Cheetah Animation
           ═══════════════════════════════════════════════════════════════════════ */}
       <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
-        <Tooltip 
+        <Tooltip
           title={
             <Box sx={{ p: 0.5 }}>
               <Typography variant="body2" sx={{ fontWeight: 600 }}>
                 {animationState.isAnimating ? 'Pause Animation' : 'Play Animation'}
               </Typography>
               <Typography variant="caption" sx={{ opacity: 0.8, display: 'block', mt: 0.5 }}>
-                {animationState.isAnimating 
+                {animationState.isAnimating
                   ? 'Pause the animation at the current frame.'
                   : 'Start animating the mechanism through its trajectory cycle.'
                 }
               </Typography>
-              <Typography variant="caption" sx={{ 
-                opacity: 0.6, 
-                display: 'block', 
+              <Typography variant="caption" sx={{
+                opacity: 0.6,
+                display: 'block',
                 mt: 0.5,
                 borderTop: '1px solid rgba(255,255,255,0.2)',
                 pt: 0.5
@@ -347,8 +347,8 @@ export const AnimateToolbar: React.FC<AnimateToolbarProps> = ({
                 Keyboard shortcut: Spacebar
               </Typography>
             </Box>
-          } 
-          placement="top" 
+          }
+          placement="top"
           arrow
         >
           <span>
@@ -358,15 +358,15 @@ export const AnimateToolbar: React.FC<AnimateToolbarProps> = ({
               sx={{
                 width: 62,   // 10% bigger
                 height: 62,
-                backgroundColor: animationState.isAnimating 
-                  ? 'rgba(255, 152, 0, 0.2)' 
+                backgroundColor: animationState.isAnimating
+                  ? 'rgba(255, 152, 0, 0.2)'
                   : 'rgba(76, 175, 80, 0.2)',
                 border: `2px solid ${animationState.isAnimating ? '#ff9800' : '#4caf50'}`,
                 overflow: 'hidden',
                 position: 'relative',
                 '&:hover': {
-                  backgroundColor: animationState.isAnimating 
-                    ? 'rgba(255, 152, 0, 0.3)' 
+                  backgroundColor: animationState.isAnimating
+                    ? 'rgba(255, 152, 0, 0.3)'
                     : 'rgba(76, 175, 80, 0.3)',
                 },
                 '&.Mui-disabled': {
@@ -392,9 +392,9 @@ export const AnimateToolbar: React.FC<AnimateToolbarProps> = ({
                 />
               ) : (
                 // Show play icon when paused - shifted down and right for centering
-                <Typography 
-                  sx={{ 
-                    fontSize: '2rem', 
+                <Typography
+                  sx={{
+                    fontSize: '2rem',
                     color: '#4caf50',
                     textShadow: '0 0 8px rgba(76, 175, 80, 0.5)',
                     transform: 'translate(2px, 1px)',  // Shift down and right ~20%
@@ -406,19 +406,19 @@ export const AnimateToolbar: React.FC<AnimateToolbarProps> = ({
             </IconButton>
           </span>
         </Tooltip>
-        
+
         {/* Frame Counter */}
-        <Typography 
-          variant="caption" 
-          sx={{ 
-            color: colors.textMuted, 
+        <Typography
+          variant="caption"
+          sx={{
+            color: colors.textMuted,
             mt: 0.3,
             fontFamily: 'monospace',
             fontSize: '0.75rem',  // Slightly bigger
             letterSpacing: '0.05em',
           }}
         >
-          {canAnimate 
+          {canAnimate
             ? `${String(animationState.currentFrame + 1).padStart(2, '0')}/${animationState.totalFrames}`
             : '--/--'
           }
@@ -428,7 +428,7 @@ export const AnimateToolbar: React.FC<AnimateToolbarProps> = ({
       {/* ═══════════════════════════════════════════════════════════════════════
           RIGHT: Step Forward Button
           ═══════════════════════════════════════════════════════════════════════ */}
-      <Tooltip 
+      <Tooltip
         title={
           <Box sx={{ p: 0.5 }}>
             <Typography variant="body2" sx={{ fontWeight: 600 }}>Next Frame</Typography>
@@ -437,8 +437,8 @@ export const AnimateToolbar: React.FC<AnimateToolbarProps> = ({
               Loops back to the first frame when at the end.
             </Typography>
           </Box>
-        } 
-        placement="top" 
+        }
+        placement="top"
         arrow
       >
         <span>
@@ -466,7 +466,7 @@ export const AnimateToolbar: React.FC<AnimateToolbarProps> = ({
       {/* ═══════════════════════════════════════════════════════════════════════
           FURTHER RIGHT: Reset Button
           ═══════════════════════════════════════════════════════════════════════ */}
-      <Tooltip 
+      <Tooltip
         title={
           <Box sx={{ p: 0.5 }}>
             <Typography variant="body2" sx={{ fontWeight: 600 }}>Reset Animation</Typography>
@@ -475,8 +475,8 @@ export const AnimateToolbar: React.FC<AnimateToolbarProps> = ({
               Joint positions will be restored to their starting configuration.
             </Typography>
           </Box>
-        } 
-        placement="top" 
+        }
+        placement="top"
         arrow
       >
         <span>
@@ -504,7 +504,7 @@ export const AnimateToolbar: React.FC<AnimateToolbarProps> = ({
       {/* ═══════════════════════════════════════════════════════════════════════
           SPEED SLIDER - Compact version
           ═══════════════════════════════════════════════════════════════════════ */}
-      <Tooltip 
+      <Tooltip
         title={
           <Box sx={{ p: 0.5 }}>
             <Typography variant="body2" sx={{ fontWeight: 600 }}>
@@ -515,13 +515,13 @@ export const AnimateToolbar: React.FC<AnimateToolbarProps> = ({
               Range: 0.1× (slow-mo) to 10× (fast-forward).
             </Typography>
           </Box>
-        } 
-        placement="top" 
+        }
+        placement="top"
         arrow
       >
-        <Box 
-          sx={{ 
-            display: 'flex', 
+        <Box
+          sx={{
+            display: 'flex',
             alignItems: 'center',
             width: 77,  // 10% bigger
           }}

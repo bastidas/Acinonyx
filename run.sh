@@ -208,7 +208,7 @@ print_status "Step 2: Starting backend server..."
 print_status "Backend will run on: http://localhost:$BACKEND_PORT"
 
 # Start backend in background with logging
-python -m uvicorn backend.query_api:app --host 0.0.0.0 --port $BACKEND_PORT --reload > backend.log 2>&1 &
+python -m uvicorn backend.acinonyx_api:app --host 0.0.0.0 --port $BACKEND_PORT --reload > backend.log 2>&1 &
 BACKEND_PID=$!
 
 print_status "Backend server started with PID: $BACKEND_PID"

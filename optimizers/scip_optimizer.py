@@ -327,8 +327,8 @@ def _mock_scip_result(
 
     if verbose:
         logger.info('SCIP: Mock result (not implemented)')
-        logger.info(f"  Dimensions: {len(dimension_spec)}")
-        logger.info(f"  Would optimize: {list(dimension_spec.names)}")
+        logger.info(f'  Dimensions: {len(dimension_spec)}')
+        logger.info(f'  Would optimize: {list(dimension_spec.names)}')
 
     return OptimizationResult(
         success=False,

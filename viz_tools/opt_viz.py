@@ -36,6 +36,7 @@ except ImportError:
 sns.set_theme(style='whitegrid', context='notebook', palette='colorblind')
 sns.set_palette('colorblind')
 
+
 @dataclass
 class OptVizStyle:
     """
@@ -45,7 +46,7 @@ class OptVizStyle:
     """
     # Get seaborn's colorblind palette
     _palette = sns.color_palette('colorblind', 10)
-    
+
     # Assign semantic colors from palette
     target_color: str = sns.color_palette('colorblind')[3]      # Red/coral
     current_color: str = sns.color_palette('colorblind')[0]     # Blue
@@ -128,7 +129,7 @@ def plot_trajectory_comparison(
         ax.plot(
             target_pos[:, 0], target_pos[:, 1],
             color=style.target_color, linewidth=style.target_linewidth,
-            alpha=style.trajectory_alpha, linestyle='--', 
+            alpha=style.trajectory_alpha, linestyle='--',
             label=label_target, zorder=2,
         )
 
@@ -649,20 +650,20 @@ def plot_linkage_comparison(
 ) -> None:
     """
     Plot two linkages overlaid for comparison.
-    
+
     Uses very different markers and linestyles:
     - Initial: Open circles, dotted lines, transparent
     - Target: Open squares, dashed lines, solid
-    
+
     Args:
         pylink_data_initial: Initial pylink document
-        pylink_data_target: Target pylink document  
+        pylink_data_target: Target pylink document
         title: Plot title
         out_path: Path to save figure
         style: Visualization style
     """
     from pylink_tools.kinematic import compute_trajectory
-    
+
     fig, ax = plt.subplots(figsize=style.figsize, dpi=style.dpi)
 
     # Compute trajectories for both linkages
@@ -678,7 +679,7 @@ def plot_linkage_comparison(
         plt.tight_layout()
         _save_or_show(fig, out_path, style.dpi)
         return
-        
+
     if not result_target.success:
         ax.text(
             0.5, 0.5, f'Failed to compute target trajectory:\n{result_target.error}',
@@ -696,21 +697,21 @@ def plot_linkage_comparison(
 
     # Get seaborn palette colors
     palette = sns.color_palette('colorblind', 10)
-    
+
     # Plot INITIAL linkage with open markers, dotted lines, very transparent
     initial_color = style.current_color  # Blue
-    
+
     for i, (joint_name, positions) in enumerate(trajectories_initial.items()):
         pos_arr = np.array(positions)
         joint_type = joint_types_initial.get(joint_name, 'Unknown')
-        
+
         # Use very transparent dotted lines for trajectory paths
         ax.plot(
             pos_arr[:, 0], pos_arr[:, 1],
             color=initial_color, alpha=0.2, linewidth=1.5,
             linestyle=':', zorder=1,
         )
-        
+
         # Open circle markers for joints
         if joint_type == 'Static':
             marker = '^'
@@ -718,7 +719,7 @@ def plot_linkage_comparison(
         else:
             marker = 'o'
             size = style.marker_size * 0.8
-            
+
         # Plot with open (unfilled) markers
         label = f'Initial {joint_name}' if i == 0 else None
         ax.scatter(
@@ -728,21 +729,21 @@ def plot_linkage_comparison(
             alpha=0.7, zorder=3,
             label='Initial Joints' if i == 0 else None,
         )
-    
+
     # Plot TARGET linkage with open markers, dashed lines, more visible
     target_color = style.target_color  # Red/coral
-    
+
     for i, (joint_name, positions) in enumerate(trajectories_target.items()):
         pos_arr = np.array(positions)
         joint_type = joint_types_target.get(joint_name, 'Unknown')
-        
+
         # Dashed lines for trajectory paths
         ax.plot(
             pos_arr[:, 0], pos_arr[:, 1],
             color=target_color, alpha=0.6, linewidth=2.0,
             linestyle='--', zorder=2,
         )
-        
+
         # Open square markers for joints
         if joint_type == 'Static':
             marker = '^'
@@ -750,7 +751,7 @@ def plot_linkage_comparison(
         else:
             marker = 's'  # Square for target
             size = style.marker_size * 0.9
-            
+
         # Plot with open (unfilled) markers
         ax.scatter(
             [pos_arr[0, 0]], [pos_arr[0, 1]],
@@ -856,7 +857,7 @@ def plot_convergence_history(
 
     if log_scale and min(history) > 0:
         ax.set_yscale('log')
-    
+
     sns.despine(ax=ax)
 
     plt.tight_layout()
@@ -891,7 +892,7 @@ def plot_optimization_summary(
     ax1 = fig.add_subplot(2, 2, 1)
     if result.convergence_history:
         ax1.plot(
-            result.convergence_history, 
+            result.convergence_history,
             color=style.current_color,
             linewidth=2.5, alpha=0.9,
         )

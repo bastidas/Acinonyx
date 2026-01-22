@@ -5,7 +5,6 @@ Contains dataclasses used throughout the optimization module:
   - DimensionSpec: Describes optimizable dimensions of a linkage
   - TargetTrajectory: Target positions for optimization
   - OptimizationResult: Result of an optimization run
-  - ErrorMetrics: Detailed error metrics between trajectories
   - ConvergenceStats: Statistics about optimization convergence
 """
 from __future__ import annotations
@@ -140,34 +139,6 @@ class OptimizationResult:
             'iterations': self.iterations,
             'convergence_history': self.convergence_history,
             'error': self.error,
-        }
-
-
-@dataclass
-class ErrorMetrics:
-    """
-    Detailed error metrics between computed and target trajectory.
-
-    Attributes:
-        total_error: Sum of squared distances
-        mse: Mean squared error
-        rmse: Root mean squared error
-        max_error: Maximum distance at any timestep
-        per_step_errors: Distance error at each timestep
-    """
-    total_error: float
-    mse: float
-    rmse: float
-    max_error: float
-    per_step_errors: list[float]
-
-    def to_dict(self) -> dict:
-        return {
-            'total_error': self.total_error,
-            'mse': self.mse,
-            'rmse': self.rmse,
-            'max_error': self.max_error,
-            'per_step_errors': self.per_step_errors,
         }
 
 

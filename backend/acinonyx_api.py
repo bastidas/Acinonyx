@@ -10,11 +10,9 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from configs.appconfig import USER_DIR
+from pylink_tools.hypergraph_adapter import sync_hypergraph_distances
 from pylink_tools.kinematic import compute_trajectory
-from pylink_tools.kinematic import convert_hypergraph_to_legacy
-from pylink_tools.kinematic import convert_legacy_to_hypergraph
 from pylink_tools.kinematic import is_hypergraph_format
-from pylink_tools.kinematic import sync_pylink_distances
 from pylink_tools.optimize import extract_dimensions
 from pylink_tools.optimize import optimize_trajectory
 from pylink_tools.optimize import TargetTrajectory
@@ -76,41 +74,41 @@ def get_status():
     }
 
 
-@app.get('/load-last-force-graph')
-def load_force_graph():
-    """Load the most recent force graph from the force_graphs directory"""
-    try:
-        # Ensure USER_DIR exists first
-        USER_DIR.mkdir(parents=True, exist_ok=True)
-        force_graphs_dir = USER_DIR / 'force_graphs'
+# @app.get('/load-last-force-graph')
+# def load_force_graph():
+#     """Load the most recent force graph from the force_graphs directory"""
+#     try:
+#         # Ensure USER_DIR exists first
+#         USER_DIR.mkdir(parents=True, exist_ok=True)
+#         force_graphs_dir = USER_DIR / 'force_graphs'
 
-        if not force_graphs_dir.exists():
-            return {
-                'error': 'No force_graphs directory found',
-                'path': str(force_graphs_dir),
-            }
+#         if not force_graphs_dir.exists():
+#             return {
+#                 'error': 'No force_graphs directory found',
+#                 'path': str(force_graphs_dir),
+#             }
 
-        # Find all force graph JSON files
-        force_graph_files = list(force_graphs_dir.glob('force_graph_*.json'))
+#         # Find all force graph JSON files
+#         force_graph_files = list(force_graphs_dir.glob('force_graph_*.json'))
 
-        if not force_graph_files:
-            return {
-                'error': 'No force graphs found in force_graphs directory',
-            }
+#         if not force_graph_files:
+#             return {
+#                 'error': 'No force graphs found in force_graphs directory',
+#             }
 
-        # Get the most recent file by modification time
-        latest_file = max(force_graph_files, key=lambda f: f.stat().st_mtime)
+#         # Get the most recent file by modification time
+#         latest_file = max(force_graph_files, key=lambda f: f.stat().st_mtime)
 
-        with open(latest_file) as f:
-            graph_data = json.load(f)
+#         with open(latest_file) as f:
+#             graph_data = json.load(f)
 
-        print(f'Loaded force graph from: {latest_file.name}')
-        return graph_data
+#         print(f'Loaded force graph from: {latest_file.name}')
+#         return graph_data
 
-    except Exception as e:
-        return {
-            'error': f'Failed to load force graph: {str(e)}',
-        }
+#     except Exception as e:
+#         return {
+#             'error': f'Failed to load force graph: {str(e)}',
+#         }
 
 
 @app.post('/save-pylink-graph')
@@ -223,22 +221,14 @@ def list_pylink_graphs():
             try:
                 with open(f) as fp:
                     data = json.load(fp)
-                    # Support both new hypergraph format and legacy format
-                    if 'linkage' in data:
-                        # New hypergraph format
-                        nodes_count = len(data.get('linkage', {}).get('nodes', {}))
-                        edges_count = len(data.get('linkage', {}).get('edges', {}))
-                    else:
-                        # Legacy format
-                        nodes_count = len(data.get('pylinkage', {}).get('joints', []))
-                        edges_count = len(data.get('meta', {}).get('links', {}))
+                    linkage = data.get('linkage', {})
                     files.append({
                         'filename': f.name,
                         'name': data.get('name', f.stem),
-                        'nodes_count': nodes_count,
-                        'edges_count': edges_count,
+                        'nodes_count': len(linkage.get('nodes', {})),
+                        'edges_count': len(linkage.get('edges', {})),
                         'saved_at': data.get('saved_at', ''),
-                        'version': data.get('version', '1.0'),
+                        'version': data.get('version', '2.0'),
                     })
             except:
                 files.append({
@@ -324,12 +314,12 @@ def load_demo(name: str):
             }
 
         # Map demo names to files
-        # Note: '4bar' demo is generated programmatically in the frontend, not from a file
         demo_files = {
-            'leg': 'leg.json',
+            '4bar': 'test_graphs/4bar.json',
+            'leg': 'test_graphs/leg.json',
             'walker': 'walker0.json',
-            'complex': 'complex.json',
-            'intermediate': 'intermediate.json',
+            'complex': 'test_graphs/complex.json',
+            'intermediate': 'test_graphs/intermediate.json',
         }
 
         if name not in demo_files:
@@ -404,27 +394,14 @@ def compute_pylink_trajectory(request: dict):
     try:
         start_time = time.perf_counter()
 
-        # Support both old format (direct pylink_data) and new format (request with skip_sync)
-        # Check if this looks like a pylink document or a request wrapper
-        if 'pylinkage' in request:
-            # Direct pylink_data format (backwards compatible)
-            pylink_data = request
-            skip_sync = request.get('skip_sync', False)
-        else:
-            # New request format with optional skip_sync
-            pylink_data = request.get('pylink_data', request)
-            skip_sync = request.get('skip_sync', False)
-
-        # Get n_steps from request first, then from pylink_data, default 12
+        # Extract pylink_data (request may wrap it or be it directly)
+        pylink_data = request.get('pylink_data', request)
+        skip_sync = request.get('skip_sync', False)
         n_steps = request.get('n_steps') or pylink_data.get('n_steps', 12)
-        # Also update pylink_data's n_steps for consistency
         pylink_data['n_steps'] = n_steps
-
-        joints_count = len(pylink_data.get('pylinkage', {}).get('joints', []))
-
-        print(f'\n=== COMPUTE PYLINK TRAJECTORY ===')
-        print(f'Joints: {joints_count}, Steps: {n_steps}, skip_sync: {skip_sync}')
-
+        # nodes_count = len(pylink_data.get('linkage', {}).get('nodes', {}))
+        # print(f'\n=== COMPUTE PYLINK TRAJECTORY ===')
+        # print(f'Nodes: {nodes_count}, Steps: {n_steps}, skip_sync: {skip_sync}')
         # Delegate to kinematic module
         result = compute_trajectory(pylink_data, verbose=True, skip_sync=skip_sync)
 
@@ -477,26 +454,16 @@ def validate_mechanism_endpoint(pylink_data: dict):
             "groups": [...],         # All connected link groups
             "valid_groups": [...],   # Only the valid mechanism groups
             "errors": [...],         # Validation errors
-            "rigidity_check": {...}  # Link rigidity validation results
         }
     """
-    from pylink_tools.kinematic import validate_mechanism, check_link_rigidity
+    from pylink_tools.kinematic import validate_mechanism
 
     try:
         result = validate_mechanism(pylink_data)
 
-        # Also check for over-constrained links (links that would stretch during simulation)
-        rigidity = check_link_rigidity(pylink_data)
-
-        # If rigidity check fails, mechanism is not truly valid
-        if not rigidity['valid']:
-            result['valid'] = False
-            result['errors'] = result.get('errors', []) + [rigidity['message']]
-
         return {
             'status': 'success',
             **result,
-            'rigidity_check': rigidity,
         }
 
     except Exception as e:
@@ -639,17 +606,12 @@ def optimize_trajectory_endpoint(request: dict):
         print(f'Method: {method}')
         print(f'Bounds factor: {bounds_factor}')
 
-        # Check if input is hypergraph format and convert if needed
-        input_is_hypergraph = is_hypergraph_format(pylink_data)
-        if input_is_hypergraph:
-            print('  Input is hypergraph format, converting to legacy for processing...')
-            pylink_data = convert_hypergraph_to_legacy(pylink_data, verbose=verbose)
-
         # CRITICAL: First sync distances from visual positions
         # The frontend may save stale/incorrect distances that don't match visual layout.
         # This ensures we start with valid, solvable mechanism geometry.
         print('  Syncing distances from visual positions...')
-        pylink_data = sync_pylink_distances(pylink_data, verbose=verbose)
+        if is_hypergraph_format(pylink_data):
+            pylink_data = sync_hypergraph_distances(pylink_data, verbose=verbose)
 
         # Validate the mechanism by running a reference simulation
         pylink_data['n_steps'] = len(target_positions)
@@ -706,7 +668,7 @@ def optimize_trajectory_endpoint(request: dict):
         # Run optimization
         result = optimize_trajectory(**opt_kwargs)
 
-        # If optimization succeeded, update meta.joints positions based on new distances
+        # If optimization succeeded, update node positions based on new distances
         optimized_pylink_data = result.optimized_pylink_data
         if result.success and optimized_pylink_data:
             try:
@@ -714,29 +676,16 @@ def optimize_trajectory_endpoint(request: dict):
                 # IMPORTANT: skip_sync=True prevents distances from being overwritten by old visual positions
                 sim_result = compute_trajectory(optimized_pylink_data, verbose=False, skip_sync=True)
                 if sim_result.success and sim_result.trajectories:
-                    # Update meta.joints with first frame positions
-                    if 'meta' not in optimized_pylink_data:
-                        optimized_pylink_data['meta'] = {'joints': {}, 'links': {}}
-                    if 'joints' not in optimized_pylink_data['meta']:
-                        optimized_pylink_data['meta']['joints'] = {}
-
+                    # Update node positions with first frame from simulation
+                    nodes = optimized_pylink_data.get('linkage', {}).get('nodes', {})
                     for joint_name, positions in sim_result.trajectories.items():
                         if positions and len(positions) > 0:
                             x, y = positions[0]  # First frame position
-                            if joint_name in optimized_pylink_data['meta']['joints']:
-                                optimized_pylink_data['meta']['joints'][joint_name]['x'] = x
-                                optimized_pylink_data['meta']['joints'][joint_name]['y'] = y
-                            else:
-                                optimized_pylink_data['meta']['joints'][joint_name] = {
-                                    'x': x,
-                                    'y': y,
-                                    'color': '#ff7f0e',
-                                    'zlevel': 0,
-                                    'show_path': True,
-                                }
-                    print(f'  Updated meta.joints positions from simulation')
+                            if joint_name in nodes:
+                                nodes[joint_name]['position'] = [x, y]
+                    print(f'  Updated node positions from simulation')
             except Exception as e:
-                print(f'  Warning: Could not update meta.joints positions: {e}')
+                print(f'  Warning: Could not update node positions: {e}')
 
         end_time = time.perf_counter()
         execution_time_ms = (end_time - start_time) * 1000
@@ -754,11 +703,6 @@ def optimize_trajectory_endpoint(request: dict):
         print(f'  Final error: {final_err_str}')
         print(f'  Improvement: {improvement:.1f}%')
         print(f'  Completed in {execution_time_ms:.2f}ms')
-
-        # If input was hypergraph format, convert result back to hypergraph
-        if input_is_hypergraph and optimized_pylink_data:
-            print('  Converting result back to hypergraph format...')
-            optimized_pylink_data = convert_legacy_to_hypergraph(optimized_pylink_data, verbose=verbose)
 
         # Build response and sanitize for JSON (inf/nan not allowed)
         response = {
@@ -833,111 +777,6 @@ def get_optimizable_dimensions(pylink_data: dict = None):
             'status': 'error',
             'message': f'Failed to extract dimensions: {str(e)}',
         }
-
-
-# @app.post("/convert-to-pylinkage")
-# def convert_to_pylinkage(graph_data: dict):
-#     """
-#     Convert automata graph to pylinkage format and validate.
-
-#     This endpoint takes the graph data (nodes, links, connections) and converts
-#     it to a pylinkage Linkage object, returning a validation report.
-
-#     Request body:
-#         {
-#             "nodes": [...],
-#             "links": [...],
-#             "connections": [...]
-#         }
-
-#     Returns:
-#         {
-#             "status": "success" | "error",
-#             "message": str,
-#             "conversion_result": {
-#                 "success": bool,
-#                 "warnings": [...],
-#                 "errors": [...],
-#                 "joint_mapping": {...},
-#                 "stats": {...},
-#                 "serialized_linkage": {...}  # pylinkage's to_dict() output
-#             }
-#         }
-#     """
-#     try:
-#         nodes_data = graph_data.get('nodes', [])
-#         links_data = graph_data.get('links', [])
-#         connections = graph_data.get('connections', [])
-
-#         print("\n=== PYLINKAGE CONVERSION REQUEST ===")
-#         print(f"Nodes: {len(nodes_data)}, Links: {len(links_data)}, Connections: {len(connections)}")
-
-#         # Convert raw dicts to model objects
-#         node_objects = []
-#         for i, node_dict in enumerate(nodes_data):
-#             try:
-#                 n_iterations = node_dict.get('n_iterations', 24)
-#                 node_data = {
-#                     'name': node_dict.get('name', node_dict.get('id', f'node_{i}')),
-#                     'n_iterations': n_iterations,
-#                     'fixed': node_dict.get('fixed', False)
-#                 }
-#                 if 'fixed_loc' in node_dict and node_dict['fixed_loc']:
-#                     node_data['fixed_loc'] = tuple(node_dict['fixed_loc'])
-#                 elif node_data['fixed'] and 'pos' in node_dict:
-#                     node_data['fixed_loc'] = tuple(node_dict['pos'])
-#                 if 'pos' in node_dict and node_dict['pos']:
-#                     node_data['init_pos'] = tuple(node_dict['pos'])
-#                 elif node_data.get('fixed_loc'):
-#                     node_data['init_pos'] = node_data['fixed_loc']
-#                 else:
-#                     node_data['init_pos'] = (0.0, 0.0)
-
-#                 node_objects.append(Node(**node_data))
-#             except Exception as e:
-#                 print(f"Warning: Failed to create Node from {node_dict}: {e}")
-
-#         link_objects = []
-#         for i, link_dict in enumerate(links_data):
-#             try:
-#                 excluded_fields = ['start_point', 'end_point', 'color', 'id', 'pos1', 'pos2', 'meta']
-#                 link_data = {k: v for k, v in link_dict.items() if k not in excluded_fields}
-
-#                 if 'pos1' in link_data and isinstance(link_data['pos1'], dict):
-#                     del link_data['pos1']
-#                 if 'pos2' in link_data and isinstance(link_data['pos2'], dict):
-#                     del link_data['pos2']
-
-#                 link_objects.append(Link(**link_data))
-#             except Exception as e:
-#                 print(f"Warning: Failed to create Link from {link_dict}: {e}")
-
-#         # Run conversion
-#         result = convert_to_pylinkage(node_objects, link_objects, connections)
-
-#         if result.success:
-#             print(f"✓ Conversion successful: {result.stats}")
-#             return {
-#                 "status": "success",
-#                 "message": "Graph converted to pylinkage successfully",
-#                 "conversion_result": result.to_dict()
-#             }
-#         else:
-#             print(f"✗ Conversion failed: {result.errors}")
-#             return {
-#                 "status": "error",
-#                 "message": "Conversion failed",
-#                 "conversion_result": result.to_dict()
-#             }
-
-#     except Exception as e:
-#         print(f"Error in convert_to_pylinkage: {e}")
-#         traceback.print_exc()
-#         return {
-#             "status": "error",
-#             "message": f"Conversion failed: {str(e)}",
-#             "traceback": traceback.format_exc().split('\n')
-#         }
 
 
 @app.post('/prepare-trajectory')

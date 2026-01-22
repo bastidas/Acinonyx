@@ -14,6 +14,7 @@ import pytest
 from pylink_tools.trajectory_utils import analyze_trajectory
 from pylink_tools.trajectory_utils import compute_phase_aligned_distance
 from pylink_tools.trajectory_utils import compute_trajectory_similarity
+from pylink_tools.trajectory_utils import compute_trajectory_hot
 from pylink_tools.trajectory_utils import prepare_trajectory_for_optimization
 from pylink_tools.trajectory_utils import resample_trajectory
 from pylink_tools.trajectory_utils import smooth_trajectory
@@ -248,6 +249,41 @@ def test_analyze_trajectory(circle_trajectory):
     # But our discrete approximation will be slightly less
     assert 55 < stats['total_path_length'] < 65, \
         f"Path length should be ~60, got {stats['total_path_length']}"
+
+
+# =============================================================================
+# Test: compute_trajectory_hot
+# =============================================================================
+
+
+def test_compute_trajectory_hot(circle_trajectory):
+    """
+    Test ultra-fast MSE computation matches full API results.
+
+    Verifies:
+    - Identical trajectories have MSE ~0
+    - Phase-shifted trajectories also have MSE ~0 (phase-invariant)
+    - Results match compute_phase_aligned_distance with method='fft'
+    """
+    original = np.array(circle_trajectory)
+    shifted = np.roll(original, 6, axis=0)  # Shift by 6 points
+
+    # Identical should be ~0
+    mse_identical = compute_trajectory_hot(original, original)
+    assert mse_identical < 1e-10, f'Identical trajectories should have MSE ~0, got {mse_identical}'
+
+    # Phase-shifted should also be ~0 (phase-invariant)
+    mse_shifted = compute_trajectory_hot(original, shifted)
+    assert mse_shifted < 0.01, f'Phase-shifted identical paths should have MSE ~0, got {mse_shifted}'
+
+    # Should match full API with FFT method
+    full_api_result = compute_phase_aligned_distance(
+        circle_trajectory,
+        list(map(tuple, shifted)),
+        method='fft',
+    )
+    assert abs(mse_shifted - full_api_result.distance) < 1e-10, \
+        f'compute_trajectory_hot should match full API: {mse_shifted} vs {full_api_result.distance}'
 
 
 # =============================================================================

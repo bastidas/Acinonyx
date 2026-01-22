@@ -42,29 +42,28 @@ Target Generation:
 from __future__ import annotations
 
 import json
-import random
 import sys
 from datetime import datetime
 from pathlib import Path
 
-import numpy as np
-
 from configs.appconfig import USER_DIR
 from pylink_tools.kinematic import compute_trajectory
 from pylink_tools.optimize import analyze_convergence
-from pylink_tools.optimize import apply_dimensions
 from pylink_tools.optimize import extract_dimensions
 from pylink_tools.optimize import format_convergence_report
 from pylink_tools.optimize import PSOConfig
 from pylink_tools.optimize import run_pso_optimization
 from pylink_tools.optimize import TargetTrajectory
+from target_gen import AchievableTargetConfig
+from target_gen import create_achievable_target
+from target_gen import DimensionVariationConfig
+from target_gen import StaticJointMovementConfig
 from viz_tools.opt_viz import plot_convergence_history
 from viz_tools.opt_viz import plot_dimension_bounds
 from viz_tools.opt_viz import plot_linkage_state
 from viz_tools.opt_viz import plot_optimization_summary
 from viz_tools.opt_viz import plot_trajectory_comparison
 from viz_tools.opt_viz import plot_trajectory_overlay
-from configs.appconfig import USER_DIR
 
 # Add project root to path
 project_root = Path(__file__).parent.parent
@@ -77,6 +76,13 @@ sys.path.insert(0, str(project_root))
 
 # --- Random Seed (set for reproducibility, or None for random) ---
 RANDOM_SEED = 42  # Set to None for truly random results
+
+# --- Mechanism Type ---
+# 'simple'       - Basic 4-bar linkage (4 joints, 4 links, ~3 dimensions)
+# 'intermediate' - 6-link mechanism (5 joints, 6 links, ~5 dimensions)
+# 'complex'      - Multi-link mechanism (10 joints, 16 links, ~15 dimensions)
+# 'leg'          - Leg mechanism (17 joints, 28 links, ~28 dimensions)
+MECHANISM_TYPE = 'simple'  # <-- CHANGE THIS TO SWITCH MECHANISMS
 
 # --- PSO Optimization Parameters ---
 N_PARTICLES = 64          # Number of particles in swarm (32-128 typical)
@@ -102,120 +108,53 @@ OUTPUT_DIR = USER_DIR / 'demo'
 TIMESTAMP = datetime.now().strftime('%Y%m%d_%H%M%S')
 
 
-def load_test_4bar():
-    """Load the test 4-bar linkage from tests/4bar_test.json."""
-    test_file = project_root / 'tests' / '4bar_test.json'
+# =============================================================================
+# MECHANISM FILE PATHS
+# =============================================================================
+# Mechanisms are loaded from JSON files in demo/test_graphs/.
 
-    if not test_file.exists():
-        raise FileNotFoundError(f'Test file not found: {test_file}')
+TEST_GRAPHS_DIR = Path(__file__).parent / 'test_graphs'
+MECHANISM_FILES = {
+    'simple': TEST_GRAPHS_DIR / '4bar.json',
+    'intermediate': TEST_GRAPHS_DIR / 'intermediate.json',
+    'complex': TEST_GRAPHS_DIR / 'complex.json',
+    'leg': TEST_GRAPHS_DIR / 'leg.json',
+}
 
-    with open(test_file) as f:
+# Mechanism configurations: (target_joint, description)
+MECHANISM_CONFIG = {
+    'simple': ('coupler_rocker_joint', 'Simple 4-bar linkage (4 joints, 4 links, ~3 dimensions)'),
+    'intermediate': ('final', 'Intermediate 6-link mechanism (5 joints, 6 links, ~5 dimensions)'),
+    'complex': ('final_joint', 'Complex multi-link mechanism (10 joints, 16 links, ~15 dimensions)'),
+    'leg': ('toe', 'Leg mechanism (17 joints, 28 links, ~28 dimensions)'),
+}
+
+
+def load_mechanism(mechanism_type: str = 'simple'):
+    """
+    Load a mechanism based on type.
+
+    Args:
+        mechanism_type: 'simple', 'intermediate', 'complex', or 'leg'
+
+    Returns:
+        (pylink_data, target_joint_name, mechanism_description)
+    """
+    if mechanism_type not in MECHANISM_CONFIG:
+        available = list(MECHANISM_CONFIG.keys())
+        raise ValueError(f'Unknown mechanism_type: {mechanism_type}. Use one of: {available}')
+
+    json_path = MECHANISM_FILES[mechanism_type]
+    if not json_path.exists():
+        raise FileNotFoundError(f'Mechanism file not found: {json_path}')
+
+    with open(json_path) as f:
         pylink_data = json.load(f)
 
     pylink_data['n_steps'] = N_STEPS
-    return pylink_data
+    target_joint, description = MECHANISM_CONFIG[mechanism_type]
 
-
-def create_achievable_target(
-    pylink_data: dict,
-    target_joint: str,
-    dim_spec,
-    randomize_range: float = 0.5,
-    seed: int = None,
-    max_attempts: int = 128,
-) -> tuple:
-    """
-    Create a target trajectory that is ACHIEVABLE by randomizing dimensions.
-
-    The key insight: instead of shifting the trajectory (which is impossible
-    because fixed pivots can't move), we:
-    1. Randomize each dimension by ±randomize_range (e.g., ±50%)
-    2. Validate the mechanism is still solvable
-    3. Compute the trajectory with those randomized dimensions
-    4. Return that as the target
-
-    This creates an "inverse problem" with a viable and known solution
-
-    IMPORTANT: Not all dimension combinations result in valid mechanisms.
-    We retry until we find valid dimensions.
-
-    Args:
-        pylink_data: Original mechanism
-        target_joint: Which joint's trajectory to target
-        dim_spec: DimensionSpec for the mechanism
-        randomize_range: How much to randomize (0.5 = ±50%)
-        seed: Random seed for reproducibility
-        max_attempts: Maximum attempts to find valid dimensions
-
-    Returns:
-        (target, target_dimensions, target_pylink_data)
-        - target: TargetTrajectory object
-        - target_dimensions: Dict of the randomized dimension values
-        - target_pylink_data: The mechanism with randomized dimensions
-    """
-    if seed is not None:
-        random.seed(seed)
-        np.random.seed(seed)
-
-    # Try to find valid randomized dimensions
-    for attempt in range(max_attempts):
-        # Randomize each dimension
-        target_dims = {}
-        for name, initial, bounds in zip(dim_spec.names, dim_spec.initial_values, dim_spec.bounds):
-            # Random factor between (1-range) and (1+range)
-            factor = 1.0 + random.uniform(-randomize_range, randomize_range)
-            new_value = initial * factor
-
-            # Clamp to bounds
-            new_value = max(bounds[0], min(bounds[1], new_value))
-            target_dims[name] = new_value
-
-        # Apply randomized dimensions to create target mechanism
-        target_pylink_data = apply_dimensions(pylink_data, target_dims)
-
-        # Compute trajectory with randomized dimensions
-        # IMPORTANT: Use skip_sync=True to use our randomized dimensions!
-        result = compute_trajectory(target_pylink_data, verbose=False, skip_sync=True)
-
-        if result.success and target_joint in result.trajectories:
-            target_traj = result.trajectories[target_joint]
-
-            target = TargetTrajectory(
-                joint_name=target_joint,
-                positions=[tuple(pos) for pos in target_traj],
-            )
-
-            if attempt > 0:
-                print(f'  (Found valid target dimensions after {attempt + 1} attempts)')
-
-            return target, target_dims, target_pylink_data
-
-    # If we couldn't find valid dimensions with full range, try smaller range
-    print(f"  Warning: Couldn't find valid dimensions with ±{randomize_range*100:.0f}%")
-    print('  Trying with smaller range...')
-
-    for smaller_range in [0.15, 0.10, 0.05]:
-        for attempt in range(max_attempts):
-            target_dims = {}
-            for name, initial, bounds in zip(dim_spec.names, dim_spec.initial_values, dim_spec.bounds):
-                factor = 1.0 + random.uniform(-smaller_range, smaller_range)
-                new_value = initial * factor
-                new_value = max(bounds[0], min(bounds[1], new_value))
-                target_dims[name] = new_value
-
-            target_pylink_data = apply_dimensions(pylink_data, target_dims)
-            result = compute_trajectory(target_pylink_data, verbose=False, skip_sync=True)
-
-            if result.success and target_joint in result.trajectories:
-                target_traj = result.trajectories[target_joint]
-                target = TargetTrajectory(
-                    joint_name=target_joint,
-                    positions=[tuple(pos) for pos in target_traj],
-                )
-                print(f'  Found valid dimensions with ±{smaller_range*100:.0f}%')
-                return target, target_dims, target_pylink_data
-
-    raise ValueError('Could not find valid target dimensions after many attempts')
+    return pylink_data, target_joint, description
 
 
 def print_section(title: str):
@@ -259,31 +198,57 @@ def main():
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
     # -------------------------------------------------------------------------
-    # Step 1: Load the test 4-bar linkage
+    # Step 1: Load the test mechanism
     # -------------------------------------------------------------------------
     print_section('Step 1: Load Test Mechanism')
 
-    pylink_data = load_test_4bar()
+    print(f'Mechanism type: {MECHANISM_TYPE}')
+    pylink_data, target_joint, mech_description = load_mechanism(MECHANISM_TYPE)
 
-    print('Loaded 4-bar linkage:')
-    joints = pylink_data['pylinkage']['joints']
-    for j in joints:
-        if j['type'] == 'Static':
-            print(f"  - {j['name']} ({j['type']}) at ({j['x']}, {j['y']})")
-        elif j['type'] == 'Crank':
-            print(f"  - {j['name']} ({j['type']}) distance={j['distance']}")
-        elif j['type'] == 'Revolute':
-            print(f"  - {j['name']} ({j['type']}) d0={j['distance0']}, d1={j['distance1']}")
+    print(f'Loaded: {mech_description}')
 
-    # Extract dimensions
+    # Print joint summary based on data format
+    if 'pylinkage' in pylink_data and 'joints' in pylink_data['pylinkage']:
+        # Legacy format (simple 4-bar from tests/)
+        joints = pylink_data['pylinkage']['joints']
+        print(f'Joints ({len(joints)}):')
+        for j in joints:
+            if j['type'] == 'Static':
+                print(f"  - {j['name']} ({j['type']}) at ({j['x']}, {j['y']})")
+            elif j['type'] == 'Crank':
+                print(f"  - {j['name']} ({j['type']}) distance={j['distance']}")
+            elif j['type'] == 'Revolute':
+                print(f"  - {j['name']} ({j['type']}) d0={j['distance0']}, d1={j['distance1']}")
+    elif 'linkage' in pylink_data and 'nodes' in pylink_data['linkage']:
+        # Hypergraph format (complex mechanisms)
+        nodes = pylink_data['linkage']['nodes']
+        edges = pylink_data['linkage']['edges']
+        print(f'Joints ({len(nodes)}):')
+        for name, node in list(nodes.items())[:6]:  # Show first 6
+            role = node.get('role', 'unknown')
+            print(f'  - {name} ({role})')
+        if len(nodes) > 6:
+            print(f'  - ... and {len(nodes) - 6} more joints')
+        print(f'Links ({len(edges)}):')
+        non_ground_edges = [e for e in edges.values() if e.get('id') != 'ground']
+        for edge in non_ground_edges[:5]:  # Show first 5
+            print(f"  - {edge['id']}: {edge['source']} -> {edge['target']} ({edge['distance']:.1f})")
+        if len(non_ground_edges) > 5:
+            print(f'  - ... and {len(non_ground_edges) - 5} more links')
+
+    # Extract dimensions (auto-detects hypergraph vs legacy format)
     dim_spec = extract_dimensions(pylink_data, bounds_factor=BOUNDS_FACTOR, min_length=MIN_LENGTH)
 
     # Store initial dimensions
     initial_dims = {name: val for name, val in zip(dim_spec.names, dim_spec.initial_values)}
 
-    print(f'\nOptimizable dimensions:')
-    for name, initial, bounds in zip(dim_spec.names, dim_spec.initial_values, dim_spec.bounds):
+    print(f'\nOptimizable dimensions: {len(dim_spec)}')
+    # Show first 6 dimensions, summarize if more
+    dims_to_show = list(zip(dim_spec.names, dim_spec.initial_values, dim_spec.bounds))
+    for name, initial, bounds in dims_to_show[:6]:
         print(f'  - {name}: {initial:.2f} (bounds: {bounds[0]:.2f} - {bounds[1]:.2f})')
+    if len(dims_to_show) > 6:
+        print(f'  - ... and {len(dims_to_show) - 6} more dimensions')
 
     # -------------------------------------------------------------------------
     # Step 2: Create ACHIEVABLE target trajectory
@@ -292,16 +257,72 @@ def main():
 
     print(f'\nTarget generation strategy: randomize dimensions by ±{DIMENSION_RANDOMIZE_RANGE*100:.0f}%')
     print('(This ensures the target trajectory is actually achievable!)')
+    print(f'Target joint: {target_joint}')
 
-    target_joint = 'coupler_rocker_joint'  # The "output" joint we want to optimize
+    # =========================================================================
+    # Target Generation Configuration Examples
+    # =========================================================================
+    #
+    # VARIATION 1: Adjust all links uniformly (default behavior)
+    # ----------------------------------------------------------
+    # All dimensions vary by the same percentage range.
+    #
+    target_config = AchievableTargetConfig(
+        dimension_variation=DimensionVariationConfig(
+            default_variation_range=DIMENSION_RANDOMIZE_RANGE,  # ±35% for all
+        ),
+        random_seed=RANDOM_SEED,
+    )
+    #
+    # VARIATION 2: Selective adjustment with per-link control
+    # --------------------------------------------------------
+    # Exclude some links, or use custom percentage limits per link.
+    # Dimension names come from dim_spec.names (e.g., 'crank_distance',
+    # 'coupler_rocker_joint_distance0', 'coupler_rocker_joint_distance1').
+    #
+    # target_config = AchievableTargetConfig(
+    #     dimension_variation=DimensionVariationConfig(
+    #         default_variation_range=0.3,  # ±30% default
+    #         # Exclude specific dimensions from variation (keep at initial value)
+    #         exclude_dimensions=['crank_distance'],
+    #         # Override range for specific dimensions: (enabled, min_pct, max_pct)
+    #         dimension_overrides={
+    #             'coupler_rocker_joint_distance0': (True, -0.5, 0.5),  # ±50%
+    #             'coupler_rocker_joint_distance1': (True, -0.1, 0.1),  # ±10% (tight)
+    #         },
+    #     ),
+    #     random_seed=RANDOM_SEED,
+    # )
+    #
+    # VARIATION 3: Adjust all links AND static joint positions
+    # ---------------------------------------------------------
+    # Move static/ground joints in addition to varying link lengths.
+    # Useful for testing optimizer robustness to frame changes.
+    #
+    # target_config = AchievableTargetConfig(
+    #     dimension_variation=DimensionVariationConfig(
+    #         default_variation_range=0.25,  # ±25% for links
+    #     ),
+    #     static_joint_movement=StaticJointMovementConfig(
+    #         enabled=True,
+    #         max_x_movement=10.0,  # ±10 units in X
+    #         max_y_movement=10.0,  # ±10 units in Y
+    #         # Optionally control per-joint: (enabled, max_x, max_y)
+    #         # joint_overrides={'ground': (False, 0, 0)},  # Keep ground fixed
+    #     ),
+    #     random_seed=RANDOM_SEED,
+    # )
+    # =========================================================================
 
-    target, target_dims, target_pylink_data = create_achievable_target(
+    achievable_result = create_achievable_target(
         pylink_data,
         target_joint,
         dim_spec,
-        randomize_range=DIMENSION_RANDOMIZE_RANGE,
-        seed=RANDOM_SEED
+        config=target_config,
     )
+    target = achievable_result.target
+    target_dims = achievable_result.target_dimensions
+    target_pylink_data = achievable_result.target_pylink_data
 
     print(f'\nTarget joint: {target.joint_name}')
     print(f'Target trajectory: {target.n_steps} points')
@@ -536,7 +557,6 @@ def main():
         print('\n⚠ MODERATE: Trajectory error < 10.0 - Moderate fit')
     else:
         print('\n✗ POOR: Trajectory error >= 10.0 - Poor fit, may need more iterations or different bounds')
-
 
 
 if __name__ == '__main__':

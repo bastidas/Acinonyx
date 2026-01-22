@@ -8,12 +8,12 @@ Reference: https://docs.scipy.org/doc/scipy/reference/generated/scipy.optimize.m
 
 License: scipy is BSD licensed (permissive for commercial use)
 """
-
 from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import Literal, TYPE_CHECKING
+from typing import Literal
+from typing import TYPE_CHECKING
 
 import numpy as np
 from scipy.optimize import minimize
@@ -44,7 +44,7 @@ class ScipyConfig:
         tolerance: Convergence tolerance
     """
 
-    method: str = "L-BFGS-B"
+    method: str = 'L-BFGS-B'
     max_iterations: int = 100
     tolerance: float = 1e-6
 
@@ -56,15 +56,15 @@ class ScipyConfig:
 
 def run_scipy_optimization(
     pylink_data: dict,
-    target: "TargetTrajectory",
-    dimension_spec: "DimensionSpec | None" = None,
+    target: TargetTrajectory,
+    dimension_spec: DimensionSpec | None = None,
     config: ScipyConfig | None = None,
-    metric: str = "mse",
+    metric: str = 'mse',
     verbose: bool = True,
     phase_invariant: bool = True,
-    phase_align_method: Literal["rotation", "fft", "frechet"] = "rotation",
+    phase_align_method: Literal['rotation', 'fft', 'frechet'] = 'rotation',
     **kwargs,
-) -> "OptimizationResult":
+) -> OptimizationResult:
     """
     Run optimization using scipy.optimize.minimize.
 
@@ -119,9 +119,9 @@ def run_scipy_optimization(
         config = ScipyConfig()
 
     # Allow kwargs to override config
-    method = kwargs.get("method", config.method)
-    max_iterations = kwargs.get("max_iterations", config.max_iterations)
-    tolerance = kwargs.get("tolerance", config.tolerance)
+    method = kwargs.get('method', config.method)
+    max_iterations = kwargs.get('max_iterations', config.max_iterations)
+    tolerance = kwargs.get('tolerance', config.tolerance)
 
     # Extract dimensions if not provided
     if dimension_spec is None:
@@ -131,7 +131,7 @@ def run_scipy_optimization(
         return OptimizationResult(
             success=False,
             optimized_dimensions={},
-            error="No optimizable dimensions found",
+            error='No optimizable dimensions found',
         )
 
     # Create fitness function
@@ -150,10 +150,10 @@ def run_scipy_optimization(
     initial_error = fitness(initial_values)
 
     if verbose:
-        logger.info(f"Starting scipy optimization ({method})")
-        logger.info(f"  Dimensions: {len(dimension_spec)}")
-        logger.info(f"  Initial error: {initial_error:.4f}")
-        logger.info(f"  Phase invariant: {phase_invariant}")
+        logger.info(f'Starting scipy optimization ({method})')
+        logger.info(f'  Dimensions: {len(dimension_spec)}')
+        logger.info(f'  Initial error: {initial_error:.4f}')
+        logger.info(f'  Phase invariant: {phase_invariant}')
 
     # Convert bounds to scipy format: [(low, high), ...]
     scipy_bounds = dimension_spec.bounds
@@ -165,27 +165,27 @@ def run_scipy_optimization(
         error = fitness(tuple(xk))
         history.append(error)
         if verbose and len(history) % 10 == 0:
-            logger.info(f"  Iteration {len(history)}: error={error:.4f}")
+            logger.info(f'  Iteration {len(history)}: error={error:.4f}')
 
     # Run optimization
     try:
         # Build options dict based on method
-        options = {"maxiter": max_iterations}
+        options = {'maxiter': max_iterations}
 
         # Different methods use different tolerance parameter names
-        if method in ("L-BFGS-B", "SLSQP"):
-            options["ftol"] = tolerance
-        elif method == "Powell":
-            options["ftol"] = tolerance
-        elif method == "Nelder-Mead":
-            options["xatol"] = tolerance
-            options["fatol"] = tolerance
+        if method in ('L-BFGS-B', 'SLSQP'):
+            options['ftol'] = tolerance
+        elif method == 'Powell':
+            options['ftol'] = tolerance
+        elif method == 'Nelder-Mead':
+            options['xatol'] = tolerance
+            options['fatol'] = tolerance
 
         result = minimize(
             fun=fitness,
             x0=initial_values,
             method=method,
-            bounds=scipy_bounds if method in ("L-BFGS-B", "SLSQP") else None,
+            bounds=scipy_bounds if method in ('L-BFGS-B', 'SLSQP') else None,
             options=options,
             callback=callback,
         )
@@ -205,10 +205,10 @@ def run_scipy_optimization(
         optimized_dims = dimensions_to_dict(optimized_values, dimension_spec)
 
         if verbose:
-            logger.info(f"  Converged: {result.success}")
-            logger.info(f"  Final error: {final_error:.4f}")
-            logger.info(f"  Iterations: {result.nit}")
-            logger.info(f"  Function evals: {result.nfev}")
+            logger.info(f'  Converged: {result.success}')
+            logger.info(f'  Final error: {final_error:.4f}')
+            logger.info(f'  Iterations: {result.nit}')
+            logger.info(f'  Function evals: {result.nfev}')
 
         return OptimizationResult(
             success=result.success,
@@ -221,10 +221,10 @@ def run_scipy_optimization(
         )
 
     except Exception as e:
-        logger.error(f"Scipy optimization failed: {e}")
+        logger.error(f'Scipy optimization failed: {e}')
         return OptimizationResult(
             success=False,
             optimized_dimensions={},
             initial_error=initial_error,
-            error=f"Optimization failed: {str(e)}",
+            error=f'Optimization failed: {str(e)}',
         )

@@ -1,0 +1,241 @@
+{
+  "name": "untitled",
+  "version": "2.0.0",
+  "linkage": {
+    "name": "untitled",
+    "nodes": {
+      "joint_0": {
+        "id": "joint_0",
+        "position": [
+          180,
+          72.71354166666667
+        ],
+        "role": "fixed",
+        "jointType": "revolute",
+        "name": "joint_0"
+      },
+      "joint_1": {
+        "id": "joint_1",
+        "position": [
+          192.5415827544613,
+          79.46545586056553
+        ],
+        "role": "crank",
+        "jointType": "revolute",
+        "name": "joint_1",
+        "angle": -0.7645678433612312,
+        "initialAngle": -0.7645678433612312
+      },
+      "joint_5": {
+        "id": "joint_5",
+        "position": [
+          127.30697706889714,
+          26.033176362524557
+        ],
+        "role": "follower",
+        "jointType": "revolute",
+        "name": "joint_5"
+      },
+      "joint_6": {
+        "id": "joint_6",
+        "position": [
+          122.16666666666667,
+          84.71354166666667
+        ],
+        "role": "fixed",
+        "jointType": "revolute",
+        "name": "joint_6"
+      },
+      "joint_7": {
+        "id": "joint_7",
+        "position": [
+          66.49456510135138,
+          88.4421355525686
+        ],
+        "role": "follower",
+        "jointType": "revolute",
+        "name": "joint_7"
+      },
+      "joint_9": {
+        "id": "joint_9",
+        "position": [
+          147.3552928474933,
+          137.8937349022014
+        ],
+        "role": "follower",
+        "jointType": "revolute",
+        "name": "joint_9"
+      },
+      "foot": {
+        "id": "foot",
+        "position": [
+          79.6691990426213,
+          210.19835077247924
+        ],
+        "role": "follower",
+        "jointType": "revolute",
+        "name": "foot"
+      },
+      "joint_8": {
+        "id": "joint_8",
+        "position": [
+          90.02792468048838,
+          117.42637704562868
+        ],
+        "role": "follower",
+        "jointType": "revolute",
+        "name": "joint_8"
+      }
+    },
+    "edges": {
+      "link_8": {
+        "id": "link_8",
+        "source": "joint_1",
+        "target": "joint_5",
+        "distance": 84.32414998864684
+      },
+      "link_9": {
+        "id": "link_9",
+        "source": "joint_5",
+        "target": "joint_6",
+        "distance": 58.90507671889447
+      },
+      "link_10": {
+        "id": "link_10",
+        "source": "joint_6",
+        "target": "joint_7",
+        "distance": 55.79682163945153
+      },
+      "link_11": {
+        "id": "link_11",
+        "source": "joint_7",
+        "target": "joint_5",
+        "distance": 87.13798044765029
+      },
+      "link_14": {
+        "id": "link_14",
+        "source": "joint_9",
+        "target": "joint_6",
+        "distance": 58.84385984490006
+      },
+      "link_15": {
+        "id": "link_15",
+        "source": "joint_9",
+        "target": "joint_1",
+        "distance": 73.86247076373647
+      },
+      "link_17": {
+        "id": "link_17",
+        "source": "foot",
+        "target": "joint_9",
+        "distance": 99.04223730666813
+      },
+      "link_18": {
+        "id": "link_18",
+        "source": "joint_0",
+        "target": "joint_1",
+        "distance": 14.243582529292768
+      },
+      "link_12": {
+        "id": "link_12",
+        "source": "joint_9",
+        "target": "joint_8",
+        "distance": 60.871503009079184
+      },
+      "link_13": {
+        "id": "link_13",
+        "source": "joint_8",
+        "target": "joint_7",
+        "distance": 37.335040752743076
+      },
+      "link_16": {
+        "id": "link_16",
+        "source": "joint_8",
+        "target": "foot",
+        "distance": 93.34849921673114
+      }
+    },
+    "hyperedges": {}
+  },
+  "meta": {
+    "nodes": {
+      "joint_0": {
+        "color": "",
+        "zlevel": 0,
+        "showPath": 0
+      },
+      "joint_1": {
+        "color": "",
+        "zlevel": 0,
+        "showPath": 0
+      },
+      "joint_5": {
+        "color": "",
+        "zlevel": 0,
+        "showPath": 1
+      },
+      "joint_6": {
+        "color": "",
+        "zlevel": 0,
+        "showPath": 0
+      },
+      "joint_7": {
+        "color": "",
+        "zlevel": 0,
+        "showPath": 1
+      },
+      "joint_9": {
+        "color": "",
+        "zlevel": 0,
+        "showPath": 1
+      },
+      "foot": {
+        "color": "",
+        "zlevel": 0,
+        "showPath": 1
+      },
+      "joint_8": {
+        "color": "",
+        "zlevel": 0,
+        "showPath": 1
+      }
+    },
+    "edges": {
+      "link_8": {
+        "color": "#bcbd22"
+      },
+      "link_9": {
+        "color": "#17becf"
+      },
+      "link_10": {
+        "color": "#1f77b4"
+      },
+      "link_11": {
+        "color": "#ff7f0e"
+      },
+      "link_14": {
+        "color": "#9467bd"
+      },
+      "link_15": {
+        "color": "#8c564b"
+      },
+      "link_17": {
+        "color": "#7f7f7f"
+      },
+      "link_18": {
+        "color": "#1f77b4"
+      },
+      "link_12": {
+        "color": "#bcbd22"
+      },
+      "link_13": {
+        "color": "#17becf"
+      },
+      "link_16": {
+        "color": "#1f77b4"
+      }
+    }
+  },
+  "n_steps": 64,
+  "saved_at": "20260121_151334"
+}

@@ -1,0 +1,107 @@
+{
+  "name": "4bar",
+  "version": "2.0.0",
+  "linkage": {
+    "name": "4bar",
+    "nodes": {
+      "crank_anchor": {
+        "id": "crank_anchor",
+        "position": [
+          90,
+          90
+        ],
+        "role": "fixed",
+        "jointType": "revolute",
+        "name": "crank_anchor"
+      },
+      "rocker_anchor": {
+        "id": "rocker_anchor",
+        "position": [
+          150,
+          90
+        ],
+        "role": "fixed",
+        "jointType": "revolute",
+        "name": "rocker_anchor"
+      },
+      "crank": {
+        "id": "crank",
+        "position": [
+          109.31851335679295,
+          95.1763927288617
+        ],
+        "role": "crank",
+        "jointType": "revolute",
+        "angle": 0.2618,
+        "name": "crank"
+      },
+      "coupler_rocker_joint": {
+        "id": "coupler_rocker_joint",
+        "position": [
+          145.44808823939562,
+          129.74015726344916
+        ],
+        "role": "follower",
+        "jointType": "revolute",
+        "name": "coupler_rocker_joint"
+      }
+    },
+    "edges": {
+      "ground": {
+        "id": "ground",
+        "source": "crank_anchor",
+        "target": "rocker_anchor",
+        "distance": 60
+      },
+      "crank_link": {
+        "id": "crank_link",
+        "source": "crank_anchor",
+        "target": "crank",
+        "distance": 20
+      },
+      "coupler": {
+        "id": "coupler",
+        "source": "crank",
+        "target": "coupler_rocker_joint",
+        "distance": 50
+      },
+      "rocker": {
+        "id": "rocker",
+        "source": "coupler_rocker_joint",
+        "target": "rocker_anchor",
+        "distance": 40
+      }
+    },
+    "hyperedges": {}
+  },
+  "meta": {
+    "nodes": {
+      "crank": {
+        "color": "#ff7f0e",
+        "zlevel": 0,
+        "showPath": true
+      },
+      "coupler_rocker_joint": {
+        "color": "#2ca02c",
+        "zlevel": 0,
+        "showPath": true
+      }
+    },
+    "edges": {
+      "ground": {
+        "color": "#7f7f7f",
+        "isGround": true
+      },
+      "crank_link": {
+        "color": "#ff7f0e"
+      },
+      "coupler": {
+        "color": "#2ca02c"
+      },
+      "rocker": {
+        "color": "#1f77b4"
+      }
+    }
+  },
+  "saved_at": "20260121_105401"
+}

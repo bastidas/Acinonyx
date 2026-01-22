@@ -1,5 +1,5 @@
 """
-Test for pylink trajectory computation using query_api endpoints.
+Test for pylink trajectory computation using acinonyx_api endpoints.
 
 This test validates:
 - Copying test file to pygraphs directory
@@ -13,9 +13,9 @@ import json
 import sys
 from pathlib import Path
 
-from backend.query_api import compute_pylink_trajectory
-from backend.query_api import load_pylink_graph
-from backend.query_api import save_pylink_graph
+from backend.acinonyx_api import compute_pylink_trajectory
+from backend.acinonyx_api import load_pylink_graph
+from backend.acinonyx_api import save_pylink_graph
 
 # Add project root to path
 project_root = Path(__file__).parent.parent
@@ -28,7 +28,7 @@ def test_4bar_trajectory():
     """Test loading and computing trajectory for 4bar linkage"""
 
     # Load the 4bar test file
-    test_file = Path(__file__).parent / '4bar_test.json'
+    test_file = Path(__file__).parent.parent / 'demo' / 'test_graphs' / '4bar.json'
 
     with open(test_file) as f:
         pylink_data = json.load(f)

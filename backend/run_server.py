@@ -17,4 +17,4 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 if __name__ == '__main__':
     print(f'🐆 Starting Acinonyx Backend Server on port {BACKEND_PORT}...')
-    uvicorn.run('query_api:app', host='0.0.0.0', port=BACKEND_PORT, reload=True)
+    uvicorn.run('acinonyx_api:app', host='0.0.0.0', port=BACKEND_PORT, reload=True)

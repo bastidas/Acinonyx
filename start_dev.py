@@ -28,7 +28,7 @@ def start_frontend():
     """Start the frontend server"""
     print(f'⚛️  Starting Acinonyx Frontend on port {FRONTEND_PORT}...')
     frontend_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'frontend')
-    
+
     # Check if node_modules exists, if not, install dependencies
     if not os.path.exists(os.path.join(frontend_dir, 'node_modules')):
         print('📦 Installing frontend dependencies (first run)...')
@@ -39,7 +39,7 @@ def start_frontend():
         )
         if install_process.returncode != 0:
             raise RuntimeError('Failed to install frontend dependencies')
-    
+
     frontend_process = subprocess.Popen(
         ['npm', 'run', 'dev'],
         cwd=frontend_dir,

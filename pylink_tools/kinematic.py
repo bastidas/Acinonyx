@@ -2,37 +2,31 @@
 kinematic.py - Core linkage kinematics and trajectory computation.
 
 This module provides reusable functions for:
-  - Building pylinkage Joint objects from serialized data
-  - Computing joint positions (circle-circle intersection, crank geometry)
+  - Building pylinkage Linkage objects from serialized data
   - Running forward kinematics (trajectory simulation)
-  - (Future) Optimization routines for linkage synthesis
+  - Mechanism validation
 
 Design notes:
-  - Functions are pure where possible (no side effects)
-  - Separation of concerns: parsing, geometry, simulation, optimization
-  - Compatible with pylinkage's optimization API (trials, PSO)
+  - Uses pylinkage's native hypergraph module for v2.0 format
+  - Falls back to pylinkage's serialization for legacy format
+  - Compatible with pylinkage's optimization API
 """
 from __future__ import annotations
 
+import math
 from typing import Any
-from typing import Union
-
-import numpy as np
-from pylinkage.joints import Crank
-from pylinkage.joints import Revolute
-from pylinkage.linkage import Linkage
 
 from pylink_tools.schemas import MechanismGroup
 from pylink_tools.schemas import TrajectoryResult
 
 
 # =============================================================================
-# Hypergraph Format Conversion (v2.0.0 LinkageDocument -> Legacy PylinkDocument)
+# Format Detection
 # =============================================================================
 
 def is_hypergraph_format(data: dict) -> bool:
     """
-    Check if data is in new hypergraph format (v2.0.0 LinkageDocument).
+    Check if data is in hypergraph format (v2.0.0 LinkageDocument).
 
     Hypergraph format has: linkage.nodes, linkage.edges
     Legacy format has: pylinkage.joints
@@ -40,963 +34,126 @@ def is_hypergraph_format(data: dict) -> bool:
     return 'linkage' in data and 'nodes' in data.get('linkage', {})
 
 
-def convert_hypergraph_to_legacy(doc: dict, verbose: bool = False) -> dict:
+def is_legacy_format(data: dict) -> bool:
     """
-    Convert hypergraph LinkageDocument to legacy PylinkDocument format.
-
-    This allows the backend to support both formats until full migration.
-
-    Hypergraph format (v2.0.0):
-        {
-            "linkage": {
-                "nodes": { "id": { "id", "position", "role", "angle", ... }, ... },
-                "edges": { "id": { "id", "source", "target", "distance" }, ... }
-            },
-            "meta": { "nodes": {...}, "edges": {...} }
-        }
-
-    Legacy format:
-        {
-            "pylinkage": {
-                "joints": [{ "type", "name", "x"/"y" or "joint0"/"distance", ... }],
-                "solve_order": [...]
-            },
-            "meta": { "joints": {...}, "links": {...} }
-        }
+    Check if data is in legacy format (pylinkage.joints).
     """
-    linkage = doc.get('linkage', {})
-    nodes = linkage.get('nodes', {})
-    edges = linkage.get('edges', {})
-    meta = doc.get('meta', {})
-    node_meta = meta.get('nodes', {})
-    edge_meta = meta.get('edges', {})
-
-    if verbose:
-        print(f'  Converting hypergraph format: {len(nodes)} nodes, {len(edges)} edges')
-
-    # Build adjacency: node_id -> list of (edge_id, other_node_id, distance)
-    adjacency: dict[str, list[tuple[str, str, float]]] = {nid: [] for nid in nodes}
-    for edge_id, edge in edges.items():
-        src, tgt = edge['source'], edge['target']
-        dist = edge.get('distance', 0)
-        if src in adjacency:
-            adjacency[src].append((edge_id, tgt, dist))
-        if tgt in adjacency:
-            adjacency[tgt].append((edge_id, src, dist))
-
-    # Sort nodes by role priority: fixed -> crank -> follower
-    role_order = {'fixed': 0, 'crank': 1, 'driven': 1, 'follower': 2}
-    sorted_nodes = sorted(
-        nodes.values(),
-        key=lambda n: (role_order.get(n.get('role', 'follower'), 3), n.get('id', '')),
-    )
-
-    # Track which joints have been processed (for dependency resolution)
-    processed = set()
-    joints = []
-    joints_meta = {}
-    validation_issues = []
-
-    # First pass: process fixed and crank nodes
-    for node in sorted_nodes:
-        nid = node['id']
-        role = node.get('role', 'follower')
-        pos = node.get('position', [0, 0])
-        nmeta = node_meta.get(nid, {})
-
-        if role == 'fixed':
-            joints.append({
-                'type': 'Static',
-                'name': nid,
-                'x': pos[0],
-                'y': pos[1],
-            })
-            processed.add(nid)
-
-        elif role in ('crank', 'driven'):
-            # Find parent (fixed node connected via edge)
-            parent_id = None
-            distance = 0
-
-            for edge_id, other_id, dist in adjacency.get(nid, []):
-                other_node = nodes.get(other_id, {})
-                if other_node.get('role') == 'fixed':
-                    parent_id = other_id
-                    distance = dist
-                    break
-
-            if parent_id:
-                joints.append({
-                    'type': 'Crank',
-                    'name': nid,
-                    'joint0': {'ref': parent_id},
-                    'distance': distance,
-                    'angle': node.get('angle', 0),
-                })
-                processed.add(nid)
-            else:
-                validation_issues.append(f"Crank '{nid}' has no fixed parent")
-
-        # Save meta
-        joints_meta[nid] = {
-            'color': nmeta.get('color', ''),
-            'zlevel': nmeta.get('zlevel', 0),
-            'x': pos[0],
-            'y': pos[1],
-            'show_path': nmeta.get('showPath', True),
-        }
-
-    # Second pass: process follower nodes (need two processed parents)
-    max_iterations = len(sorted_nodes)
-    iteration = 0
-
-    while iteration < max_iterations:
-        iteration += 1
-        made_progress = False
-
-        for node in sorted_nodes:
-            nid = node['id']
-            if nid in processed:
-                continue
-
-            role = node.get('role', 'follower')
-            if role not in ('follower',):
-                continue
-
-            # Find two processed parent nodes
-            parents = []
-            for edge_id, other_id, dist in adjacency.get(nid, []):
-                if other_id in processed:
-                    parents.append((other_id, dist))
-                    if len(parents) >= 2:
-                        break
-
-            if len(parents) >= 2:
-                joints.append({
-                    'type': 'Revolute',
-                    'name': nid,
-                    'joint0': {'ref': parents[0][0]},
-                    'joint1': {'ref': parents[1][0]},
-                    'distance0': parents[0][1],
-                    'distance1': parents[1][1],
-                })
-                processed.add(nid)
-                made_progress = True
-            elif len(parents) == 1:
-                # Underconstrained: only one parent
-                # This joint cannot be kinematically simulated
-                pass
-            elif len(parents) == 0:
-                # No connections to processed joints yet
-                pass
-
-        if not made_progress:
-            break
-
-    # Check for unprocessed nodes (underconstrained)
-    unprocessed = set(nodes.keys()) - processed
-    if unprocessed and verbose:
-        print(f'  Warning: Underconstrained nodes (cannot simulate): {unprocessed}')
-        for nid in unprocessed:
-            edge_count = len(adjacency.get(nid, []))
-            validation_issues.append(
-                f"Node '{nid}' is underconstrained ({edge_count} edge(s), need 2 for Revolute)",
-            )
-
-    # Convert edges to links
-    links_meta = {}
-    for edge_id, edge in edges.items():
-        emeta = edge_meta.get(edge_id, {})
-        links_meta[edge_id] = {
-            'color': emeta.get('color', '#888888'),
-            'connects': [edge['source'], edge['target']],
-            'isGround': emeta.get('isGround', False),
-        }
-
-    legacy = {
-        'name': doc.get('name', 'converted'),
-        'pylinkage': {
-            'name': linkage.get('name', 'converted'),
-            'joints': joints,
-            'solve_order': [j['name'] for j in joints],
-        },
-        'meta': {
-            'joints': joints_meta,
-            'links': links_meta,
-        },
-        '_validation_issues': validation_issues,
-        '_unprocessed_nodes': list(unprocessed),
-    }
-
-    return legacy
-
-
-def convert_legacy_to_hypergraph(legacy: dict, verbose: bool = False) -> dict:
-    """
-    Convert legacy PylinkDocument to hypergraph LinkageDocument format (v2.0.0).
-
-    This is used to return results in the new format after internal processing.
-
-    Legacy format:
-        {
-            "pylinkage": {
-                "joints": [{ "type", "name", "x"/"y" or "joint0"/"distance", ... }],
-                "solve_order": [...]
-            },
-            "meta": { "joints": {...}, "links": {...} }
-        }
-
-    Hypergraph format (v2.0.0):
-        {
-            "linkage": {
-                "nodes": { "id": { "id", "position", "role", "angle", ... }, ... },
-                "edges": { "id": { "id", "source", "target", "distance" }, ... }
-            },
-            "meta": { "nodes": {...}, "edges": {...} }
-        }
-    """
-    pylinkage = legacy.get('pylinkage', {})
-    joints = pylinkage.get('joints', [])
-    meta = legacy.get('meta', {})
-    joints_meta = meta.get('joints', {})
-    links_meta = meta.get('links', {})
-
-    if verbose:
-        print(f'  Converting legacy format: {len(joints)} joints, {len(links_meta)} links')
-
-    # Convert joints to nodes
-    nodes = {}
-    node_meta = {}
-
-    for joint in joints:
-        jtype = joint.get('type', 'Static')
-        name = joint.get('name', '')
-        jmeta = joints_meta.get(name, {})
-
-        # Determine position
-        if jtype == 'Static':
-            position = [joint.get('x', 0), joint.get('y', 0)]
-        else:
-            # Use meta position if available, otherwise [0, 0]
-            position = [jmeta.get('x', 0), jmeta.get('y', 0)]
-
-        # Map joint type to role
-        if jtype == 'Static':
-            role = 'fixed'
-        elif jtype == 'Crank':
-            role = 'crank'
-        else:
-            role = 'follower'
-
-        # Build node
-        node = {
-            'id': name,
-            'position': position,
-            'role': role,
-            'jointType': 'revolute',
-            'name': name,
-        }
-
-        # Add angle for crank nodes
-        if jtype == 'Crank':
-            node['angle'] = joint.get('angle', 0)
-
-        nodes[name] = node
-
-        # Build node meta
-        if jmeta:
-            node_meta[name] = {
-                'color': jmeta.get('color', ''),
-                'zlevel': jmeta.get('zlevel', 0),
-                'showPath': jmeta.get('show_path', role != 'fixed'),
-            }
-
-    # Convert links to edges
-    edges = {}
-    edge_meta = {}
-
-    for link_name, link in links_meta.items():
-        connects = link.get('connects', [])
-        if len(connects) >= 2:
-            source_id, target_id = connects[0], connects[1]
-
-            # Calculate distance from node positions
-            source_node = nodes.get(source_id, {})
-            target_node = nodes.get(target_id, {})
-            source_pos = source_node.get('position', [0, 0])
-            target_pos = target_node.get('position', [0, 0])
-
-            distance = np.sqrt(
-                (target_pos[0] - source_pos[0]) ** 2 +
-                (target_pos[1] - source_pos[1]) ** 2,
-            )
-
-            edges[link_name] = {
-                'id': link_name,
-                'source': source_id,
-                'target': target_id,
-                'distance': distance,
-            }
-
-            edge_meta[link_name] = {
-                'color': link.get('color', '#888888'),
-                'isGround': link.get('isGround', False),
-            }
-
-    return {
-        'name': legacy.get('name', 'converted'),
-        'version': '2.0.0',
-        'linkage': {
-            'name': pylinkage.get('name', 'converted'),
-            'nodes': nodes,
-            'edges': edges,
-            'hyperedges': {},
-        },
-        'meta': {
-            'nodes': node_meta,
-            'edges': edge_meta,
-        },
-    }
+    return 'pylinkage' in data and 'joints' in data.get('pylinkage', {})
 
 
 # =============================================================================
-# Position Computation (Circle-Circle Intersection, Crank Geometry)
-# =============================================================================
-
-def compute_joint_position(
-    jdata: dict,
-    joint_info: dict[str, dict],
-    meta_joints: dict[str, dict],
-    computed_positions: dict[str, tuple[float, float]] | None = None,
-) -> tuple[float, float]:
-    """
-    Compute the position for a joint from meta data or geometric constraints.
-
-    Priority:
-      1. meta_joints (UI-specified position)
-      2. Stored x, y (for Static joints)
-      3. Calculated from parent joints (Crank, Revolute)
-
-    Args:
-        jdata: Joint data dict with 'name', 'type', and constraint info
-        joint_info: Map of joint_name -> joint_data for all joints
-        meta_joints: Map of joint_name -> meta info (may contain UI x, y)
-        computed_positions: Cache of already-computed positions (for recursion)
-
-    Returns:
-        (x, y) position tuple
-    """
-    if computed_positions is None:
-        computed_positions = {}
-
-    name = jdata['name']
-    jtype = jdata['type']
-
-    # Check cache first
-    if name in computed_positions:
-        return computed_positions[name]
-
-    # Priority 1: Check meta for stored UI position
-    if name in meta_joints:
-        meta_j = meta_joints[name]
-        if meta_j.get('x') is not None and meta_j.get('y') is not None:
-            pos = (meta_j['x'], meta_j['y'])
-            computed_positions[name] = pos
-            return pos
-
-    # Priority 2: For Static joints, use stored x, y
-    if jtype == 'Static':
-        pos = (jdata['x'], jdata['y'])
-        computed_positions[name] = pos
-        return pos
-
-    # Priority 3: Calculate from parent joints
-    if jtype == 'Crank':
-        pos = _compute_crank_position(jdata, joint_info, meta_joints, computed_positions)
-    elif jtype == 'Revolute':
-        pos = _compute_revolute_position(jdata, joint_info, meta_joints, computed_positions)
-    else:
-        pos = (0.0, 0.0)
-
-    computed_positions[name] = pos
-    return pos
-
-
-def _compute_crank_position(
-    jdata: dict,
-    joint_info: dict[str, dict],
-    meta_joints: dict[str, dict],
-    computed_positions: dict[str, tuple[float, float]],
-) -> tuple[float, float]:
-    """Compute crank position from parent + distance + angle."""
-    parent_name = jdata['joint0']['ref']
-    parent_jdata = joint_info[parent_name]
-    parent_pos = compute_joint_position(parent_jdata, joint_info, meta_joints, computed_positions)
-
-    distance = jdata['distance']
-    angle = jdata.get('angle', 0)
-
-    x = parent_pos[0] + distance * np.cos(angle)
-    y = parent_pos[1] + distance * np.sin(angle)
-    return (x, y)
-
-
-def _compute_revolute_position(
-    jdata: dict,
-    joint_info: dict[str, dict],
-    meta_joints: dict[str, dict],
-    computed_positions: dict[str, tuple[float, float]],
-) -> tuple[float, float]:
-    """Compute revolute position via circle-circle intersection."""
-    parent0_name = jdata['joint0']['ref']
-    parent1_name = jdata['joint1']['ref']
-
-    parent0_jdata = joint_info[parent0_name]
-    parent1_jdata = joint_info[parent1_name]
-
-    pos0 = compute_joint_position(parent0_jdata, joint_info, meta_joints, computed_positions)
-    pos1 = compute_joint_position(parent1_jdata, joint_info, meta_joints, computed_positions)
-
-    d0 = jdata['distance0']
-    d1 = jdata['distance1']
-
-    return circle_circle_intersection(pos0, d0, pos1, d1)
-
-
-def circle_circle_intersection(
-    center0: tuple[float, float],
-    radius0: float,
-    center1: tuple[float, float],
-    radius1: float,
-    prefer_positive_cross: bool = True,
-) -> tuple[float, float]:
-    """
-    Compute intersection point of two circles.
-
-    Returns one of the two intersection points (or midpoint if no intersection).
-
-    Args:
-        center0, radius0: First circle
-        center1, radius1: Second circle
-        prefer_positive_cross: If True, return the "left" intersection (positive cross product)
-
-    Returns:
-        (x, y) intersection point
-    """
-    dx = center1[0] - center0[0]
-    dy = center1[1] - center0[1]
-    d = np.sqrt(dx * dx + dy * dy)
-
-    # Check if circles intersect
-    if d == 0 or d > radius0 + radius1 or d < abs(radius0 - radius1):
-        # No intersection - return midpoint as fallback
-        return ((center0[0] + center1[0]) / 2, (center0[1] + center1[1]) / 2)
-
-    # Standard circle-circle intersection
-    a = (radius0 * radius0 - radius1 * radius1 + d * d) / (2 * d)
-    h_sq = radius0 * radius0 - a * a
-    h = np.sqrt(max(0, h_sq))
-
-    # Point on line between centers
-    px = center0[0] + (a * dx) / d
-    py = center0[1] + (a * dy) / d
-
-    # Two intersection points
-    if prefer_positive_cross:
-        x = px - (h * dy) / d
-        y = py + (h * dx) / d
-    else:
-        x = px + (h * dy) / d
-        y = py - (h * dx) / d
-
-    return (x, y)
-
-
-# =============================================================================
-# Distance Sync (Ensure constraints match visual positions)
-# =============================================================================
-
-def sync_pylink_distances(pylink_data: dict, verbose: bool = False) -> dict:
-    """
-    Sync distances in a pylink_data document to match visual positions.
-
-    This is essential when the frontend saves pylink_data with stale/incorrect
-    distances that don't match the visual joint positions. This function
-    recomputes distances from the visual positions and updates the pylink_data.
-
-    Args:
-        pylink_data: Full pylink document
-        verbose: If True, print sync changes
-
-    Returns:
-        Updated pylink_data with synced distances (modifies in place AND returns)
-
-    Use this before optimization to ensure starting dimensions are valid.
-    """
-    pylinkage_data = pylink_data.get('pylinkage', {})
-    joints_data = pylinkage_data.get('joints', [])
-    meta = pylink_data.get('meta', {})
-    meta_joints = meta.get('joints', {})
-
-    # Build joint info lookup
-    joint_info = {jdata['name']: jdata for jdata in joints_data}
-
-    # Compute visual positions
-    visual_positions = {}
-    for jdata in joints_data:
-        visual_positions[jdata['name']] = compute_joint_position(jdata, joint_info, meta_joints)
-
-    # Sync distances
-    synced_joints = sync_distances_from_visual(joints_data, visual_positions, verbose=verbose)
-
-    # Update the original pylink_data
-    pylink_data['pylinkage']['joints'] = synced_joints
-
-    return pylink_data
-
-
-def sync_distances_from_visual(
-    joints_data: list[dict],
-    visual_positions: dict[str, tuple[float, float]],
-    verbose: bool = False,
-) -> list[dict]:
-    """
-    Update joint distance constraints to match actual visual positions.
-
-    This fixes cases where stored distances don't match the UI positions.
-    Returns a new list with updated distances (does not mutate input).
-
-    Args:
-        joints_data: List of joint data dicts
-        visual_positions: Map of joint_name -> (x, y) from UI
-        verbose: If True, print sync changes
-
-    Returns:
-        Updated joints_data list with synced distances
-    """
-    # Deep copy to avoid mutation
-    import copy
-    updated = copy.deepcopy(joints_data)
-
-    for jdata in updated:
-        jtype = jdata['type']
-        name = jdata['name']
-        my_pos = visual_positions.get(name)
-
-        if my_pos is None:
-            continue
-
-        if jtype == 'Crank':
-            parent_name = jdata['joint0']['ref']
-            parent_pos = visual_positions.get(parent_name)
-            if parent_pos:
-                new_distance = np.sqrt(
-                    (my_pos[0] - parent_pos[0])**2 +
-                    (my_pos[1] - parent_pos[1])**2,
-                )
-                old_distance = jdata['distance']
-                if abs(new_distance - old_distance) > 0.01:
-                    if verbose:
-                        print(f"  [SYNC] Crank '{name}': distance {old_distance:.2f} → {new_distance:.2f}")
-                    jdata['distance'] = new_distance
-
-        elif jtype == 'Revolute':
-            parent0_name = jdata['joint0']['ref']
-            parent1_name = jdata['joint1']['ref']
-            parent0_pos = visual_positions.get(parent0_name)
-            parent1_pos = visual_positions.get(parent1_name)
-
-            if parent0_pos and parent1_pos:
-                new_distance0 = np.sqrt(
-                    (my_pos[0] - parent0_pos[0])**2 +
-                    (my_pos[1] - parent0_pos[1])**2,
-                )
-                new_distance1 = np.sqrt(
-                    (my_pos[0] - parent1_pos[0])**2 +
-                    (my_pos[1] - parent1_pos[1])**2,
-                )
-
-                old_distance0 = jdata['distance0']
-                old_distance1 = jdata['distance1']
-
-                if abs(new_distance0 - old_distance0) > 0.01 or abs(new_distance1 - old_distance1) > 0.01:
-                    if verbose:
-                        print(f"  [SYNC] Revolute '{name}': d0 {old_distance0:.2f} → {new_distance0:.2f}, d1 {old_distance1:.2f} → {new_distance1:.2f}")
-                    jdata['distance0'] = new_distance0
-                    jdata['distance1'] = new_distance1
-
-    return updated
-
-
-# =============================================================================
-# Solve Order Computation (Topological Sort)
-# =============================================================================
-
-def compute_proper_solve_order(joints_data: list[dict], verbose: bool = False) -> list[str]:
-    """
-    Compute proper solve order using topological sort.
-
-    Ensures:
-      1. Static joints come first (they have no dependencies)
-      2. Parent joints are processed before children
-      3. All dependencies are resolved before a joint is built
-
-    Args:
-        joints_data: List of joint data dicts
-        verbose: If True, print sorting info
-
-    Returns:
-        Properly ordered list of joint names
-    """
-    joint_info = {j['name']: j for j in joints_data}
-
-    # Build dependency graph
-    # dependencies[joint_name] = set of joints that must come before it
-    dependencies: dict[str, set] = {}
-
-    for jdata in joints_data:
-        name = jdata['name']
-        jtype = jdata['type']
-
-        if jtype == 'Static':
-            dependencies[name] = set()  # No dependencies
-        elif jtype == 'Crank':
-            parent = jdata['joint0']['ref']
-            dependencies[name] = {parent}
-        elif jtype == 'Revolute':
-            parent0 = jdata['joint0']['ref']
-            parent1 = jdata['joint1']['ref']
-            dependencies[name] = {parent0, parent1}
-        else:
-            dependencies[name] = set()
-
-    # Topological sort using Kahn's algorithm
-    # Start with joints that have no dependencies
-    in_degree = {name: len(deps) for name, deps in dependencies.items()}
-    queue = [name for name, deg in in_degree.items() if deg == 0]
-    result = []
-
-    while queue:
-        # Sort queue to ensure deterministic order (Static joints naturally come first)
-        # Prioritize: Static > Crank > Revolute
-        def sort_key(name):
-            jtype = joint_info[name]['type']
-            priority = {'Static': 0, 'Crank': 1, 'Revolute': 2}
-            return (priority.get(jtype, 3), name)
-
-        queue.sort(key=sort_key)
-        current = queue.pop(0)
-        result.append(current)
-
-        # Remove current from all dependency sets
-        for name, deps in dependencies.items():
-            if current in deps:
-                deps.remove(current)
-                in_degree[name] -= 1
-                if in_degree[name] == 0 and name not in result:
-                    queue.append(name)
-
-    # Check for cycles (joints that couldn't be sorted)
-    if len(result) != len(joints_data):
-        missing = {j['name'] for j in joints_data} - set(result)
-        if verbose:
-            print(f'  Warning: Could not resolve order for joints: {missing}')
-        # Add remaining joints at the end
-        result.extend(sorted(missing))
-
-    if verbose:
-        print(f'  Computed solve_order: {result}')
-
-    return result
-
-
-# =============================================================================
-# Joint Object Building
-# =============================================================================
-
-JointObject = Union[Crank, Revolute, tuple[float, float]]  # Static joints are tuples
-
-
-def build_joint_objects(
-    joints_data: list[dict],
-    solve_order: list[str],
-    joint_info: dict[str, dict],
-    meta_joints: dict[str, dict],
-    angle_per_step: float,
-    verbose: bool = False,
-) -> dict[str, JointObject]:
-    """
-    Build pylinkage Joint objects from serialized data.
-
-    Args:
-        joints_data: List of joint data dicts
-        solve_order: Order to build joints (respects dependencies)
-        joint_info: Map of joint_name -> joint_data
-        meta_joints: Map of joint_name -> meta info
-        angle_per_step: Crank rotation per simulation step
-        verbose: If True, print joint creation info
-
-    Returns:
-        Map of joint_name -> Joint object (or tuple for Static)
-    """
-    joint_objects: dict[str, JointObject] = {}
-    computed_positions: dict[str, tuple[float, float]] = {}
-
-    for joint_name in solve_order:
-        if joint_name not in joint_info:
-            continue
-
-        jdata = joint_info[joint_name]
-        jtype = jdata['type']
-        pos = compute_joint_position(jdata, joint_info, meta_joints, computed_positions)
-
-        if jtype == 'Static':
-            # Static joints are tuple references (implicit Fixed in pylinkage)
-            joint_objects[joint_name] = (jdata['x'], jdata['y'])
-            if verbose:
-                print(f"  Static '{joint_name}' at ({jdata['x']:.1f}, {jdata['y']:.1f})")
-
-        elif jtype == 'Crank':
-            parent_name = jdata['joint0']['ref']
-            parent = joint_objects.get(parent_name)
-
-            if parent is None:
-                if verbose:
-                    print(f"  Warning: Crank '{joint_name}' parent '{parent_name}' not found")
-                continue
-
-            joint_objects[joint_name] = Crank(
-                x=pos[0],
-                y=pos[1],
-                joint0=parent,
-                distance=jdata['distance'],
-                angle=angle_per_step,
-                name=joint_name,
-            )
-            if verbose:
-                print(f"  Crank '{joint_name}' at ({pos[0]:.1f}, {pos[1]:.1f}), dist={jdata['distance']:.1f}")
-
-        elif jtype == 'Revolute':
-            parent0_name = jdata['joint0']['ref']
-            parent1_name = jdata['joint1']['ref']
-            parent0 = joint_objects.get(parent0_name)
-            parent1 = joint_objects.get(parent1_name)
-
-            if parent0 is None or parent1 is None:
-                if verbose:
-                    print(f"  Warning: Revolute '{joint_name}' parents not found")
-                continue
-
-            joint_objects[joint_name] = Revolute(
-                x=pos[0],
-                y=pos[1],
-                joint0=parent0,
-                joint1=parent1,
-                distance0=jdata['distance0'],
-                distance1=jdata['distance1'],
-                name=joint_name,
-            )
-            if verbose:
-                print(f"  Revolute '{joint_name}' at ({pos[0]:.1f}, {pos[1]:.1f}), d0={jdata['distance0']:.1f}, d1={jdata['distance1']:.1f}")
-
-    return joint_objects
-
-
-# =============================================================================
-# Linkage Construction
-# =============================================================================
-
-def make_linkage(
-    joint_objects: dict[str, JointObject],
-    solve_order: list[str],
-    name: str = 'linkage',
-) -> tuple[Linkage | None, str | None]:
-    """
-    Build a pylinkage Linkage object from joint objects.
-
-    Args:
-        joint_objects: Map of joint_name -> Joint object
-        solve_order: Order of joints
-        name: Linkage name
-
-    Returns:
-        (Linkage, None) on success, (None, error_message) on failure
-    """
-    # Get non-static joints (only Crank and Revolute can be in Linkage)
-    linkage_joints = []
-    for joint_name in solve_order:
-        joint = joint_objects.get(joint_name)
-        if joint is not None and not isinstance(joint, tuple):
-            linkage_joints.append(joint)
-
-    if not linkage_joints:
-        return None, 'No movable joints (Crank/Revolute) found. Need at least one Crank to drive the mechanism.'
-
-    # Check for at least one Crank
-    has_crank = any(isinstance(j, Crank) for j in linkage_joints)
-    if not has_crank:
-        return None, 'No Crank joint found. A Crank is required to drive the mechanism.'
-
-    linkage = Linkage(
-        joints=tuple(linkage_joints),
-        order=tuple(linkage_joints),
-        name=name,
-    )
-
-    return linkage, None
-
-
-# =============================================================================
-# Simulation
-# =============================================================================
-
-def run_simulation(
-    linkage: Linkage,
-    joint_objects: dict[str, JointObject],
-    solve_order: list[str],
-    n_steps: int,
-) -> tuple[dict[str, list[list[float]]], str | None]:
-    """
-    Run forward kinematics simulation on a linkage.
-
-    Args:
-        linkage: The pylinkage Linkage object
-        joint_objects: Map of joint_name -> Joint object (includes static joints as tuples)
-        solve_order: Order of joints (for consistent output)
-        n_steps: Number of simulation steps
-
-    Returns:
-        (trajectories dict, None) on success, ({}, error_message) on failure
-
-        trajectories: { joint_name: [[x0, y0], [x1, y1], ...], ... }
-    """
-    trajectories: dict[str, list[list[float]]] = {}
-
-    # Initialize empty trajectories for all joints
-    for joint_name in solve_order:
-        trajectories[joint_name] = []
-
-    try:
-        linkage.rebuild()  # Reset to initial state
-
-        for step, coords in enumerate(linkage.step(iterations=n_steps)):
-            # coords is a list of (x, y) tuples for each joint in linkage.joints
-            for joint, coord in zip(linkage.joints, coords):
-                if coord[0] is not None and coord[1] is not None:
-                    trajectories[joint.name].append([float(coord[0]), float(coord[1])])
-                else:
-                    # Use last known position or (0,0)
-                    last = trajectories[joint.name][-1] if trajectories[joint.name] else [0, 0]
-                    trajectories[joint.name].append(last)
-
-            # Add static joint positions (they don't change)
-            linkage_joint_names = {j.name for j in linkage.joints}
-            for joint_name in solve_order:
-                if joint_name not in linkage_joint_names:
-                    joint = joint_objects.get(joint_name)
-                    if isinstance(joint, tuple):
-                        trajectories[joint_name].append([float(joint[0]), float(joint[1])])
-
-        return trajectories, None
-
-    except Exception as e:
-        return {}, str(e)
-
-
-# =============================================================================
-# High-Level Orchestrator
+# Main Entry Point
 # =============================================================================
 
 def compute_trajectory(
     pylink_data: dict,
     verbose: bool = False,
     skip_sync: bool = False,
-    use_native_hypergraph: bool = True,
 ) -> TrajectoryResult:
     """
-    Compute joint trajectories from PylinkDocument or LinkageDocument format.
+    Compute joint trajectories from LinkageDocument or legacy format.
 
-    This is the main entry point - coordinates all the steps.
-    Supports both legacy (pylinkage.joints) and new hypergraph (linkage.nodes/edges) formats.
+    This is the main entry point for trajectory computation.
 
     Args:
         pylink_data: Document in either format:
-            - Legacy: { 'pylinkage': { 'joints': [...] }, 'meta': {...}, 'n_steps': N }
-            - Hypergraph: { 'linkage': { 'nodes': {...}, 'edges': {...} }, 'meta': {...}, 'n_steps': N }
+            - Hypergraph: { 'linkage': { 'nodes': {...}, 'edges': {...} }, ... }
+            - Legacy: { 'pylinkage': { 'joints': [...] }, ... }
         verbose: If True, print progress
         skip_sync: If True, skip syncing distances from visual positions.
                    Use this for optimization when you want the stored distances
-                   to be used directly without being overwritten by meta positions.
-        use_native_hypergraph: If True (default), use pylinkage's native hypergraph
-                              module for conversion. This is cleaner and more maintainable.
-                              Set to False to use legacy custom conversion.
+                   to be used directly.
 
     Returns:
         TrajectoryResult with trajectories or error
     """
     n_steps = pylink_data.get('n_steps', 12)
 
-    # ─────────────────────────────────────────────────────────────────────────
-    # FORMAT DETECTION AND CONVERSION
-    # ─────────────────────────────────────────────────────────────────────────
+    # Route to appropriate handler based on format
     if is_hypergraph_format(pylink_data):
-        if use_native_hypergraph:
-            # Use pylinkage's native hypergraph module (preferred)
-            if verbose:
-                print('  Detected hypergraph format, using native pylinkage conversion...')
+        return _compute_trajectory_hypergraph(pylink_data, n_steps, verbose, skip_sync)
+    elif is_legacy_format(pylink_data):
+        return _compute_trajectory_legacy(pylink_data, n_steps, verbose)
+    else:
+        return TrajectoryResult(
+            success=False,
+            trajectories={},
+            n_steps=n_steps,
+            joint_types={},
+            error='Unknown data format: expected hypergraph (linkage.nodes) or legacy (pylinkage.joints)',
+        )
 
-            from pylink_tools.hypergraph_adapter import simulate_hypergraph
 
-            result = simulate_hypergraph(pylink_data, n_steps=n_steps)
+def _compute_trajectory_hypergraph(
+    pylink_data: dict,
+    n_steps: int,
+    verbose: bool,
+    skip_sync: bool,
+) -> TrajectoryResult:
+    """
+    Compute trajectory using pylinkage's native hypergraph module.
 
-            if not result.success:
-                return TrajectoryResult(
-                    success=False,
-                    trajectories={},
-                    n_steps=n_steps,
-                    joint_types={},
-                    error=result.error or 'Unknown error in native hypergraph simulation',
-                )
+    This is the preferred path for v2.0 format.
+    """
+    from pylink_tools.hypergraph_adapter import simulate_hypergraph
+    from pylink_tools.hypergraph_adapter import sync_hypergraph_distances
 
-            # Build joint_types (all revolute for hypergraph mechanisms)
-            joint_types = {name: 'Revolute' for name in result.joint_names}
+    if verbose:
+        print('  Using native hypergraph format...')
 
-            return TrajectoryResult(
-                success=True,
-                trajectories=result.trajectories,
-                n_steps=n_steps,
-                joint_types=joint_types,
-            )
+    # Sync distances from node positions if needed
+    if not skip_sync:
+        pylink_data = sync_hypergraph_distances(pylink_data, verbose=verbose)
 
+    result = simulate_hypergraph(pylink_data, n_steps=n_steps)
+
+    if not result.success:
+        return TrajectoryResult(
+            success=False,
+            trajectories={},
+            n_steps=n_steps,
+            joint_types={},
+            error=result.error or 'Unknown error in hypergraph simulation',
+        )
+
+    # Build joint_types from nodes
+    nodes = pylink_data.get('linkage', {}).get('nodes', {})
+    joint_types = {}
+    for name in result.joint_names:
+        node = nodes.get(name, {})
+        role = node.get('role', 'follower')
+        if role == 'fixed':
+            joint_types[name] = 'Static'
+        elif role in ('crank', 'driver'):
+            joint_types[name] = 'Crank'
         else:
-            # Legacy custom conversion path
-            if verbose:
-                print('  Detected hypergraph format (v2.0.0), converting to legacy...')
-            converted = convert_hypergraph_to_legacy(pylink_data, verbose=verbose)
+            joint_types[name] = 'Revolute'
 
-            # Check for validation issues from conversion
-            validation_issues = converted.get('_validation_issues', [])
-            unprocessed_nodes = converted.get('_unprocessed_nodes', [])
+    return TrajectoryResult(
+        success=True,
+        trajectories=result.trajectories,
+        n_steps=n_steps,
+        joint_types=joint_types,
+    )
 
-            if unprocessed_nodes:
-                # Report underconstrained mechanism
-                return TrajectoryResult(
-                    success=False,
-                    trajectories={},
-                    n_steps=n_steps,
-                    joint_types={},
-                    error=f"Underconstrained mechanism: nodes {unprocessed_nodes} cannot be simulated. "
-                    f"Each follower node needs exactly 2 edges connecting to other nodes in the kinematic chain.",
-                )
 
-            # Use converted data
-            pylink_data = converted
+def _compute_trajectory_legacy(
+    pylink_data: dict,
+    n_steps: int,
+    verbose: bool,
+) -> TrajectoryResult:
+    """
+    Compute trajectory using pylinkage's serialization for legacy format.
 
-    # Parse input (now always in legacy format)
+    This is a fallback for backward compatibility with old files.
+    """
+    from pylinkage.joints import Crank
+    from pylinkage.linkage.serialization import linkage_from_dict
+
+    if verbose:
+        print('  Using legacy format with pylinkage serialization...')
+
     pylinkage_data = pylink_data.get('pylinkage', {})
-    meta = pylink_data.get('meta', {})
-    meta_joints = meta.get('joints', {})
-
     joints_data = pylinkage_data.get('joints', [])
 
     if not joints_data:
@@ -1008,70 +165,48 @@ def compute_trajectory(
             error='No joints found in pylinkage data',
         )
 
-    # Compute proper solve order using topological sort
-    # This ensures parents are always processed before children, regardless of
-    # how the joints were created in the UI
-    solve_order = compute_proper_solve_order(joints_data, verbose=verbose)
+    try:
+        # Use pylinkage's native serialization
+        linkage = linkage_from_dict(pylinkage_data)
 
-    if verbose:
-        input_order = pylinkage_data.get('solve_order', [])
-        if input_order != solve_order:
-            print(f'  Reordered solve_order: {input_order} → {solve_order}')
+        # Set crank angle for proper rotation
+        angle_per_step = 2 * math.pi / n_steps
+        for joint in linkage.joints:
+            if isinstance(joint, Crank):
+                joint.angle = angle_per_step
 
-    # Build joint info lookup
-    joint_info = {jdata['name']: jdata for jdata in joints_data}
+        # Rebuild linkage after modifying crank angles
+        linkage.rebuild()
 
-    # Compute visual positions (for initial positions if no sync)
-    visual_positions = {}
-    for jdata in joints_data:
-        visual_positions[jdata['name']] = compute_joint_position(jdata, joint_info, meta_joints)
+        # Run simulation
+        joint_names = [j.name for j in linkage.joints]
+        trajectories = {name: [] for name in joint_names}
 
-    # Sync distances to match visual positions (SKIP for optimization!)
-    # This ensures UI-dragged joints have correct distances, but during optimization
-    # we want to use the dimensions we set, not overwrite them from old UI positions.
-    if not skip_sync:
-        joints_data = sync_distances_from_visual(joints_data, visual_positions, verbose=verbose)
-        joint_info = {jdata['name']: jdata for jdata in joints_data}  # Rebuild after sync
+        for step_coords in linkage.step(iterations=n_steps):
+            for i, coord in enumerate(step_coords):
+                if coord[0] is not None and coord[1] is not None:
+                    trajectories[joint_names[i]].append((coord[0], coord[1]))
+                else:
+                    trajectories[joint_names[i]].append((float('nan'), float('nan')))
 
-    # Calculate angle per step
-    angle_per_step = 2 * np.pi / n_steps
+        # Build joint_types
+        joint_types = {j['name']: j['type'] for j in joints_data}
 
-    # Build joint objects
-    joint_objects = build_joint_objects(
-        joints_data, solve_order, joint_info, meta_joints, angle_per_step, verbose=verbose,
-    )
+        return TrajectoryResult(
+            success=True,
+            trajectories=trajectories,
+            n_steps=n_steps,
+            joint_types=joint_types,
+        )
 
-    # Create linkage
-    linkage, error = make_linkage(joint_objects, solve_order, pylinkage_data.get('name', 'computed'))
-    if error:
+    except Exception as e:
         return TrajectoryResult(
             success=False,
             trajectories={},
             n_steps=n_steps,
             joint_types={},
-            error=error,
+            error=f'Legacy simulation failed: {str(e)}',
         )
-
-    if verbose:
-        print(f'  Created Linkage with {len(linkage.joints)} joints')
-
-    # Run simulation
-    trajectories, sim_error = run_simulation(linkage, joint_objects, solve_order, n_steps)
-    if sim_error:
-        return TrajectoryResult(
-            success=False,
-            trajectories={},
-            n_steps=n_steps,
-            joint_types={},
-            error=f'Simulation failed: {sim_error}',
-        )
-
-    return TrajectoryResult(
-        success=True,
-        trajectories=trajectories,
-        n_steps=n_steps,
-        joint_types={name: joint_info[name]['type'] for name in solve_order if name in joint_info},
-    )
 
 
 # =============================================================================
@@ -1079,33 +214,32 @@ def compute_trajectory(
 # =============================================================================
 
 def find_connected_link_groups(
-    links: dict[str, dict],
-    joints_data: list[dict],
+    edges: dict[str, dict],
+    nodes: dict[str, dict],
 ) -> list[MechanismGroup]:
     """
-    Find connected groups of links in the graph.
+    Find connected groups of edges (links) in the graph.
 
-    Two links are connected if they share a joint.
+    Two edges are connected if they share a node.
 
     Args:
-        links: meta.links dict {link_name: {connects: [joint1, joint2, ...], ...}}
-        joints_data: pylinkage.joints list
+        edges: linkage.edges dict {edge_id: {source, target, distance}, ...}
+        nodes: linkage.nodes dict {node_id: {id, position, role, ...}, ...}
 
     Returns:
         List of MechanismGroup, one per connected component
     """
-    if not links:
+    if not edges:
         return []
 
-    # Build joint type lookup
-    joint_types = {j['name']: j['type'] for j in joints_data}
-
-    # Build adjacency: which links share joints
-    link_names = list(links.keys())
-    link_joints = {name: set(data.get('connects', [])) for name, data in links.items()}
+    # Build adjacency: which edges share nodes
+    edge_ids = list(edges.keys())
+    edge_nodes = {}
+    for edge_id, edge in edges.items():
+        edge_nodes[edge_id] = {edge['source'], edge['target']}
 
     # Union-Find for connected components
-    parent = {name: name for name in link_names}
+    parent = {eid: eid for eid in edge_ids}
 
     def find(x):
         if parent[x] != x:
@@ -1117,50 +251,56 @@ def find_connected_link_groups(
         if pa != pb:
             parent[pa] = pb
 
-    # Connect links that share any joint
-    for i, name1 in enumerate(link_names):
-        for name2 in link_names[i+1:]:
-            if link_joints[name1] & link_joints[name2]:  # shared joints
-                union(name1, name2)
+    # Connect edges that share any node
+    for i, eid1 in enumerate(edge_ids):
+        for eid2 in edge_ids[i+1:]:
+            if edge_nodes[eid1] & edge_nodes[eid2]:  # shared nodes
+                union(eid1, eid2)
 
-    # Group links by component
+    # Group edges by component
     components: dict[str, list[str]] = {}
-    for name in link_names:
-        root = find(name)
+    for eid in edge_ids:
+        root = find(eid)
         if root not in components:
             components[root] = []
-        components[root].append(name)
+        components[root].append(eid)
 
     # Build MechanismGroup for each component
     groups = []
-    for component_links in components.values():
-        # Gather all joints in this component
-        component_joints = set()
-        for link_name in component_links:
-            component_joints.update(link_joints[link_name])
+    for component_edges in components.values():
+        # Gather all nodes in this component
+        component_nodes = set()
+        for edge_id in component_edges:
+            component_nodes.update(edge_nodes[edge_id])
 
         # Check for crank and ground
-        has_crank = any(joint_types.get(j) == 'Crank' for j in component_joints)
-        has_ground = any(joint_types.get(j) == 'Static' for j in component_joints)
+        has_crank = any(
+            nodes.get(nid, {}).get('role') in ('crank', 'driver')
+            for nid in component_nodes
+        )
+        has_ground = any(
+            nodes.get(nid, {}).get('role') in ('fixed', 'ground')
+            for nid in component_nodes
+        )
 
         # Validate
         error = None
         is_valid = True
 
-        if len(component_links) < 3:
+        if len(component_edges) < 3:
             is_valid = False
-            error = f'Need at least 3 links, got {len(component_links)}'
+            error = f'Need at least 3 edges, got {len(component_edges)}'
         elif not has_crank:
             is_valid = False
-            error = 'No Crank joint found - mechanism needs a driver'
+            error = 'No driver (crank) node found - mechanism needs a driver'
         elif not has_ground:
             is_valid = False
-            error = 'No Static (ground) joint found'
+            error = 'No fixed (ground) node found'
 
         groups.append(
             MechanismGroup(
-                links=component_links,
-                joints=list(component_joints),
+                links=component_edges,
+                joints=list(component_nodes),
                 has_crank=has_crank,
                 has_ground=has_ground,
                 is_valid=is_valid,
@@ -1173,31 +313,31 @@ def find_connected_link_groups(
 
 def validate_mechanism(pylink_data: dict) -> dict[str, Any]:
     """
-    Validate a pylink document and identify valid mechanism groups.
+    Validate a linkage document and identify valid mechanism groups.
+
+    Works with hypergraph format (linkage.nodes/edges).
 
     Args:
-        pylink_data: Full pylink document
+        pylink_data: Full linkage document
 
     Returns:
         {
             "valid": bool,
             "groups": [MechanismGroup, ...],
-            "valid_groups": [MechanismGroup, ...],  # only the valid ones
+            "valid_groups": [MechanismGroup, ...],
             "errors": [str, ...]
         }
     """
-    pylinkage_data = pylink_data.get('pylinkage', {})
-    meta = pylink_data.get('meta', {})
-
-    joints_data = pylinkage_data.get('joints', [])
-    links = meta.get('links', {})
+    linkage = pylink_data.get('linkage', {})
+    nodes = linkage.get('nodes', {})
+    edges = linkage.get('edges', {})
 
     errors = []
 
-    if not joints_data:
-        errors.append('No joints defined')
-    if not links:
-        errors.append('No links defined')
+    if not nodes:
+        errors.append('No nodes defined')
+    if not edges:
+        errors.append('No edges defined')
 
     if errors:
         return {
@@ -1208,31 +348,30 @@ def validate_mechanism(pylink_data: dict) -> dict[str, Any]:
         }
 
     # Find connected groups
-    groups = find_connected_link_groups(links, joints_data)
+    groups = find_connected_link_groups(edges, nodes)
     valid_groups = [g for g in groups if g.is_valid]
 
-    # Try make_linkage on valid groups to double-check
+    # Test simulation on valid groups
     for group in valid_groups:
-        # Filter joints to only those in this group
-        group_joints = [j for j in joints_data if j['name'] in group.joints]
-        joint_info = {j['name']: j for j in group_joints}
-        meta_joints = meta.get('joints', {})
+        # Create a minimal document for this group
+        group_nodes = {nid: nodes[nid] for nid in group.joints if nid in nodes}
+        group_edges = {eid: edges[eid] for eid in group.links if eid in edges}
 
-        # Compute proper solve order for this group using topological sort
-        group_solve_order = compute_proper_solve_order(group_joints)
+        test_data = {
+            'linkage': {
+                'nodes': group_nodes,
+                'edges': group_edges,
+            },
+            'n_steps': 12,
+        }
 
-        # Try building
-        angle_per_step = 2 * np.pi / 12
-        joint_objects = build_joint_objects(
-            group_joints, group_solve_order, joint_info, meta_joints, angle_per_step,
-        )
-        linkage, err = make_linkage(joint_objects, group_solve_order)
-
-        if err:
+        # Try simulation
+        result = compute_trajectory(test_data, verbose=False)
+        if not result.success:
             group.is_valid = False
-            group.error = err
+            group.error = result.error
 
-    # Refilter after make_linkage check
+    # Refilter after simulation check
     valid_groups = [g for g in groups if g.is_valid]
 
     return {
@@ -1252,186 +391,3 @@ def _group_to_dict(g: MechanismGroup) -> dict:
         'is_valid': g.is_valid,
         'error': g.error,
     }
-
-
-# # =============================================================================
-# # Link Rigidity Check - Detect Over-Constrained Mechanisms
-# # =============================================================================
-
-# def check_link_rigidity(pylink_data: dict) -> Dict[str, Any]:
-#     """
-#     Check if all visual links can maintain their length during simulation.
-
-#     A link connecting a kinematic joint (Crank/Revolute) to a Static joint
-#     will "stretch" unless the static joint is kinematically connected.
-#     This creates an over-constrained (locked) mechanism.
-
-#     Args:
-#         pylink_data: Full pylink document
-
-#     Returns:
-#         {
-#             "valid": bool,  # True if all links can maintain length
-#             "locked_links": [  # Links that would stretch/lock the mechanism
-#                 {
-#                     "link_name": str,
-#                     "kinematic_joint": str,  # The joint that moves
-#                     "static_joint": str,     # The joint that's fixed
-#                     "current_distance": float,
-#                     "message": str
-#                 }
-#             ],
-#             "message": str
-#         }
-#     """
-#     pylinkage_data = pylink_data.get('pylinkage', {})
-#     meta = pylink_data.get('meta', {})
-
-#     joints_data = pylinkage_data.get('joints', [])
-#     links = meta.get('links', {})
-#     meta_joints = meta.get('joints', {})
-
-#     if not joints_data or not links:
-#         return {"valid": True, "locked_links": [], "message": "No joints or links to check"}
-
-#     # Build joint lookup
-#     joint_by_name = {j['name']: j for j in joints_data}
-
-#     # Find which joints are in the kinematic chain (have Crank or Revolute types)
-#     kinematic_joints = set()
-#     static_joints = set()
-
-#     for joint in joints_data:
-#         if joint['type'] in ('Crank', 'Revolute'):
-#             kinematic_joints.add(joint['name'])
-#         elif joint['type'] == 'Static':
-#             static_joints.add(joint['name'])
-
-#     # Also add parents of kinematic joints as "connected to chain"
-#     chain_connected = kinematic_joints.copy()
-#     for joint in joints_data:
-#         if joint['type'] == 'Crank':
-#             chain_connected.add(joint.get('joint0', {}).get('ref', ''))
-#         elif joint['type'] == 'Revolute':
-#             chain_connected.add(joint.get('joint0', {}).get('ref', ''))
-#             chain_connected.add(joint.get('joint1', {}).get('ref', ''))
-
-#     # Get positions for all joints
-#     def get_position(jname: str) -> Tuple[float, float] | None:
-#         joint = joint_by_name.get(jname)
-#         if not joint:
-#             return None
-
-#         if joint['type'] == 'Static':
-#             return (joint.get('x', 0), joint.get('y', 0))
-
-#         # For kinematic joints, check meta.joints
-#         mj = meta_joints.get(jname)
-#         if mj and mj.get('x') is not None and mj.get('y') is not None:
-#             return (mj['x'], mj['y'])
-
-#         # Fallback for Crank
-#         if joint['type'] == 'Crank':
-#             parent_name = joint.get('joint0', {}).get('ref', '')
-#             parent_pos = get_position(parent_name)
-#             if parent_pos:
-#                 x = parent_pos[0] + joint.get('distance', 0) * np.cos(joint.get('angle', 0))
-#                 y = parent_pos[1] + joint.get('distance', 0) * np.sin(joint.get('angle', 0))
-#                 return (x, y)
-
-#         return None
-
-#     # Check each link for rigidity violations
-#     locked_links = []
-
-#     for link_name, link_meta in links.items():
-#         connects = link_meta.get('connects', [])
-#         if len(connects) < 2:
-#             continue
-
-#         # Check pairs of connected joints
-#         for i in range(len(connects) - 1):
-#             j0_name = connects[i]
-#             j1_name = connects[i + 1]
-
-#             j0 = joint_by_name.get(j0_name)
-#             j1 = joint_by_name.get(j1_name)
-
-#             if not j0 or not j1:
-#                 continue
-
-#             # Check if one joint is kinematic and the other is static but NOT in the kinematic chain
-#             is_j0_kinematic = j0_name in kinematic_joints
-#             is_j1_kinematic = j1_name in kinematic_joints
-#             is_j0_unconnected_static = j0['type'] == 'Static' and j0_name not in chain_connected
-#             is_j1_unconnected_static = j1['type'] == 'Static' and j1_name not in chain_connected
-
-#             # Problem case: kinematic joint linked to unconnected static joint
-#             if (is_j0_kinematic and is_j1_unconnected_static) or (is_j1_kinematic and is_j0_unconnected_static):
-#                 kin_joint = j0_name if is_j0_kinematic else j1_name
-#                 static_joint = j1_name if is_j1_unconnected_static else j0_name
-
-#                 # Get current distance
-#                 pos0 = get_position(j0_name)
-#                 pos1 = get_position(j1_name)
-
-#                 if pos0 and pos1:
-#                     current_dist = np.sqrt((pos1[0] - pos0[0])**2 + (pos1[1] - pos0[1])**2)
-#                 else:
-#                     current_dist = -1
-
-#                 locked_links.append({
-#                     "link_name": link_name,
-#                     "kinematic_joint": kin_joint,
-#                     "static_joint": static_joint,
-#                     "current_distance": float(current_dist),
-#                     "message": f"Link '{link_name}' connects moving joint '{kin_joint}' to static joint '{static_joint}'. "
-#                               f"This creates an over-constrained mechanism that would lock or require the link to stretch."
-#                 })
-
-#     if locked_links:
-#         return {
-#             "valid": False,
-#             "locked_links": locked_links,
-#             "message": f"Found {len(locked_links)} link(s) that would create an over-constrained (locked) mechanism"
-#         }
-
-#     return {
-#         "valid": True,
-#         "locked_links": [],
-#         "message": "All links can maintain their length during simulation"
-#     }
-
-
-# =============================================================================
-# Optimization Support (Future)
-# =============================================================================
-
-# TODO: Add these functions when needed:
-#
-# def make_linkage_from_dimensions(
-#     spec: LinkageSpec,
-#     dimensions: Tuple[float, ...]
-# ) -> Linkage:
-#     """Create a linkage with specific dimension values (for optimization)."""
-#     pass
-#
-#
-# def evaluate_trajectory(
-#     trajectories: Dict[str, List[List[float]]],
-#     target_joint: str,
-#     target_path: List[Tuple[float, float]],
-#     metric: str = "distance"
-# ) -> float:
-#     """Score a trajectory against a target path (for optimization objective)."""
-#     pass
-#
-#
-# def optimize_linkage(
-#     spec: LinkageSpec,
-#     target_joint: str,
-#     target_path: List[Tuple[float, float]],
-#     method: str = "pso"  # "pso" or "trials"
-# ) -> Tuple[Tuple[float, ...], float]:
-#     """Run optimization to find best dimensions for target path."""
-#     pass

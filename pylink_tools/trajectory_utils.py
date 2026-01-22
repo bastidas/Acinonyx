@@ -70,21 +70,16 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Literal
+from typing import TYPE_CHECKING
 
 import numpy as np
 
-
-# =============================================================================
-# Type Definitions
-# =============================================================================
+if TYPE_CHECKING:
+    from pylink_tools.optimization_types import TargetTrajectory
 
 Trajectory = list[tuple[float, float]]
 TrajectoryArray = np.ndarray  # Shape: (n_points, 2)
 
-
-# =============================================================================
-# Resampling Functions
-# =============================================================================
 
 def resample_trajectory(
     trajectory: Trajectory,
@@ -363,9 +358,30 @@ def _smooth_gaussian(traj: np.ndarray, window: int) -> Trajectory:
     return [(float(x), float(y)) for x, y in zip(x_smooth, y_smooth)]
 
 
-# =============================================================================
-# Phase-Invariant Scoring
-# =============================================================================
+def _center_trajectory(traj: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """
+    Center a trajectory at the origin.
+
+    Used for translation-invariant trajectory comparison where we want to
+    compare shapes regardless of their absolute position in space.
+
+    Args:
+        traj: Trajectory array of shape (n, 2)
+
+    Returns:
+        (centered_traj, centroid) tuple where:
+        - centered_traj: Trajectory centered at origin (same shape as input)
+        - centroid: Original centroid as 1D array of shape (2,)
+
+    Example:
+        >>> traj = np.array([[100, 100], [110, 100], [110, 110], [100, 110]])
+        >>> centered, centroid = _center_trajectory(traj)
+        >>> centroid  # array([105., 105.])
+        >>> centered  # array([[-5, -5], [5, -5], [5, 5], [-5, 5]])
+    """
+    centroid = np.mean(traj, axis=0)
+    return traj - centroid, centroid
+
 
 @dataclass
 class PhaseAlignedResult:
@@ -383,12 +399,23 @@ class PhaseAlignedResult:
     aligned_trajectory: Trajectory | None = None
     """Trajectory2 shifted to best alignment (if requested)."""
 
+    centroid1: tuple[float, float] | None = None
+    """Original centroid of trajectory1 (only set when translation_invariant=True)."""
+
+    centroid2: tuple[float, float] | None = None
+    """Original centroid of trajectory2 (only set when translation_invariant=True).
+
+    To restore aligned_trajectory to trajectory1's position space:
+        restored = [(x + centroid1[0], y + centroid1[1]) for x, y in aligned_trajectory]
+    """
+
 
 def compute_phase_aligned_distance(
     trajectory1: Trajectory,
     trajectory2: Trajectory,
     method: Literal['rotation', 'frechet', 'fft'] = 'rotation',
     return_aligned: bool = False,
+    translation_invariant: bool = False,
 ) -> PhaseAlignedResult:
     """
     Compute distance between trajectories with automatic phase alignment.
@@ -407,6 +434,18 @@ def compute_phase_aligned_distance(
             - "fft": FFT cross-correlation to find offset, then MSE (FASTEST)
             - "frechet": Discrete Fréchet distance (handles speed variation)
         return_aligned: If True, include the aligned trajectory in result
+        translation_invariant: If True, center both trajectories at origin
+            before comparison. This makes the comparison focus on SHAPE
+            rather than absolute position. The returned aligned_trajectory
+            will also be centered.
+
+            Use True when: comparing shapes, position doesn't matter
+            Use False when: exact position matching, path location matters
+
+            When True, centroid1 and centroid2 in the result contain the
+            original centroids, allowing you to restore positions if needed:
+                restored = [(x + centroid1[0], y + centroid1[1])
+                           for x, y in result.aligned_trajectory]
 
     Returns:
         PhaseAlignedResult with distance, phase offset, and optionally aligned trajectory
@@ -446,11 +485,11 @@ def compute_phase_aligned_distance(
         )
 
     if method == 'rotation':
-        return _phase_align_rotation(trajectory1, trajectory2, return_aligned)
+        return _phase_align_rotation(trajectory1, trajectory2, return_aligned, translation_invariant)
     elif method == 'fft':
-        return _phase_align_fft(trajectory1, trajectory2, return_aligned)
+        return _phase_align_fft(trajectory1, trajectory2, return_aligned, translation_invariant)
     elif method == 'frechet':
-        return _phase_align_frechet(trajectory1, trajectory2, return_aligned)
+        return _phase_align_frechet(trajectory1, trajectory2, return_aligned, translation_invariant)
     else:
         raise ValueError(f"Unknown method: {method}. Use 'rotation', 'fft', or 'frechet'")
 
@@ -459,15 +498,32 @@ def _phase_align_rotation(
     traj1: Trajectory,
     traj2: Trajectory,
     return_aligned: bool,
+    translation_invariant: bool = False,
 ) -> PhaseAlignedResult:
     """
     Phase alignment by trying all rotations.
 
     For each possible starting point offset, compute MSE and return best.
+
+    Args:
+        traj1: Reference trajectory
+        traj2: Trajectory to compare
+        return_aligned: If True, include aligned trajectory in result
+        translation_invariant: If True, center both trajectories before comparison
     """
     t1 = np.array(traj1)
     t2 = np.array(traj2)
     n = len(t1)
+
+    # Store original centroids for translation-invariant mode
+    centroid1 = None
+    centroid2 = None
+
+    if translation_invariant:
+        t1, c1 = _center_trajectory(t1)
+        t2, c2 = _center_trajectory(t2)
+        centroid1 = (float(c1[0]), float(c1[1]))
+        centroid2 = (float(c2[0]), float(c2[1]))
 
     best_mse = float('inf')
     best_offset = 0
@@ -494,6 +550,8 @@ def _phase_align_rotation(
         best_phase_offset=best_offset,
         method='rotation',
         aligned_trajectory=aligned,
+        centroid1=centroid1,
+        centroid2=centroid2,
     )
 
 
@@ -501,6 +559,7 @@ def _phase_align_fft(
     traj1: Trajectory,
     traj2: Trajectory,
     return_aligned: bool,
+    translation_invariant: bool = False,
 ) -> PhaseAlignedResult:
     """
     Phase alignment using FFT cross-correlation.
@@ -518,10 +577,20 @@ def _phase_align_fft(
            corr = ifft(fft(z1) * conj(fft(z2)))
         3. Find offset with maximum correlation magnitude
         4. Compute actual MSE at that offset (for consistent scoring)
+
+    Args:
+        traj1: Reference trajectory
+        traj2: Trajectory to compare
+        return_aligned: If True, include aligned trajectory in result
+        translation_invariant: If True, center both trajectories before comparison
     """
     t1 = np.array(traj1)
     t2 = np.array(traj2)
     n = len(t1)
+
+    # Store original centroids for translation-invariant mode
+    centroid1 = None
+    centroid2 = None
 
     if n == 0:
         return PhaseAlignedResult(
@@ -530,6 +599,12 @@ def _phase_align_fft(
             method='fft',
             aligned_trajectory=[],
         )
+
+    if translation_invariant:
+        t1, c1 = _center_trajectory(t1)
+        t2, c2 = _center_trajectory(t2)
+        centroid1 = (float(c1[0]), float(c1[1]))
+        centroid2 = (float(c2[0]), float(c2[1]))
 
     # Treat 2D trajectory as complex signal for cross-correlation
     # z = x + i*y captures both dimensions in one signal
@@ -563,6 +638,8 @@ def _phase_align_fft(
         best_phase_offset=best_offset,
         method='fft',
         aligned_trajectory=aligned,
+        centroid1=centroid1,
+        centroid2=centroid2,
     )
 
 
@@ -570,6 +647,7 @@ def _phase_align_frechet(
     traj1: Trajectory,
     traj2: Trajectory,
     return_aligned: bool,
+    translation_invariant: bool = False,
 ) -> PhaseAlignedResult:
     """
     Phase alignment using discrete Fréchet distance.
@@ -577,10 +655,26 @@ def _phase_align_frechet(
     The Fréchet distance is the minimum "leash length" needed for two
     entities to traverse their respective curves while staying connected.
     It naturally handles phase differences and speed variations.
+
+    Args:
+        traj1: Reference trajectory
+        traj2: Trajectory to compare
+        return_aligned: If True, include aligned trajectory in result
+        translation_invariant: If True, center both trajectories before comparison
     """
     t1 = np.array(traj1)
     t2 = np.array(traj2)
     n = len(t1)
+
+    # Store original centroids for translation-invariant mode
+    centroid1 = None
+    centroid2 = None
+
+    if translation_invariant:
+        t1, c1 = _center_trajectory(t1)
+        t2, c2 = _center_trajectory(t2)
+        centroid1 = (float(c1[0]), float(c1[1]))
+        centroid2 = (float(c2[0]), float(c2[1]))
 
     best_frechet = float('inf')
     best_offset = 0
@@ -603,6 +697,8 @@ def _phase_align_frechet(
         best_phase_offset=best_offset,
         method='frechet',
         aligned_trajectory=aligned,
+        centroid1=centroid1,
+        centroid2=centroid2,
     )
 
 
@@ -653,12 +749,8 @@ def _discrete_frechet_distance(P: np.ndarray, Q: np.ndarray) -> float:
             else:
                 ca[i, j] = float('inf')
 
-    return ca[len_p - 1, len_q - 1]
+    return float(ca[len_p - 1, len_q - 1])
 
-
-# =============================================================================
-# Convenience Functions
-# =============================================================================
 
 def prepare_trajectory_for_optimization(
     trajectory: Trajectory,
@@ -713,6 +805,7 @@ def compute_trajectory_similarity(
     traj1: Trajectory,
     traj2: Trajectory,
     phase_invariant: bool = True,
+    translation_invariant: bool = False,
     method: Literal['mse', 'rmse', 'frechet'] = 'mse',
 ) -> float:
     """
@@ -721,12 +814,17 @@ def compute_trajectory_similarity(
     High-level function that handles:
     - Length matching (via resampling)
     - Phase alignment (if requested)
+    - Translation invariance (if requested)
     - Multiple distance metrics
 
     Args:
         traj1: First trajectory
         traj2: Second trajectory
         phase_invariant: If True, find best phase alignment first
+        translation_invariant: If True, center both trajectories at origin
+            before comparison, making the score focus on SHAPE rather than
+            absolute position. Use this when you want to compare trajectory
+            shapes regardless of where they are in space.
         method: Distance metric
             - "mse": Mean squared error (lower = more similar)
             - "rmse": Root mean squared error (same units as coordinates)
@@ -739,32 +837,52 @@ def compute_trajectory_similarity(
         >>> target = get_target_trajectory()
         >>> computed = simulate_mechanism()
         >>> error = compute_trajectory_similarity(target, computed)
+
+    Comparison Modes:
+        | translation_invariant | phase_invariant | Compares              |
+        |-----------------------|-----------------|-----------------------|
+        | False                 | False           | Exact positions       |
+        | False                 | True            | Path, any phase       |
+        | True                  | False           | Shape, same phase     |
+        | True                  | True            | Shape only            |
     """
     # Resample if needed
     if len(traj1) != len(traj2):
         traj2 = resample_trajectory(traj2, len(traj1))
 
     if phase_invariant:
-        align_method = 'frechet' if method == 'frechet' else 'rotation'
-        result = compute_phase_aligned_distance(traj1, traj2, method=align_method)
+        align_method: Literal['rotation', 'frechet', 'fft'] = (
+            'frechet' if method == 'frechet' else 'rotation'
+        )
+        result = compute_phase_aligned_distance(
+            traj1,
+            traj2,
+            method=align_method,
+            translation_invariant=translation_invariant,
+        )
 
         if method == 'mse':
-            return result.distance
+            return float(result.distance)
         elif method == 'rmse':
-            return np.sqrt(result.distance)
+            return float(np.sqrt(result.distance))
         else:  # frechet
-            return result.distance
+            return float(result.distance)
     else:
         # Direct comparison without phase alignment
         t1 = np.array(traj1)
         t2 = np.array(traj2)
 
+        # Apply translation invariance if requested
+        if translation_invariant:
+            t1, _ = _center_trajectory(t1)
+            t2, _ = _center_trajectory(t2)
+
         if method == 'frechet':
             return _discrete_frechet_distance(t1, t2)
         else:
             diff = t1 - t2
-            mse = np.mean(np.sum(diff**2, axis=1))
-            return mse if method == 'mse' else np.sqrt(mse)
+            mse = float(np.mean(np.sum(diff**2, axis=1)))
+            return mse if method == 'mse' else float(np.sqrt(mse))
 
 
 # =============================================================================
@@ -843,3 +961,210 @@ def print_trajectory_info(trajectory: Trajectory, name: str = 'Trajectory') -> N
     print(f"  Closed curve:  {'Yes' if stats['is_closed'] else 'No'} (gap: {stats['closure_gap']:.4f})")
     print(f"  Roughness:     {stats['roughness']:.4f} rad/segment")
     print(f"{'='*50}\n")
+
+
+# =============================================================================
+# Trajectory Error Computation
+# =============================================================================
+
+
+def _compute_errors_core(
+    computed_trajectory: list[tuple[float, float]],
+    target_positions: list[tuple[float, float]],
+    weights: list[float] | None = None,
+) -> tuple[float, float, float, float]:
+    """
+    Core error computation.
+
+    Args:
+        computed_trajectory: List of (x, y) computed positions
+        target_positions: List of (x, y) target positions (must be same length)
+        weights: Optional weights per point (defaults to uniform)
+
+    Returns:
+        Tuple of (total_error, mse, rmse, max_error)
+    """
+    n = len(computed_trajectory)
+    weights = weights or [1.0] * n
+
+    weighted_squared_sum = 0.0
+    total_weight = 0.0
+    max_error = 0.0
+
+    for i, (computed, target_pos) in enumerate(zip(computed_trajectory, target_positions)):
+        dx = computed[0] - target_pos[0]
+        dy = computed[1] - target_pos[1]
+        dist = np.sqrt(dx * dx + dy * dy)
+
+        weighted_squared_sum += weights[i] * (dist**2)
+        total_weight += weights[i]
+        if dist > max_error:
+            max_error = dist
+
+    mse = weighted_squared_sum / total_weight if total_weight > 0 else 0.0
+    rmse = np.sqrt(mse)
+
+    return weighted_squared_sum, mse, rmse, max_error
+
+
+def compute_trajectory_hot(
+    traj1: np.ndarray,
+    traj2: np.ndarray,
+) -> float:
+    """
+    ULTRA-FAST phase-invariant MSE computation for optimization hot loops.
+
+    This function is aggressively optimized for speed:
+    - Uses FFT cross-correlation for O(n log n) phase alignment
+    - No validation (assumes valid input)
+    - No dataclass/object creation
+    - Inlined computation (no function call overhead)
+    - Numpy arrays only (no Python list conversion)
+    - Returns just the MSE float
+
+    ASSUMPTIONS (caller must ensure):
+    - traj1 and traj2 are numpy arrays of shape (n, 2)
+    - Both have the same length (n > 0)
+    - Arrays contain finite float values
+
+    Args:
+        traj1: Reference trajectory as numpy array, shape (n, 2)
+        traj2: Trajectory to compare as numpy array, shape (n, 2)
+
+    Returns:
+        Phase-aligned MSE (float) - lower is better
+
+    Performance:
+        ~0.03-0.05ms for n=24-48 (vs ~0.1ms for full API)
+        ~3x faster than compute_phase_aligned_distance with method='fft'
+
+    Example:
+        >>> t1 = np.array([[0, 0], [1, 0], [1, 1], [0, 1]], dtype=np.float64)
+        >>> t2 = np.array([[1, 0], [1, 1], [0, 1], [0, 0]], dtype=np.float64)  # rotated
+        >>> mse = compute_trajectory_hot(t1, t2)
+        >>> mse  # ~0 (same shape, different phase)
+
+    Warning:
+        This function performs NO validation. For general use with unknown
+        input, use compute_trajectory_similarity() or compute_phase_aligned_distance().
+    """
+    n = len(traj1)
+    # FFT cross-correlation to find best phase offset
+    # Treat 2D trajectory as complex signal: z = x + iy
+    z1 = traj1[:, 0] + 1j * traj1[:, 1]
+    z2 = traj2[:, 0] + 1j * traj2[:, 1]
+    # Circular cross-correlation: corr = ifft(fft(z1) * conj(fft(z2)))
+    cross_corr = np.fft.ifft(np.fft.fft(z1) * np.conj(np.fft.fft(z2)))
+    # Find best offset from correlation peak
+    best_offset = (n - int(np.argmax(cross_corr.real))) % n
+    # Compute MSE at best alignment
+    # np.roll + vectorized diff is faster than manual indexing
+    t2_aligned = np.roll(traj2, -best_offset, axis=0)
+    diff = traj1 - t2_aligned
+    # MSE: mean of squared distances
+    # Using einsum is slightly faster than sum(diff**2, axis=1).mean()
+    return float(np.einsum('ij,ij->', diff, diff) / n)
+
+
+def compute_trajectory_error(
+    computed_trajectory: list[tuple[float, float]],
+    target: TargetTrajectory,
+    metric: str = 'mse',
+    phase_invariant: bool = True,
+    phase_align_method: Literal['rotation', 'fft', 'frechet'] = 'rotation',
+    translation_invariant: bool = False,
+) -> float:
+    """
+    Compute error between computed and target trajectory.
+
+    Args:
+        computed_trajectory: List of (x, y) positions from simulation
+        target: TargetTrajectory with target positions
+        metric: Which metric to compute:
+            - 'mse': Mean squared error (DEFAULT)
+            - 'rmse': Root mean squared error
+            - 'total': Sum of weighted squared errors
+            - 'max': Maximum single-point error
+        phase_invariant: If True, find optimal phase alignment
+        phase_align_method: Phase alignment algorithm:
+            - 'rotation': Brute-force, O(n²), guaranteed optimal (DEFAULT)
+            - 'fft': FFT cross-correlation, O(n log n), fastest for large n
+            - 'frechet': Fréchet distance, O(n³), avoid in optimization!
+        translation_invariant: If True, center both trajectories before
+            comparison, focusing on SHAPE rather than absolute position.
+
+    Returns:
+        Float error value for the requested metric (lower is better)
+
+    Note:
+        For maximum speed in hot loops with numpy arrays, use compute_trajectory_hot().
+    """
+    n = len(computed_trajectory)
+    if n != len(target.positions):
+        return float('inf')
+
+    if n == 0:
+        return 0.0
+
+    # FAST PATH for phase-invariant MSE/RMSE/total:
+    # Phase alignment directly computes MSE, just use it!
+    if phase_invariant and metric in ('mse', 'rmse', 'total'):
+        result = compute_phase_aligned_distance(
+            target.positions,
+            computed_trajectory,
+            method=phase_align_method,
+            return_aligned=False,
+            translation_invariant=translation_invariant,
+        )
+        mse = float(result.distance)
+        if metric == 'mse':
+            return mse
+        elif metric == 'rmse':
+            return float(np.sqrt(mse))
+        else:  # total
+            return mse * n
+
+    # For 'max' metric or non-phase-invariant: need full computation
+    if phase_invariant:
+        # Get aligned trajectory for max computation
+        result = compute_phase_aligned_distance(
+            target.positions,
+            computed_trajectory,
+            method=phase_align_method,
+            return_aligned=True,
+            translation_invariant=translation_invariant,
+        )
+        if result.aligned_trajectory is not None:
+            computed_trajectory = result.aligned_trajectory
+        target_positions = target.positions
+        if translation_invariant:
+            t_arr = np.array(target.positions)
+            t_arr = t_arr - np.mean(t_arr, axis=0)
+            target_positions = [(float(x), float(y)) for x, y in t_arr]
+    elif translation_invariant:
+        # Center both trajectories manually
+        t1 = np.array(computed_trajectory)
+        t2 = np.array(target.positions)
+        t1 = t1 - np.mean(t1, axis=0)
+        t2 = t2 - np.mean(t2, axis=0)
+        computed_trajectory = [(float(x), float(y)) for x, y in t1]
+        target_positions = [(float(x), float(y)) for x, y in t2]
+    else:
+        target_positions = target.positions
+
+    total, mse, rmse, max_error = _compute_errors_core(
+        computed_trajectory,
+        target_positions,
+        target.weights,
+    )
+
+    if metric == 'max':
+        return max_error
+    elif metric == 'mse':
+        return mse
+    elif metric == 'rmse':
+        return rmse
+    elif metric == 'total':
+        return total
+    else:
+        return mse

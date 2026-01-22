@@ -11,12 +11,13 @@ For pylinkage-native PSO, see pylinkage_pso.py.
 
 License: MIT (this is custom implementation)
 """
-
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Callable, Literal, TYPE_CHECKING
+from typing import Literal
+from typing import TYPE_CHECKING
 
 import numpy as np
 
@@ -58,7 +59,7 @@ class PSOConfig:
     w: float = 0.7  # Inertia weight
     c1: float = 1.5  # Cognitive parameter
     c2: float = 1.5  # Social parameter
-    init_mode: str = "random"
+    init_mode: str = 'random'
     init_samples: int = 128
 
 
@@ -69,15 +70,15 @@ class PSOConfig:
 
 def run_pso_optimization(
     pylink_data: dict,
-    target: "TargetTrajectory",
-    dimension_spec: "DimensionSpec | None" = None,
+    target: TargetTrajectory,
+    dimension_spec: DimensionSpec | None = None,
     config: PSOConfig | None = None,
-    metric: str = "mse",
+    metric: str = 'mse',
     verbose: bool = True,
     phase_invariant: bool = True,
-    phase_align_method: Literal["rotation", "fft", "frechet"] = "rotation",
+    phase_align_method: Literal['rotation', 'fft', 'frechet'] = 'rotation',
     **kwargs,
-) -> "OptimizationResult":
+) -> OptimizationResult:
     """
     Run Particle Swarm Optimization to fit linkage to target trajectory.
 
@@ -146,10 +147,10 @@ def run_pso_optimization(
         config = PSOConfig()
 
     # Allow kwargs to override config
-    n_particles = kwargs.get("n_particles", config.n_particles)
-    iterations = kwargs.get("iterations", config.iterations)
-    init_mode = kwargs.get("init_mode", config.init_mode)
-    init_samples = kwargs.get("init_samples", config.init_samples)
+    n_particles = kwargs.get('n_particles', config.n_particles)
+    iterations = kwargs.get('iterations', config.iterations)
+    init_mode = kwargs.get('init_mode', config.init_mode)
+    init_samples = kwargs.get('init_samples', config.init_samples)
 
     # Extract dimensions if not provided
     if dimension_spec is None:
@@ -159,16 +160,16 @@ def run_pso_optimization(
         return OptimizationResult(
             success=False,
             optimized_dimensions={},
-            error="No optimizable dimensions found",
+            error='No optimizable dimensions found',
         )
 
-    logger.info(f"Starting PSO optimization with phase_invariant={phase_invariant}")
-    logger.info(f"  Dimensions: {len(dimension_spec)}")
-    logger.info(f"  Particles: {n_particles}")
-    logger.info(f"  Iterations: {iterations}")
-    logger.info(f"  Metric: {metric}")
-    logger.info(f"  Phase invariant: {phase_invariant}")
-    logger.info(f"  Init mode: {init_mode}")
+    logger.info(f'Starting PSO optimization with phase_invariant={phase_invariant}')
+    logger.info(f'  Dimensions: {len(dimension_spec)}')
+    logger.info(f'  Particles: {n_particles}')
+    logger.info(f'  Iterations: {iterations}')
+    logger.info(f'  Metric: {metric}')
+    logger.info(f'  Phase invariant: {phase_invariant}')
+    logger.info(f'  Init mode: {init_mode}')
 
     # Create fitness function
     fitness = create_fitness_function(
@@ -186,18 +187,18 @@ def run_pso_optimization(
     initial_error = fitness(initial_values)
 
     if verbose:
-        logger.info("Starting PSO optimization")
-        logger.info(f"  Dimensions: {len(dimension_spec)}")
-        logger.info(f"  Particles: {n_particles}")
-        logger.info(f"  Iterations: {iterations}")
-        logger.info(f"  Initial error: {initial_error:.4f}")
+        logger.info('Starting PSO optimization')
+        logger.info(f'  Dimensions: {len(dimension_spec)}')
+        logger.info(f'  Particles: {n_particles}')
+        logger.info(f'  Iterations: {iterations}')
+        logger.info(f'  Initial error: {initial_error:.4f}')
 
     # Get bounds
     bounds = dimension_spec.get_bounds_tuple()
 
     # Pre-sample positions if using advanced init mode
     init_positions = None
-    if init_mode in ("sobol", "behnken"):
+    if init_mode in ('sobol', 'behnken'):
         try:
             init_positions, init_scores = presample_valid_positions(
                 pylink_data=pylink_data,
@@ -210,10 +211,10 @@ def run_pso_optimization(
                 phase_invariant=phase_invariant,
             )
             if verbose and len(init_positions) > 0:
-                logger.info(f"  Pre-sampled {len(init_positions)} valid positions")
-                logger.info(f"  Best pre-sample score: {init_scores[0]:.4f}")
+                logger.info(f'  Pre-sampled {len(init_positions)} valid positions')
+                logger.info(f'  Best pre-sample score: {init_scores[0]:.4f}')
         except Exception as e:
-            logger.warning(f"Presampling failed: {e}. Falling back to random init.")
+            logger.warning(f'Presampling failed: {e}. Falling back to random init.')
             init_positions = None
 
     # Run PSO
@@ -242,9 +243,9 @@ def run_pso_optimization(
         optimized_dims = dimensions_to_dict(best_dims, dimension_spec)
 
         if verbose:
-            logger.info(f"  Final error: {best_score:.4f}")
-            if initial_error > 0 and initial_error != float("inf"):
-                logger.info(f"  Improvement: {(1 - best_score / initial_error) * 100:.1f}%")
+            logger.info(f'  Final error: {best_score:.4f}')
+            if initial_error > 0 and initial_error != float('inf'):
+                logger.info(f'  Improvement: {(1 - best_score / initial_error) * 100:.1f}%')
 
         return OptimizationResult(
             success=True,
@@ -258,12 +259,12 @@ def run_pso_optimization(
 
     except Exception as e:
         if verbose:
-            logger.error(f"PSO optimization failed: {e}", exc_info=True)
+            logger.error(f'PSO optimization failed: {e}', exc_info=True)
         return OptimizationResult(
             success=False,
             optimized_dimensions={},
             initial_error=initial_error,
-            error=f"PSO optimization failed: {str(e)}",
+            error=f'PSO optimization failed: {str(e)}',
         )
 
 
@@ -318,7 +319,7 @@ def _run_pso_internal(
         n_presampled = min(len(init_positions), n_particles)
         positions[:n_presampled] = init_positions[:n_presampled]
         if verbose:
-            logger.info(f"  Using {n_presampled} pre-sampled positions, " f"{n_particles - n_presampled} random")
+            logger.info(f'  Using {n_presampled} pre-sampled positions, ' f'{n_particles - n_presampled} random')
     else:
         # Original behavior: first particle at initial values, rest random
         positions[0] = np.array(initial_values)
@@ -329,7 +330,7 @@ def _run_pso_internal(
 
     # Initialize personal bests
     personal_best_positions = positions.copy()
-    personal_best_scores = np.full(n_particles, float("inf"))
+    personal_best_scores = np.full(n_particles, float('inf'))
 
     # Evaluate initial positions
     for i in range(n_particles):
@@ -386,6 +387,6 @@ def _run_pso_internal(
         history.append(global_best_score)
 
         if verbose and (iteration + 1) % 10 == 0:
-            logger.info(f"  Iteration {iteration + 1}/{iterations}: best_error={global_best_score:.4f}")
+            logger.info(f'  Iteration {iteration + 1}/{iterations}: best_error={global_best_score:.4f}')
 
     return global_best_score, tuple(global_best_position), history

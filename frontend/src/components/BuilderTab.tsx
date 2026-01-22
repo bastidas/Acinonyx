@@ -3663,117 +3663,6 @@ const BuilderTab: React.FC = () => {
     }
   }
 
-  // Demo: load a 4-bar linkage (hypergraph format)
-  const loadDemo4Bar = () => {
-    // 4-bar demo positions
-    const crankAnchorPos: [number, number] = [90, 90]
-    const rockerAnchorPos: [number, number] = [150, 90]
-    const crankAngle = 0.2618
-    const crankDistance = 20
-    const crankPos: [number, number] = [
-      crankAnchorPos[0] + crankDistance * Math.cos(crankAngle),
-      crankAnchorPos[1] + crankDistance * Math.sin(crankAngle)
-    ]
-
-    // Calculate coupler position using circle-circle intersection
-    const d0 = 50  // distance from crank
-    const d1 = 40  // distance from rocker_anchor
-    const dx = rockerAnchorPos[0] - crankPos[0]
-    const dy = rockerAnchorPos[1] - crankPos[1]
-    const d = Math.sqrt(dx * dx + dy * dy)
-    const a = (d0 * d0 - d1 * d1 + d * d) / (2 * d)
-    const h = Math.sqrt(Math.max(0, d0 * d0 - a * a))
-    const px = crankPos[0] + (a * dx) / d
-    const py = crankPos[1] + (a * dy) / d
-    const couplerJointPos: [number, number] = [
-      px - (h * dy) / d,
-      py + (h * dx) / d
-    ]
-
-    // Create demo in hypergraph format directly
-    const demo: LinkageDocument = {
-      name: '4bar',
-      version: '2.0.0',
-      linkage: {
-        name: '4bar',
-        nodes: {
-          crank_anchor: {
-            id: 'crank_anchor',
-            position: crankAnchorPos,
-            role: 'fixed',
-            jointType: 'revolute',
-            name: 'crank_anchor'
-          },
-          rocker_anchor: {
-            id: 'rocker_anchor',
-            position: rockerAnchorPos,
-            role: 'fixed',
-            jointType: 'revolute',
-            name: 'rocker_anchor'
-          },
-          crank: {
-            id: 'crank',
-            position: crankPos,
-            role: 'crank',
-            jointType: 'revolute',
-            angle: crankAngle,
-            name: 'crank'
-          },
-          coupler_rocker_joint: {
-            id: 'coupler_rocker_joint',
-            position: couplerJointPos,
-            role: 'follower',
-            jointType: 'revolute',
-            name: 'coupler_rocker_joint'
-          }
-        },
-        edges: {
-          ground: {
-            id: 'ground',
-            source: 'crank_anchor',
-            target: 'rocker_anchor',
-            distance: 60
-          },
-          crank_link: {
-            id: 'crank_link',
-            source: 'crank_anchor',
-            target: 'crank',
-            distance: crankDistance
-          },
-          coupler: {
-            id: 'coupler',
-            source: 'crank',
-            target: 'coupler_rocker_joint',
-            distance: d0
-          },
-          rocker: {
-            id: 'rocker',
-            source: 'coupler_rocker_joint',
-            target: 'rocker_anchor',
-            distance: d1
-          }
-        },
-        hyperedges: {}
-      },
-      meta: {
-        nodes: {
-          crank: { color: '#ff7f0e', zlevel: 0, showPath: true },
-          coupler_rocker_joint: { color: '#2ca02c', zlevel: 0, showPath: true }
-        },
-        edges: {
-          ground: { color: '#7f7f7f', isGround: true },
-          crank_link: { color: '#ff7f0e' },
-          coupler: { color: '#2ca02c' },
-          rocker: { color: '#1f77b4' }
-        }
-      }
-    }
-
-    setLinkageDoc(demo)
-    clearTrajectory()
-    showStatus('Loaded demo 4-bar linkage', 'success', 2000)
-  }
-
   // Load demo from backend
   const loadDemoFromBackend = async (demoName: string) => {
     try {
@@ -3810,6 +3699,7 @@ const BuilderTab: React.FC = () => {
   }
 
   // Demo loaders
+  const loadDemo4Bar = () => loadDemoFromBackend('4bar')
   const loadDemoLeg = () => loadDemoFromBackend('leg')
   const loadDemoWalker = () => loadDemoFromBackend('walker')
   const loadDemoComplex = () => loadDemoFromBackend('complex')

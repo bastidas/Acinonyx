@@ -21,31 +21,28 @@ demonstrates how intelligent initialization can improve convergence.
 from __future__ import annotations
 
 import json
-import random
 import sys
 import time
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
-import numpy as np
-
 from optimizers.nlopt_mlsl import NLoptMLSLConfig
 from optimizers.nlopt_mlsl import run_nlopt_mlsl
 from pylink_tools.kinematic import compute_trajectory
-from pylink_tools.optimize import analyze_convergence
-from pylink_tools.optimize import apply_dimensions
 from pylink_tools.optimize import extract_dimensions
 from pylink_tools.optimize import extract_dimensions_from_edges
 from pylink_tools.optimize import run_pso_optimization
 from pylink_tools.optimize import run_pylinkage_pso
 from pylink_tools.optimize import run_scipy_optimization
 from pylink_tools.optimize import TargetTrajectory
+from target_gen import create_achievable_target
+from target_gen import verify_mechanism_viable
 from viz_tools.opt_viz import plot_convergence_history
 from viz_tools.opt_viz import plot_dimension_bounds
-from viz_tools.opt_viz import plot_linkage_state
-from viz_tools.opt_viz import plot_trajectory_comparison
 from viz_tools.opt_viz import plot_trajectory_overlay
+# from viz_tools.opt_viz import plot_linkage_state
+# from viz_tools.opt_viz import plot_trajectory_comparison
 
 # Add project root to path
 project_root = Path(__file__).parent.parent
@@ -63,18 +60,19 @@ RANDOM_SEED = 42  # Set to None for truly random results
 # 'simple'       - Basic 4-bar linkage (4 joints, 4 links, ~3 dimensions)
 # 'intermediate' - 6-link mechanism (5 joints, 6 links, ~5 dimensions)
 # 'complex'      - Multi-link mechanism (10 joints, 16 links, ~15 dimensions)
+# 'leg'          - Leg mechanism (17 joints, 28 links, ~28 dimensions)
 MECHANISM_TYPE = 'complex'  # <-- CHANGE THIS TO SWITCH MECHANISMS
 
 # --- PSO Optimization Parameters ---
-N_PARTICLES = 64          # Number of particles in swarm (32-128 typical)
-N_ITERATIONS = 256       # Number of optimization iterations (50-500 typical)
+N_PARTICLES = 64         # Number of particles in swarm (32-128 typical)
+N_ITERATIONS = 64       # Number of optimization iterations (50-500 typical)
 
 # --- Bounds Parameters ---
 BOUNDS_FACTOR = 1.2       # Bounds = [value/factor, value*factor]
 MIN_LENGTH = 4.0          # Minimum link length (prevents degeneracy)
 
 # --- Trajectory Parameters ---
-N_STEPS = 24              # Number of simulation timesteps per revolution
+N_STEPS = 32         # Number of simulation timesteps per revolution
 
 # --- Error Metric ---
 METRIC = 'mse'            # Error metric: "mse", "rmse", "total", "max"
@@ -94,10 +92,10 @@ TIMESTAMP = datetime.now().strftime('%Y%m%d_%H%M%S')
 # Change COMPARISON_MODE to switch what's being compared.
 # Each mode defines a list of (name, solver_func, kwargs) tuples.
 
-COMPARISON_MODE = 'init_modes'  # <-- CHANGE THIS TO SWITCH COMPARISONS
+# COMPARISON_MODE = 'init_modes'  # <-- CHANGE THIS TO SWITCH COMPARISONS
 # COMPARISON_MODE = 'phase_methods'  # <-- CHANGE THIS TO SWITCH COMPARISONS
 # COMPARISON_MODE = 'solvers'  # <-- CHANGE THIS TO SWITCH COMPARISONS
-# COMPARISON_MODE = 'nlopt_mlsl'  # <-- CHANGE THIS TO SWITCH COMPARISONS
+COMPARISON_MODE = 'nlopt_mlsl'  # <-- CHANGE THIS TO SWITCH COMPARISONS
 # COMPARISON_MODE = 'quick'
 # Available modes:
 #   'init_modes'       - Compare random vs sobol initialization
@@ -153,9 +151,9 @@ def get_solver_configs(mode: str) -> list[tuple[str, callable, dict]]:
         return [
             ('PSO', run_pso_optimization, {}),
             ('Pylinkage PSO', run_pylinkage_pso, {}),
-            ('Scipy L-BFGS-B', run_scipy_optimization, {'method': 'L-BFGS-B'}),
-            ('Scipy Powell', run_scipy_optimization, {'method': 'Powell'}),
-            ('Scipy Nelder-Mead', run_scipy_optimization, {'method': 'Nelder-Mead'}),
+            # ('Scipy L-BFGS-B', run_scipy_optimization, {'method': 'L-BFGS-B'}),
+            # ('Scipy Powell', run_scipy_optimization, {'method': 'Powell'}),
+            # ('Scipy Nelder-Mead', run_scipy_optimization, {'method': 'Nelder-Mead'}),
         ]
 
     elif mode == 'all_pso':
@@ -194,29 +192,29 @@ def get_solver_configs(mode: str) -> list[tuple[str, callable, dict]]:
             # LDS vs non-LDS with default L-BFGS
             (
                 'MLSL+LDS (lbfgs, grad)', run_nlopt_mlsl, {
-                    'config': NLoptMLSLConfig(use_lds=True, local_algorithm='lbfgs', max_eval=1000),
+                    'config': NLoptMLSLConfig(use_lds=True, local_algorithm='lbfgs', max_eval=2000),
                 },
             ),
             (
                 'MLSL (lbfgs, grad)', run_nlopt_mlsl, {
-                    'config': NLoptMLSLConfig(use_lds=False, local_algorithm='lbfgs', max_eval=1000),
+                    'config': NLoptMLSLConfig(use_lds=False, local_algorithm='lbfgs', max_eval=2000),
                 },
             ),
             # Gradient-based local algorithms
             (
                 'MLSL+LDS (slsqp, grad)', run_nlopt_mlsl, {
-                    'config': NLoptMLSLConfig(use_lds=True, local_algorithm='slsqp', max_eval=1000),
+                    'config': NLoptMLSLConfig(use_lds=True, local_algorithm='slsqp', max_eval=2000),
                 },
             ),
             # Gradient-free local algorithms (often faster due to no gradient overhead)
             (
                 'MLSL+LDS (bobyqa, no-grad)', run_nlopt_mlsl, {
-                    'config': NLoptMLSLConfig(use_lds=True, local_algorithm='bobyqa', max_eval=1000),
+                    'config': NLoptMLSLConfig(use_lds=True, local_algorithm='bobyqa', max_eval=2000),
                 },
             ),
             (
                 'MLSL+LDS (sbplx, no-grad)', run_nlopt_mlsl, {
-                    'config': NLoptMLSLConfig(use_lds=True, local_algorithm='sbplx', max_eval=1000),
+                    'config': NLoptMLSLConfig(use_lds=True, local_algorithm='sbplx', max_eval=2000),
                 },
             ),
         ]
@@ -267,32 +265,16 @@ class SolverResult:
 
 
 # =============================================================================
-# HELPER FUNCTIONS
-# =============================================================================
-
-def load_test_4bar():
-    """Load the test 4-bar linkage from tests/4bar_test.json."""
-    test_file = project_root / 'tests' / '4bar_test.json'
-
-    if not test_file.exists():
-        raise FileNotFoundError(f'Test file not found: {test_file}')
-
-    with open(test_file) as f:
-        pylink_data = json.load(f)
-
-    pylink_data['n_steps'] = N_STEPS
-    return pylink_data
-
-
-# =============================================================================
 # MECHANISM FILE PATHS
 # =============================================================================
-# Mechanisms are loaded from JSON files in the demo folder.
+# Mechanisms are loaded from JSON files in demo/test_graphs/.
 
-DEMO_DIR = Path(__file__).parent
+TEST_GRAPHS_DIR = Path(__file__).parent / 'test_graphs'
 MECHANISM_FILES = {
-    'intermediate': DEMO_DIR / 'intermediate.json',
-    'complex': DEMO_DIR / 'complex.json',
+    'simple': TEST_GRAPHS_DIR / '4bar.json',
+    'intermediate': TEST_GRAPHS_DIR / 'intermediate.json',
+    'complex': TEST_GRAPHS_DIR / 'complex.json',
+    'leg': TEST_GRAPHS_DIR / 'leg.json',
 }
 
 
@@ -316,166 +298,36 @@ def load_mechanism_from_json(json_path: Path):
     return pylink_data
 
 
-def verify_mechanism_viable(pylink_data: dict, target_joint: str = None) -> bool:
-    """
-    Verify that a mechanism configuration is geometrically viable.
-
-    A viable mechanism:
-    1. Can complete a full crank rotation without breaking
-    2. Has the target joint in its computed trajectories
-
-    Args:
-        pylink_data: The mechanism data to verify
-        target_joint: Optional specific joint to check for (default: any trajectory)
-
-    Returns:
-        True if the mechanism is viable, False otherwise
-    """
-    try:
-        result = compute_trajectory(pylink_data, verbose=False, skip_sync=True)
-        if not result.success:
-            return False
-        if target_joint and target_joint not in result.trajectories:
-            return False
-        return True
-    except Exception:
-        return False
-
-
-def apply_edge_dimensions(
-    pylink_data: dict,
-    dimensions: dict[str, float],
-) -> dict:
-    """
-    Apply dimension values to a linkage edges format mechanism.
-
-    Args:
-        pylink_data: Mechanism data with 'linkage.edges' structure
-        dimensions: Dict mapping dimension names to values
-                   (e.g., {'crank_link_distance': 25.0})
-
-    Returns:
-        Copy of pylink_data with updated edge distances
-    """
-    import copy
-    result = copy.deepcopy(pylink_data)
-
-    linkage = result.get('linkage', {})
-    edges = linkage.get('edges', {})
-
-    for dim_name, value in dimensions.items():
-        # Parse edge_id from dimension name (e.g., 'crank_link_distance' -> 'crank_link')
-        if dim_name.endswith('_distance'):
-            edge_id = dim_name[:-len('_distance')]
-            if edge_id in edges:
-                edges[edge_id]['distance'] = value
-
-    return result
-
-
 def load_mechanism(mechanism_type: str = 'simple'):
     """
     Load a mechanism based on type.
 
     Args:
-        mechanism_type: 'simple', 'intermediate', or 'complex'
+        mechanism_type: 'simple', 'intermediate', 'complex', or 'leg'
 
     Returns:
         (pylink_data, target_joint_name, mechanism_description)
     """
-    if mechanism_type == 'simple':
-        pylink_data = load_test_4bar()
-        target_joint = 'coupler_rocker_joint'
-        description = 'Simple 4-bar linkage (4 joints, 4 links, ~3 dimensions)'
-    elif mechanism_type == 'intermediate':
-        pylink_data = load_mechanism_from_json(MECHANISM_FILES['intermediate'])
-        target_joint = 'final'  # Track the end effector
-        description = 'Intermediate 6-link mechanism (5 joints, 6 links, ~5 dimensions)'
-    elif mechanism_type == 'complex':
-        pylink_data = load_mechanism_from_json(MECHANISM_FILES['complex'])
-        target_joint = 'final_joint'  # Track the end effector
-        description = 'Complex multi-link mechanism (10 joints, 16 links, ~15 dimensions)'
-    else:
-        raise ValueError(f"Unknown mechanism_type: {mechanism_type}. Use 'simple', 'intermediate', or 'complex'")
+    # Mechanism configurations: (target_joint, description)
+    MECHANISM_CONFIG = {
+        'simple': ('coupler_rocker_joint', 'Simple 4-bar linkage (4 joints, 4 links, ~3 dimensions)'),
+        'intermediate': ('final', 'Intermediate 6-link mechanism (5 joints, 6 links, ~5 dimensions)'),
+        'complex': ('final_joint', 'Complex multi-link mechanism (10 joints, 16 links, ~15 dimensions)'),
+        'leg': ('toe', 'Leg mechanism (17 joints, 28 links, ~28 dimensions)'),
+    }
+
+    if mechanism_type not in MECHANISM_CONFIG:
+        available = list(MECHANISM_CONFIG.keys())
+        raise ValueError(f'Unknown mechanism_type: {mechanism_type}. Use one of: {available}')
+
+    pylink_data = load_mechanism_from_json(MECHANISM_FILES[mechanism_type])
+    target_joint, description = MECHANISM_CONFIG[mechanism_type]
 
     # Verify the base mechanism is viable
     if not verify_mechanism_viable(pylink_data, target_joint):
-        raise RuntimeError(f"Base {mechanism_type} mechanism failed viability check!")
+        raise RuntimeError(f'Base {mechanism_type} mechanism failed viability check!')
 
     return pylink_data, target_joint, description
-
-
-def _apply_dims_for_format(pylink_data: dict, target_dims: dict) -> dict:
-    """Apply dimensions using the appropriate method for the data format."""
-    # Check if this is edges format (complex) or joints format (simple)
-    if 'linkage' in pylink_data and 'edges' in pylink_data['linkage']:
-        return apply_edge_dimensions(pylink_data, target_dims)
-    else:
-        return apply_dimensions(pylink_data, target_dims)
-
-
-def create_achievable_target(
-    pylink_data: dict,
-    target_joint: str,
-    dim_spec,
-    randomize_range: float = 0.5,
-    seed: int = None,
-    max_attempts: int = 128,
-) -> tuple:
-    """
-    Create a target trajectory that is ACHIEVABLE by randomizing dimensions.
-
-    Returns:
-        (target, target_dimensions, target_pylink_data)
-    """
-    if seed is not None:
-        random.seed(seed)
-        np.random.seed(seed)
-
-    for attempt in range(max_attempts):
-        target_dims = {}
-        for name, initial, bounds in zip(dim_spec.names, dim_spec.initial_values, dim_spec.bounds):
-            factor = 1.0 + random.uniform(-randomize_range, randomize_range)
-            new_value = initial * factor
-            new_value = max(bounds[0], min(bounds[1], new_value))
-            target_dims[name] = new_value
-
-        target_pylink_data = _apply_dims_for_format(pylink_data, target_dims)
-        result = compute_trajectory(target_pylink_data, verbose=False, skip_sync=True)
-
-        if result.success and target_joint in result.trajectories:
-            target_traj = result.trajectories[target_joint]
-            target = TargetTrajectory(
-                joint_name=target_joint,
-                positions=[tuple(pos) for pos in target_traj],
-            )
-            if attempt > 0:
-                print(f'  (Found valid target dimensions after {attempt + 1} attempts)')
-            return target, target_dims, target_pylink_data
-
-    # Fallback to smaller ranges
-    for smaller_range in [0.15, 0.10, 0.05]:
-        for attempt in range(max_attempts):
-            target_dims = {}
-            for name, initial, bounds in zip(dim_spec.names, dim_spec.initial_values, dim_spec.bounds):
-                factor = 1.0 + random.uniform(-smaller_range, smaller_range)
-                new_value = initial * factor
-                new_value = max(bounds[0], min(bounds[1], new_value))
-                target_dims[name] = new_value
-
-            target_pylink_data = _apply_dims_for_format(pylink_data, target_dims)
-            result = compute_trajectory(target_pylink_data, verbose=False, skip_sync=True)
-
-            if result.success and target_joint in result.trajectories:
-                target_traj = result.trajectories[target_joint]
-                target = TargetTrajectory(
-                    joint_name=target_joint,
-                    positions=[tuple(pos) for pos in target_traj],
-                )
-                print(f'  Found valid dimensions with ±{smaller_range*100:.0f}%')
-                return target, target_dims, target_pylink_data
-
-    raise ValueError('Could not find valid target dimensions after many attempts')
 
 
 def print_section(title: str):
@@ -743,13 +595,13 @@ def main():
         print(f'Joints ({len(nodes)}):')
         for name, node in nodes.items():
             role = node.get('role', 'unknown')
-            print(f"  - {name} ({role})")
+            print(f'  - {name} ({role})')
         print(f'Links ({len(edges)}):')
         non_ground_edges = [e for e in edges.values() if e.get('id') != 'ground']
         for edge in non_ground_edges[:5]:  # Show first 5
             print(f"  - {edge['id']}: {edge['source']} -> {edge['target']} ({edge['distance']:.1f})")
         if len(non_ground_edges) > 5:
-            print(f"  - ... and {len(non_ground_edges) - 5} more links")
+            print(f'  - ... and {len(non_ground_edges) - 5} more links')
 
     # Extract dimensions (different methods for different mechanism formats)
     if MECHANISM_TYPE in ('complex', 'intermediate'):
@@ -781,13 +633,16 @@ def main():
         effective_range = COMPLEX_MECH_MAX_RANGE
         print(f'  (Reduced to ±{effective_range*100:.0f}% for mechanism stability)')
 
-    target, target_dims, target_pylink_data = create_achievable_target(
+    achievable_result = create_achievable_target(
         pylink_data,
         target_joint,
         dim_spec,
         randomize_range=effective_range,
         seed=RANDOM_SEED,
     )
+    target = achievable_result.target
+    target_dims = achievable_result.target_dimensions
+    target_pylink_data = achievable_result.target_pylink_data
 
     print(f'\nTarget joint: {target.joint_name}')
     print(f'Target trajectory: {target.n_steps} points')
@@ -850,7 +705,7 @@ def main():
     # Step 5: Visualize
     # -------------------------------------------------------------------------
     print_section('Step 5: Visualize Results')
-    
+
     visualize_comparison(
         results=results,
         target=target,

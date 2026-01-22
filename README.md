@@ -50,7 +50,7 @@ cd acinonyx
 
 ### 2. Set Up Python Environment
 
-We recommend using Python 3.11.x 
+We recommend using Python 3.11.x
 
 #### Option A: Using Conda
 

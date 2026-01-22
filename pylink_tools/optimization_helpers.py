@@ -21,6 +21,7 @@ def extract_dimensions(
     bounds_factor: float = 2.0,
     min_length: float = 0.1,
     exclude_edges: set[str] | None = None,
+    custom_bounds: dict[str, tuple[float, float]] | None = None,
 ) -> DimensionSpec:
     """
     Extract optimizable dimensions (link lengths) from pylink_data.
@@ -37,6 +38,8 @@ def extract_dimensions(
                        bounds are [value/2, value*2])
         min_length: Minimum allowed link length
         exclude_edges: Edge IDs to exclude (for hypergraph format, defaults to {'ground'})
+        custom_bounds: Optional dict of {dimension_name: (min, max)} to override
+                       auto-computed bounds. Dimensions not in this dict use defaults.
 
     Returns:
         DimensionSpec with names, initial values, bounds, and mapping
@@ -47,18 +50,27 @@ def extract_dimensions(
         ['B_distance', 'C_distance0', 'C_distance1']
         >>> print(spec.initial_values)
         [1.0, 3.0, 1.0]
+
+        >>> # With custom bounds for specific dimensions:
+        >>> spec = extract_dimensions(pylink_data, custom_bounds={'B_distance': (0.5, 10.0)})
     """
     # Auto-detect format: hypergraph (linkage.nodes/edges) vs legacy (pylinkage.joints)
     is_hypergraph = 'linkage' in pylink_data and 'edges' in pylink_data.get('linkage', {})
 
     if is_hypergraph:
         # Delegate to hypergraph extraction
-        return extract_dimensions_from_edges(
+        spec = extract_dimensions_from_edges(
             pylink_data,
             bounds_factor=bounds_factor,
             min_length=min_length,
             exclude_edges=exclude_edges or {'ground'},
         )
+        # Apply custom bounds overrides if provided
+        if custom_bounds:
+            for i, name in enumerate(spec.names):
+                if name in custom_bounds:
+                    spec.bounds[i] = custom_bounds[name]
+        return spec
 
     # Legacy format: pylinkage.joints
     pylinkage_data = pylink_data.get('pylinkage', {})
@@ -102,6 +114,12 @@ def extract_dimensions(
             joint_mapping[dim_name1] = (jname, 'distance1')
 
         # Static joints are skipped (fixed ground points)
+
+    # Apply custom bounds overrides if provided
+    if custom_bounds:
+        for i, name in enumerate(names):
+            if name in custom_bounds:
+                bounds[i] = custom_bounds[name]
 
     return DimensionSpec(
         names=names,
@@ -174,31 +192,6 @@ def extract_dimensions_from_edges(
     )
 
 
-def extract_dimensions_with_custom_bounds(
-    pylink_data: dict,
-    custom_bounds: dict[str, tuple[float, float]],
-) -> DimensionSpec:
-    """
-    Extract dimensions with user-specified bounds.
-
-    Args:
-        pylink_data: Full pylink document
-        custom_bounds: Dict of {dimension_name: (min, max)}
-                       Dimensions not in this dict use default bounds.
-
-    Returns:
-        DimensionSpec with custom bounds applied
-    """
-    spec = extract_dimensions(pylink_data)
-
-    # Override bounds where specified
-    for i, name in enumerate(spec.names):
-        if name in custom_bounds:
-            spec.bounds[i] = custom_bounds[name]
-
-    return spec
-
-
 def apply_dimensions(
     pylink_data: dict,
     dimension_values: dict[str, float],
@@ -241,12 +234,12 @@ def apply_dimensions(
         # Hypergraph format: apply to linkage.edges
         edges_data = updated.get('linkage', {}).get('edges', {})
 
-        # Get edge mapping from dimension_spec
-        if dimension_spec is not None and hasattr(dimension_spec, 'edge_mapping'):
+        # Get edge mapping from dimension_spec or infer it
+        edge_mapping: dict[str, tuple[str, str]] = {}
+        if dimension_spec is not None and dimension_spec.edge_mapping:
             edge_mapping = dimension_spec.edge_mapping
         else:
             # Infer edge mapping: "edge_name_property" -> ("edge_name", "property")
-            edge_mapping = {}
             for dim_name in dimension_values.keys():
                 # Try to find matching edge by stripping _distance suffix
                 if dim_name.endswith('_distance'):
@@ -270,7 +263,7 @@ def apply_dimensions(
         if dimension_spec is not None:
             mapping = dimension_spec.joint_mapping
         else:
-            mapping = _infer_mapping_from_names(dimension_values.keys())
+            mapping = _infer_mapping_from_names(list(dimension_values.keys()))
 
         # Apply each dimension
         for dim_name, new_value in dimension_values.items():
@@ -318,7 +311,7 @@ def apply_dimensions_from_array(
 
 
 def _infer_mapping_from_names(
-    dim_names: list[str],
+    dim_names: list[str] | tuple[str, ...],
 ) -> dict[str, tuple[str, str]]:
     """
     Infer joint mapping from dimension names using naming convention.
@@ -335,10 +328,6 @@ def _infer_mapping_from_names(
             mapping[name] = (joint_name, prop_name)
     return mapping
 
-
-# =============================================================================
-# Utility Functions
-# =============================================================================
 
 def dimensions_to_dict(
     values: tuple[float, ...],
@@ -541,7 +530,7 @@ def get_mech_variations_from_spec(
         # Box-Behnken design - efficient for response surface modeling
         if num_dims < 3:
             logger.warning(
-                f"Box-Behnken requires at least 3 factors, got {num_dims}. "
+                f'Box-Behnken requires at least 3 factors, got {num_dims}. '
                 'Falling back to full_combinatoric.',
             )
             gradations = get_combinatoric_gradations(spec.names, spec.bounds, n)
@@ -551,7 +540,7 @@ def get_mech_variations_from_spec(
             from pyDOE3 import bbdesign
         except ImportError as e:
             logger.error(
-                f"pyDOE3 not installed. Install with: pip install pyDOE3. Error: {e}",
+                f'pyDOE3 not installed. Install with: pip install pyDOE3. Error: {e}',
             )
             raise ImportError(
                 "pyDOE3 is required for 'behnken' mode. Install with: pip install pyDOE3",
@@ -574,11 +563,11 @@ def get_mech_variations_from_spec(
                 variation = dict(zip(spec.names, row.tolist()))
                 variations.append(variation)
 
-            logger.info(f"Box-Behnken design generated {len(variations)} points for {num_dims} factors")
+            logger.info(f'Box-Behnken design generated {len(variations)} points for {num_dims} factors')
             return variations
 
         except Exception as e:
-            logger.error(f"Box-Behnken design failed: {e}")
+            logger.error(f'Box-Behnken design failed: {e}')
             raise
 
     elif mode == 'sobol':
@@ -588,7 +577,7 @@ def get_mech_variations_from_spec(
             from pyDOE3 import sobol_sequence
         except ImportError as e:
             logger.error(
-                f"pyDOE3 not installed. Install with: pip install pyDOE3. Error: {e}",
+                f'pyDOE3 not installed. Install with: pip install pyDOE3. Error: {e}',
             )
             raise ImportError(
                 "pyDOE3 is required for 'sobol' mode. Install with: pip install pyDOE3",
@@ -614,11 +603,11 @@ def get_mech_variations_from_spec(
                 variation = dict(zip(spec.names, row.tolist()))
                 variations.append(variation)
 
-            logger.info(f"Sobol sequence generated {len(variations)} points for {num_dims} dimensions")
+            logger.info(f'Sobol sequence generated {len(variations)} points for {num_dims} dimensions')
             return variations
 
         except Exception as e:
-            logger.error(f"Sobol sequence generation failed: {e}")
+            logger.error(f'Sobol sequence generation failed: {e}')
             raise
 
     else:
@@ -722,7 +711,7 @@ def presample_valid_positions(
             n_invalid += 1
 
     valid_rate = (len(results) / len(variations) * 100) if variations else 0
-    logger.info(f"Presampling: {len(results)}/{len(variations)} valid ({valid_rate:.1f}%), {n_invalid} invalid")
+    logger.info(f'Presampling: {len(results)}/{len(variations)} valid ({valid_rate:.1f}%), {n_invalid} invalid')
 
     if not results:
         logger.warning('No valid configurations found during presampling!')
@@ -736,6 +725,6 @@ def presample_valid_positions(
     positions = np.array([r[1] for r in best_results])
     scores = np.array([r[0] for r in best_results])
 
-    logger.info(f"Presampling: returning {len(positions)} best positions (best score: {scores[0]:.4f})")
+    logger.info(f'Presampling: returning {len(positions)} best positions (best score: {scores[0]:.4f})')
 
     return positions, scores

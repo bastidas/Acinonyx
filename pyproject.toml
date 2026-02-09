@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=64.0.0", "setuptools_scm[toml]>=6.2", "pip >= 21.3"]
+requires = ["setuptools>=64.0.0", "setuptools_scm[toml]>=6.2", "pip >= 21.3", "Cython>=0.29.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -32,7 +32,10 @@ dependencies = [
     "pydantic == 2.12.4",
     "pylinkage",
     "pyDOE3",
-    "nlopt"
+    "nlopt",
+    "pyswarms",
+    "geohash2==1.1",
+    "shapely>=1.6.4"
     ]
 
 [project.optional-dependencies]
@@ -53,13 +56,17 @@ dev = [
 
 [tool.pytest.ini_options]
 minversion = "6.0"
-addopts = "-ra -q --strict-markers"
+addopts = "-ra -q --strict-markers --log-cli-level=DEBUG"
 testpaths = [
     "tests",
 ]
 python_files = "test_*.py"
 python_classes = "Test*"
 python_functions = "test_*"
+log_cli = true
+log_cli_level = "DEBUG"
+log_cli_format = "%(levelname)s - %(name)s - %(message)s"
+log_cli_date_format = "%H:%M:%S"
 
 [tool.setuptools.packages.find]
 where = ["."]
@@ -91,6 +98,7 @@ warn_return_any = true
 warn_unused_ignores = true
 disallow_untyped_defs = false
 ignore_missing_imports = true
+explicit_package_bases = true
 
 [tool.ruff]
 line-length = 120

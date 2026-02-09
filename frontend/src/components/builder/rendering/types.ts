@@ -94,6 +94,12 @@ export interface LinksRendererProps {
   unitsToPixels: (units: number) => number
   onLinkHover: (name: string | null) => void
   onLinkDoubleClick: (name: string) => void
+  /** When true, single click calls onMergeLinkClick(linkName) if provided. */
+  mergeMode?: boolean
+  /** Called when user single-clicks a link in merge mode. */
+  onMergeLinkClick?: (linkName: string) => void
+  /** When set, render an invisible wider hit area (px) for easier clicking. */
+  hitAreaStrokeWidthPx?: number
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -177,11 +183,14 @@ export interface DrawnObject {
   id: string
   type: 'polygon'
   name: string
+  /** Display points (BuilderTab may pass transformed points when merged to a link). */
   points: Position[]
   fillColor: string
   strokeColor: string
   strokeWidth: number
   fillOpacity: number
+  /** If set, polygon is merged to this link (for merge-mode styling: unmerge candidate). */
+  mergedLinkName?: string
 }
 
 export interface DrawnObjectsRendererProps {
@@ -198,6 +207,14 @@ export interface DrawnObjectsRendererProps {
   ) => { stroke: string; strokeWidth: number; filter?: string }
   unitsToPixels: (units: number) => number
   onObjectClick: (id: string, isSelected: boolean) => void
+  /** When true, apply merge-mode styling and use onMergePolygonClick for polygon clicks. */
+  mergeMode?: boolean
+  /** Polygon id under pointer (for merge hover styling). */
+  hoveredPolygonId?: string | null
+  /** Called when pointer enters/leaves a polygon in merge mode (polygonId or null). */
+  onMergePolygonHover?: (polygonId: string | null) => void
+  /** Called when user clicks a polygon in merge mode (objId, isUnmerge). */
+  onMergePolygonClick?: (objId: string, isUnmerge: boolean) => void
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════

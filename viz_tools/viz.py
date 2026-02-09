@@ -1,93 +1,17 @@
 from __future__ import annotations
 
 from itertools import cycle
-from pathlib import Path
 
 import matplotlib.pyplot as plt
 import networkx as nx
 import numpy as np
 import seaborn as sns
-from pydantic import BaseModel
-from pydantic import Field
 
 from configs.link_models import Link
-from configs.matplotlib_config import configure_matplotlib_for_backend
-# Configure matplotlib for backend use BEFORE any matplotlib imports
-configure_matplotlib_for_backend()
-
-
-class PlotStyleConfig(BaseModel):
-    """Pydantic configuration for plot styling"""
-
-    # Colors and colormaps
-    colormap: str = Field(default='Spectral', description='Matplotlib colormap name')
-    color_palette: str = Field(default='tab10', description='Seaborn color palette')
-    fixed_node_color: str = Field(default='#1f77b4', description='Color for fixed nodes')
-    free_node_color: str = Field(default='#ff7f0e', description='Color for free nodes')
-
-    # Line and marker properties
-    linewidth: float = Field(default=2.0, ge=0.1, le=10.0, description='Line width')
-    markersize: float = Field(default=15.0, ge=1.0, le=50.0, description='Marker size')
-    alpha: float = Field(default=0.9, ge=0.0, le=1.0, description='Transparency')
-
-    # Node properties
-    node_size: int = Field(default=300, ge=50, le=1000, description='Node size for graph plots')
-
-    # Display options
-    show_grid: bool = Field(default=True, description='Show grid')
-    show_legend: bool = Field(default=True, description='Show legend')
-    equal_aspect: bool = Field(default=True, description='Use equal aspect ratio')
-
-    # Font properties
-    font_weight: str = Field(default='bold', description='Font weight')
-
-    # Output properties
-    dpi: int = Field(default=300, ge=72, le=600, description='DPI for saved figures')
-    bbox_inches: str = Field(default='tight', description='Bounding box for saved figures')
-
-
-# Default style configuration
-DEFAULT_STYLE = PlotStyleConfig()
-
-
-def _setup_plot_style(title: str, style: PlotStyleConfig = DEFAULT_STYLE) -> None:
-    """Setup common plot styling"""
-    plt.xlabel('X')
-    plt.ylabel('Y')
-    plt.title(title)
-    if style.show_grid:
-        plt.grid(True, zorder=-1)
-    if style.equal_aspect:
-        plt.axis('equal')
-
-
-def _handle_output(
-    title: str, out_path: str | Path | None = None,
-    style: PlotStyleConfig = DEFAULT_STYLE,
-) -> None:
-    """Handle plot output - save if out_path provided, otherwise show"""
-    if out_path is not None:
-        out_path = Path(out_path)
-        if out_path.is_dir():
-            # If out_path is a directory, create filename from title
-            filename = f'{title}.png'
-            full_path = out_path / filename
-        else:
-            # If out_path includes filename, use as is
-            full_path = out_path
-
-        # Ensure directory exists
-        full_path.parent.mkdir(parents=True, exist_ok=True)
-
-        plt.savefig(full_path, dpi=style.dpi, bbox_inches=style.bbox_inches)
-        plt.close()  # Close to free memory
-    else:
-        # Only show plot if we're in an interactive environment (not in backend)
-        try:
-            plt.show()
-        except Exception:
-            # If show fails (e.g., no display available), just close the figure
-            plt.close()
+from viz_tools.viz_styling import _handle_output
+from viz_tools.viz_styling import _setup_plot_style
+from viz_tools.viz_styling import DEFAULT_PLOT_STYLE
+from viz_tools.viz_styling import PlotStyleConfig
 
 
 def plot_graph(

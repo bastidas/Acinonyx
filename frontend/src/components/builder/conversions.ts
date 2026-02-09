@@ -207,14 +207,14 @@ export function convertLinkageDocumentToLegacy(doc: LinkageDocument): PylinkDocu
       })
     }
 
-    if (meta) {
-      jointsMeta[node.id] = {
-        color: meta.color,
-        zlevel: meta.zlevel,
-        x: node.position[0],
-        y: node.position[1],
-        show_path: meta.showPath
-      }
+    // Always create meta with position (needed for getJointPosition to work)
+    // Use existing meta if available, otherwise create default
+    jointsMeta[node.id] = {
+      color: meta?.color || '#888888',
+      zlevel: meta?.zlevel || 0,
+      x: node.position[0],
+      y: node.position[1],
+      show_path: meta?.showPath || false
     }
   }
 

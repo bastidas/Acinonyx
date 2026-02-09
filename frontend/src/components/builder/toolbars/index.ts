@@ -35,3 +35,13 @@ export type {
   SmoothMethod,
   ResampleMethod
 } from './OptimizationToolbar'
+export { TargetTrajectoryPanel } from './TargetTrajectoryPanel'
+export type { TargetTrajectoryPanelProps } from './TargetTrajectoryPanel'
+export { OptimizationPanel } from './OptimizationPanel'
+export type { OptimizationPanelProps } from './OptimizationPanel'
+export { OptimizationBoundsConfig } from './OptimizationBoundsConfig'
+export type { OptimizationBoundsConfigProps } from './OptimizationBoundsConfig'
+export { DimensionVariationConfig } from './DimensionVariationConfig'
+export type { DimensionInfo, DimensionOverride, DimensionVariationConfigProps } from './DimensionVariationConfig'
+export { StaticJointMovementConfig } from './StaticJointMovementConfig'
+export type { StaticJoint, StaticJointMovementConfigProps } from './StaticJointMovementConfig'

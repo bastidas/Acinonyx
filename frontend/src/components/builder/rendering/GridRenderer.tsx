@@ -38,7 +38,7 @@ export function renderGrid({
         x1={unitsToPixels(i)}
         y1={0}
         x2={unitsToPixels(i)}
-        y2={canvasDimensions.height}
+        y2={canvasDimensions.height + 1}
         stroke={gridMajorColor}
         strokeWidth={1}
       />
@@ -59,7 +59,7 @@ export function renderGrid({
         key={`h-major-${i}`}
         x1={0}
         y1={unitsToPixels(i)}
-        x2={canvasDimensions.width}
+        x2={canvasDimensions.width + 1}
         y2={unitsToPixels(i)}
         stroke={gridMajorColor}
         strokeWidth={1}
@@ -82,7 +82,7 @@ export function renderGrid({
         x1={unitsToPixels(i)}
         y1={0}
         x2={unitsToPixels(i)}
-        y2={canvasDimensions.height}
+        y2={canvasDimensions.height + 1}
         stroke={gridMinorColor}
         strokeWidth={0.5}
         strokeDasharray="2,4"
@@ -97,7 +97,7 @@ export function renderGrid({
         key={`h-minor-${i}`}
         x1={0}
         y1={unitsToPixels(i)}
-        x2={canvasDimensions.width}
+        x2={canvasDimensions.width + 1}
         y2={unitsToPixels(i)}
         stroke={gridMinorColor}
         strokeWidth={0.5}

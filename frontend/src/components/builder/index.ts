@@ -95,6 +95,8 @@ export type {
 export {
   // SVG Filters
   SVGFilters,
+  // Canvas
+  CanvasRenderer,
   // Renderers
   GridRenderer,
   renderGrid,
@@ -135,6 +137,8 @@ export {
 
 // Rendering type exports
 export type {
+  CanvasRendererProps,
+  CanvasLayerRender,
   CanvasDimensions,
   JointColors,
   JointRenderData,
@@ -157,6 +161,18 @@ export type {
   MeasurementLineRendererProps,
   ColorCycleType
 } from './rendering'
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// BUILDER MODALS (Delete confirm, Joint edit, Link edit)
+// ═══════════════════════════════════════════════════════════════════════════════
+export { BuilderModals } from './BuilderModals'
+export type { BuilderModalsProps, DeleteConfirmDialogState } from './BuilderModals'
+
+export { BuilderCanvasArea } from './BuilderCanvasArea'
+export type { BuilderCanvasAreaProps, BuilderCanvasAreaOptimization } from './BuilderCanvasArea'
+
+export { BuilderToolbars } from './BuilderToolbars'
+export type { BuilderToolbarsProps } from './BuilderToolbars'
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // OPERATIONS (pure functions for state manipulation)
@@ -214,7 +230,16 @@ export type {
 export {
   useKeyboardShortcuts,
   useCanvasInteraction,
-  useStatusMessage
+  useStatusMessage,
+  useMoveGroup,
+  useModalState,
+  useToolSelectionState,
+  useDrawnPathState,
+  useToolFlowsState,
+  useStatusState,
+  useCanvasSettingsState,
+  useDocumentState,
+  useCanvasLayerRenders
 } from './hooks'
 
 // Hook type exports
@@ -228,8 +253,48 @@ export type {
   NearestResult,
   StatusType,
   StatusMessage,
-  UseStatusMessageReturn
+  UseStatusMessageReturn,
+  UseMoveGroupParams,
+  UseMoveGroupReturn,
+  UseModalStateReturn,
+  ModalDeleteConfirmState,
+  UseToolSelectionStateReturn,
+  UseDrawnPathStateReturn,
+  UseToolFlowsStateReturn,
+  PreviewLine,
+  UseStatusStateReturn,
+  UseCanvasSettingsStateReturn,
+  CanvasSettingsBgColor,
+  CanvasSettingsDimensions,
+  TrajectoryStyleOption,
+  SelectionHighlightColorOption,
+  UseDocumentStateReturn,
+  UseCanvasLayerRendersParams,
+  UseCanvasLayerRendersReturn
 } from './hooks'
+
+// Optimization Controller
+export {
+  useOptimizationController
+} from './OptimizationController'
+
+export type {
+  OptimizationResult,
+  DimensionInfo,
+  PreprocessResult,
+  OptimizationControllerContext,
+  UseOptimizationControllerReturn
+} from './OptimizationController'
+
+// Animation Controller
+export {
+  useAnimationController
+} from './AnimationController'
+
+export type {
+  AnimationControllerContext,
+  UseAnimationControllerReturn
+} from './AnimationController'
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // LINKAGE DOCUMENT HELPERS (pure functions for hypergraph format)
@@ -319,10 +384,16 @@ export {
   getDefaultEdgeColor,
 
   // Role change with constraint handling
-  changeNodeRole
+  changeNodeRole,
+
+  // Apply loaded document (file load / demo load)
+  applyLoadedDocument,
+
+  // Optimizer sync status (pure comparison)
+  computeOptimizerSyncStatus
 } from './helpers'
 
-export type { CreateLinkResult } from './helpers'
+export type { CreateLinkResult, ApplyLoadedDocumentParams, OptimizerSyncResult } from './helpers'
 
 // Re-export new hypergraph operations
 export {
@@ -372,3 +443,33 @@ export type {
   EdgeRenameResult,
   EdgeUpdateResult
 } from './operations'
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// TOOL HANDLERS (canvas input delegation per tool mode)
+// ═══════════════════════════════════════════════════════════════════════════════
+export {
+  baseToolHandler,
+  createToolHandler,
+  getPointFromContext,
+  getToolHandler,
+  selectToolHandler,
+  drawLinkToolHandler,
+  deleteToolHandler,
+  measureToolHandler,
+  groupSelectToolHandler,
+  drawPolygonToolHandler,
+  mergeToolHandler,
+  handleMergeLinkClick,
+  handleMergePolygonClick
+} from './toolHandlers'
+
+export type {
+  ToolHandler,
+  ToolContext,
+  CanvasPoint,
+  JointWithPosition,
+  LinkWithPosition,
+  NearestJointResult,
+  NearestLinkResult,
+  HandleMergePolygonClickParams
+} from './toolHandlers'

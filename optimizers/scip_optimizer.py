@@ -19,13 +19,15 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+from typing import Literal
 from typing import TYPE_CHECKING
 
 import numpy as np
 
 if TYPE_CHECKING:
+    from pylink_tools.mechanism import Mechanism
     from pylink_tools.optimization_types import (
-        DimensionSpec,
+        DimensionBoundsSpec,
         OptimizationResult,
         TargetTrajectory,
     )
@@ -63,13 +65,14 @@ class SCIPConfig:
 # =============================================================================
 
 def run_scip_optimization(
-    pylink_data: dict,
+    mechanism: Mechanism,
     target: TargetTrajectory,
-    dimension_spec: DimensionSpec | None = None,
+    dimension_bounds_spec: DimensionBoundsSpec | None = None,
     config: SCIPConfig | None = None,
     metric: str = 'mse',
     verbose: bool = True,
     phase_invariant: bool = True,
+    phase_align_method: Literal['rotation', 'fft', 'frechet'] = 'rotation',
     # Additional kwargs for compatibility
     **kwargs,
 ) -> OptimizationResult:
@@ -86,20 +89,21 @@ def run_scip_optimization(
     as it may be more efficient.
 
     Args:
-        pylink_data: Base pylink document with linkage configuration
+        mechanism: Mechanism object to optimize (will be modified in place)
         target: Target trajectory to match (joint name + positions)
-        dimension_spec: Dimensions to optimize (extracted if not provided)
+        dimension_bounds_spec: Dimensions to optimize (extracted from mechanism if not provided)
         config: SCIP configuration (uses defaults if not provided)
         metric: Error metric ('mse', 'rmse', 'total', 'max')
         verbose: Print progress information
         phase_invariant: Use phase-aligned scoring (recommended for external targets)
+        phase_align_method: Phase alignment algorithm
         **kwargs: Additional arguments (ignored, for interface compatibility)
 
     Returns:
         OptimizationResult with:
             - success: True if optimal/feasible solution found
             - optimized_dimensions: Best found dimension values
-            - optimized_pylink_data: Updated linkage with optimized dimensions
+            - optimized_mechanism: Mechanism object with optimized dimensions
             - initial_error: Error before optimization
             - final_error: Best achieved error
             - iterations: Number of branch-and-bound nodes explored
@@ -109,10 +113,12 @@ def run_scip_optimization(
         ImportError: If pyscipopt package is not installed
 
     Example:
+        >>> from pylink_tools.mechanism import Mechanism
         >>> from optimizers import run_scip_optimization, SCIPConfig
+        >>> mechanism = Mechanism(...)  # Create mechanism
         >>> config = SCIPConfig(time_limit=60, gap_limit=0.001)
         >>> result = run_scip_optimization(
-        ...     pylink_data, target,
+        ...     mechanism, target,
         ...     config=config,
         ...     verbose=True
         ... )
@@ -148,11 +154,29 @@ def run_scip_optimization(
             error=error_msg,
         )
 
+    # Validate mechanism type
+    from pylink_tools.mechanism import Mechanism as MechanismType
+    if not isinstance(mechanism, MechanismType):
+        return OptimizationResult(
+            success=False,
+            optimized_dimensions={},
+            error=f'Expected Mechanism object, got {type(mechanism).__name__}. '
+                  f'Convert pylink_data to Mechanism using create_mechanism_from_dict()',
+        )
+
+    # Extract dimensions if not provided
+    if dimension_bounds_spec is None:
+        dimension_bounds_spec = mechanism.get_dimension_bounds_spec()
+
+    # Ensure mechanism has correct n_steps
+    if mechanism.n_steps != target.n_steps:
+        mechanism._n_steps = target.n_steps
+
     # TODO: IMPLEMENTATION PLACEHOLDER
     # This is a mock implementation - see implementation plan below
     logger.warning('SCIP optimizer not yet implemented - returning mock result')
 
-    return _mock_scip_result(pylink_data, target, dimension_spec, verbose)
+    return _mock_scip_result(mechanism, target, dimension_bounds_spec, verbose)
 
 
 # =============================================================================
@@ -213,8 +237,8 @@ Phase 2: Implementation Steps
 2. Create discrete variables:
    ```python
    vars = {}
-   for i, name in enumerate(dimension_spec.names):
-       lb, ub = dimension_spec.bounds[i]
+   for i, name in enumerate(dimension_bounds_spec.names):
+       lb, ub = dimension_bounds_spec.bounds[i]
        # Create integer variable for grid index
        vars[name] = model.addVar(
            name=name,
@@ -310,30 +334,29 @@ SCIP may be more valuable for:
 # =============================================================================
 
 def _mock_scip_result(
-    pylink_data: dict,
+    mechanism: Mechanism,
     target: TargetTrajectory,
-    dimension_spec: DimensionSpec | None,
+    dimension_bounds_spec: DimensionBoundsSpec,
     verbose: bool,
 ) -> OptimizationResult:
     """Return a mock result for testing interface compatibility."""
     from pylink_tools.optimization_types import OptimizationResult
-    from pylink_tools.optimization_helpers import extract_dimensions
-
-    if dimension_spec is None:
-        dimension_spec = extract_dimensions(pylink_data)
 
     # Return initial values as "optimized" (no actual optimization)
-    optimized_dims = dict(zip(dimension_spec.names, dimension_spec.initial_values))
+    optimized_dims = dict(zip(dimension_bounds_spec.names, dimension_bounds_spec.initial_values))
 
     if verbose:
         logger.info('SCIP: Mock result (not implemented)')
-        logger.info(f'  Dimensions: {len(dimension_spec)}')
-        logger.info(f'  Would optimize: {list(dimension_spec.names)}')
+        logger.info(f'  Dimensions: {len(dimension_bounds_spec)}')
+        logger.info(f'  Would optimize: {list(dimension_bounds_spec.names)}')
+
+    # Return mechanism copy (no optimization performed)
+    optimized_mechanism = mechanism.copy()
 
     return OptimizationResult(
         success=False,
         optimized_dimensions=optimized_dims,
-        optimized_pylink_data=pylink_data.copy(),
+        optimized_mechanism=optimized_mechanism,
         initial_error=float('inf'),
         final_error=float('inf'),
         iterations=0,
@@ -342,14 +365,14 @@ def _mock_scip_result(
 
 
 def _create_discretized_grid(
-    dimension_spec: DimensionSpec,
+    dimension_bounds_spec: DimensionBoundsSpec,
     n_steps: int,
 ) -> tuple[np.ndarray, np.ndarray]:
     """
     Create discretized grid for dimension space.
 
     Args:
-        dimension_spec: Dimension specification with bounds
+        dimension_bounds_spec: Dimension specification with bounds
         n_steps: Number of grid points per dimension
 
     Returns:
@@ -357,10 +380,10 @@ def _create_discretized_grid(
             - grid_values: Array of shape (n_dims, n_steps) with actual values
             - grid_indices: Array of indices for each dimension
     """
-    n_dims = len(dimension_spec)
+    n_dims = len(dimension_bounds_spec)
     grid_values = np.zeros((n_dims, n_steps))
 
-    for i, (lb, ub) in enumerate(dimension_spec.bounds):
+    for i, (lb, ub) in enumerate(dimension_bounds_spec.bounds):
         grid_values[i] = np.linspace(lb, ub, n_steps)
 
     grid_indices = np.arange(n_steps)

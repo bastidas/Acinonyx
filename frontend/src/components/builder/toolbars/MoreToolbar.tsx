@@ -18,7 +18,6 @@ export interface MoreToolbarProps {
   loadFromFile: () => void
   savePylinkGraph: () => void
   savePylinkGraphAs: () => void
-  validateMechanism: () => void
 }
 
 export const MoreToolbar: React.FC<MoreToolbarProps> = ({
@@ -30,7 +29,6 @@ export const MoreToolbar: React.FC<MoreToolbarProps> = ({
   loadFromFile,
   savePylinkGraph,
   savePylinkGraphAs,
-  validateMechanism,
 }) => {
   return (
     <Box sx={{ p: 1.5 }}>
@@ -124,52 +122,6 @@ export const MoreToolbar: React.FC<MoreToolbarProps> = ({
         </Button>
       </Box>
 
-      <Divider sx={{ my: 1 }} />
-
-      {/* ═══════════════════════════════════════════════════════════════════════
-          VALIDATION
-          ═══════════════════════════════════════════════════════════════════════ */}
-      <Typography variant="caption" sx={{ fontWeight: 600, color: 'text.secondary' }}>
-        Validation
-      </Typography>
-      <Tooltip
-        title={
-          <Box sx={{ p: 0.5, maxWidth: 240 }}>
-            <Typography variant="subtitle2" sx={{ fontWeight: 600, fontSize: '0.75rem' }}>
-              Validate Mechanism
-            </Typography>
-            <Typography variant="caption" sx={{ display: 'block', mt: 0.5, fontSize: '0.65rem' }}>
-              Checks if the mechanism can be simulated. Requires links, a Crank driver, and Static ground.
-            </Typography>
-          </Box>
-        }
-        enterDelay={500}
-        leaveDelay={100}
-        placement="top"
-        arrow
-      >
-        <span style={{ display: 'block', marginTop: 8 }}>
-          <Button
-            variant="outlined"
-            fullWidth
-            size="small"
-            onClick={validateMechanism}
-            sx={{
-              textTransform: 'none',
-              justifyContent: 'flex-start',
-              fontSize: '0.75rem',
-              borderColor: '#1976d2',
-              color: '#1976d2',
-              '&:hover': {
-                backgroundColor: 'rgba(25, 118, 210, 0.08)',
-                borderColor: '#1565c0'
-              }
-            }}
-          >
-            ✓ Validate
-          </Button>
-        </span>
-      </Tooltip>
     </Box>
   )
 }

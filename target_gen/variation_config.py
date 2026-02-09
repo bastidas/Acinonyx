@@ -5,7 +5,7 @@ This module contains all configuration dataclasses used by the solver_tools
 module for generating achievable optimization targets.
 
 Configuration hierarchy:
-    AchievableTargetConfig (main)
+    MechVariationConfig (main)
     ├── DimensionVariationConfig   - Control per-dimension randomization
     ├── StaticJointMovementConfig  - Control static joint movement (optional)
     └── TopologyChangeConfig       - Future: add/remove links/nodes (stub)
@@ -14,6 +14,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from dataclasses import field
+
+from pylinkage.joints import Static
+
+from pylink_tools.mechanism import Mechanism
+from pylink_tools.optimization_types import TargetTrajectory
 
 
 @dataclass
@@ -148,6 +153,87 @@ class StaticJointMovementConfig:
 
         return (True, self.max_x_movement, self.max_y_movement)
 
+    def validate(self, mechanism) -> None:
+        """
+        Validate that this config can be applied to the given mechanism.
+
+        Checks that:
+        - All joints in joint_overrides exist in the mechanism
+        - All joints in linked_joints exist in the mechanism
+        - Referenced joints are actually static joints (if mechanism is provided)
+
+        Args:
+            mechanism: Mechanism instance to validate against
+
+        Raises:
+            ValueError: If validation fails with details about missing/invalid joints
+        """
+        if not isinstance(mechanism, Mechanism):
+            raise TypeError(f'Expected Mechanism, got {type(mechanism).__name__}')
+
+        available_joints = set(mechanism.joint_names)
+        errors: list[str] = []
+
+        # Check joint_overrides
+        for joint_name in self.joint_overrides.keys():
+            if joint_name not in available_joints:
+                errors.append(
+                    f"Joint '{joint_name}' in joint_overrides not found in mechanism. "
+                    f'Available joints: {sorted(available_joints)}',
+                )
+
+        # Check linked_joints
+        for link_a, link_b in self.linked_joints:
+            if link_a not in available_joints:
+                errors.append(
+                    f"Joint '{link_a}' in linked_joints not found in mechanism. "
+                    f'Available joints: {sorted(available_joints)}',
+                )
+            if link_b not in available_joints:
+                errors.append(
+                    f"Joint '{link_b}' in linked_joints not found in mechanism. "
+                    f'Available joints: {sorted(available_joints)}',
+                )
+
+        # Check that referenced joints are actually static
+        static_joint_names = {
+            joint.name for joint in mechanism.linkage.joints
+            if isinstance(joint, Static)
+        }
+
+        # Warn if no static joints exist at all
+        if not static_joint_names:
+            errors.append(
+                'No static joints found in mechanism. Static joint movement requires '
+                'at least one static/ground joint.',
+            )
+
+        # Check joint_overrides reference static joints
+        for joint_name in self.joint_overrides.keys():
+            if joint_name in available_joints and joint_name not in static_joint_names:
+                errors.append(
+                    f"Joint '{joint_name}' in joint_overrides is not a static joint. "
+                    f'Static joint movement only applies to static/ground joints. '
+                    f"Available static joints: {sorted(static_joint_names) if static_joint_names else 'none'}",
+                )
+
+        # Check linked_joints reference static joints
+        for link_a, link_b in self.linked_joints:
+            if link_a in available_joints and link_a not in static_joint_names:
+                errors.append(
+                    f"Joint '{link_a}' in linked_joints is not a static joint. "
+                    f"Available static joints: {sorted(static_joint_names) if static_joint_names else 'none'}",
+                )
+            if link_b in available_joints and link_b not in static_joint_names:
+                errors.append(
+                    f"Joint '{link_b}' in linked_joints is not a static joint. "
+                    f"Available static joints: {sorted(static_joint_names) if static_joint_names else 'none'}",
+                )
+
+        if errors:
+            error_msg = 'StaticJointMovementConfig validation failed:\n  ' + '\n  '.join(errors)
+            raise ValueError(error_msg)
+
 
 @dataclass
 class TopologyChangeConfig:
@@ -188,13 +274,13 @@ class TopologyChangeConfig:
 
 
 @dataclass
-class AchievableTargetConfig:
+class MechVariationConfig:
     """
-    Master configuration for achievable target generation.
+    Configuration for HOW to vary dimensions when generating targets or mechanisms.
 
-    This is the main configuration object passed to create_achievable_target().
-    It aggregates all sub-configurations for dimension variation, static joint
-    movement, and topology changes.
+    This is the main configuration object for dimension variation. It aggregates
+    all sub-configurations for dimension variation, static joint movement, and
+    topology changes. Can be used for both target generation and optimization.
 
     Attributes:
         dimension_variation: Config for which dimensions to vary and by how much.
@@ -208,10 +294,10 @@ class AchievableTargetConfig:
 
     Example:
         >>> # Default configuration: ±50% dimension variation
-        >>> config = AchievableTargetConfig()
+        >>> config = MechVariationConfig()
 
         >>> # Conservative: ±25% variation with more retries
-        >>> config = AchievableTargetConfig(
+        >>> config = MechVariationConfig(
         ...     dimension_variation=DimensionVariationConfig(
         ...         default_variation_range=0.25
         ...     ),
@@ -219,7 +305,7 @@ class AchievableTargetConfig:
         ... )
 
         >>> # Per-dimension control
-        >>> config = AchievableTargetConfig(
+        >>> config = MechVariationConfig(
         ...     dimension_variation=DimensionVariationConfig(
         ...         default_variation_range=0.3,
         ...         dimension_overrides={
@@ -240,7 +326,7 @@ class AchievableTargetConfig:
         default_factory=TopologyChangeConfig,
     )
     max_attempts: int = 128
-    fallback_ranges: list[float] = field(default_factory=lambda: [0.15, 0.15, 0.15])
+    fallback_ranges: list[float] = field(default_factory=lambda: [0.3, 0.3, 0.3])
     random_seed: int | None = None
 
     def __post_init__(self):
@@ -250,3 +336,36 @@ class AchievableTargetConfig:
                 'Topology changes are not yet implemented. '
                 'Set topology_changes.enabled=False.',
             )
+
+
+# Default variation config for mechanism creation (equivalent to old bounds_factor=2.0)
+DEFAULT_VARIATION_CONFIG = MechVariationConfig(
+    dimension_variation=DimensionVariationConfig(
+        default_variation_range=2.0,  # Equivalent to old bounds_factor=2.0
+    ),
+)
+
+
+@dataclass
+class AchievableTargetResult:
+    """
+    Result of create_achievable_target().
+
+    Contains the generated target trajectory along with all information
+    needed to understand and reproduce the target.
+
+    Attributes:
+        target: The generated TargetTrajectory object.
+        target_dimensions: Dict of dimension values that produce this target.
+        target_mechanism: Mechanism with target dimensions applied (for serialization).
+        static_joint_movements: Dict of movements applied to static joints
+            (if any). Format: {joint_name: (dx, dy)}
+        attempts_needed: Number of attempts to find valid configuration.
+        fallback_range_used: The variation range that succeeded (None if primary).
+    """
+    target: TargetTrajectory
+    target_dimensions: dict[str, float]
+    target_mechanism: Mechanism
+    static_joint_movements: dict[str, tuple[float, float]] = field(default_factory=dict)
+    attempts_needed: int = 1
+    fallback_range_used: float | None = None

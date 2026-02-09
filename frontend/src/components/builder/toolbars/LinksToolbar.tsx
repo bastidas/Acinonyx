@@ -5,9 +5,11 @@ import React, { useRef } from 'react'
 import { Box, Typography } from '@mui/material'
 import { calculateDistance, getDefaultColor } from '../../BuilderTools'
 import type { LinkMeta } from '../types'
+import type { LinkageDocument } from '../../../types'
 
 export interface LinksToolbarProps {
   links: Record<string, LinkMeta>
+  linkageDoc: LinkageDocument  // Add LinkageDocument to access edge distances
   selectedLinks: string[]
   setSelectedLinks: (links: string[]) => void
   setSelectedJoints: (joints: string[]) => void
@@ -20,6 +22,7 @@ export interface LinksToolbarProps {
 
 export const LinksToolbar: React.FC<LinksToolbarProps> = ({
   links,
+  linkageDoc,
   selectedLinks,
   setSelectedLinks,
   setSelectedJoints,
@@ -41,9 +44,16 @@ export const LinksToolbar: React.FC<LinksToolbarProps> = ({
         </Box>
       ) : (
         Object.entries(links).map(([linkName, linkMeta], index) => {
+          // CRITICAL FIX: Read distance from LinkageDocument edge, not from visual positions
+          // This ensures we show the actual optimized edge distance, not a calculated value
+          const edge = linkageDoc.linkage?.edges?.[linkName]
+          const distance = edge?.distance
+
+          // Fallback to calculated distance only if edge distance is not available
           const pos0 = getJointPosition(linkMeta.connects[0])
           const pos1 = getJointPosition(linkMeta.connects[1])
-          const length = pos0 && pos1 ? calculateDistance(pos0, pos1) : null
+          const calculatedLength = pos0 && pos1 ? calculateDistance(pos0, pos1) : null
+          const length = distance !== undefined && distance !== null ? distance : calculatedLength
           const isSelected = selectedLinks.includes(linkName)
           const isHovered = hoveredLink === linkName
 

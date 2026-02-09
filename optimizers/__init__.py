@@ -2,8 +2,9 @@
 Optimizer implementations for linkage trajectory optimization.
 
 Each optimizer follows a consistent interface:
-- Takes pylink_data, target trajectory, dimension spec
+- Takes Mechanism object, target trajectory, dimension spec
 - Returns OptimizationResult
+- All optimizers use Mechanism-based fast path (no pylink_data)
 
 Available optimizers:
 - scipy: Scipy-based optimization (L-BFGS-B, Powell, Nelder-Mead)
@@ -15,17 +16,17 @@ Available optimizers:
 """
 from __future__ import annotations
 
-from optimizers.nlopt_mlsl import NLoptMLSLConfig
-from optimizers.nlopt_mlsl import run_nlopt_mlsl
-from optimizers.nlopt_mlsl import run_nlopt_mlsl_gf
-from optimizers.pso_optimizer import PSOConfig
-from optimizers.pso_optimizer import run_pso_optimization
+from optimizers.mlsl_optimizer import NLoptMLSLConfig
+from optimizers.mlsl_optimizer import run_nlopt_mlsl
+from optimizers.mlsl_optimizer import run_nlopt_mlsl_gf
 from optimizers.pylinkage_pso import PylinkagePSOConfig
 from optimizers.pylinkage_pso import run_pylinkage_pso
 from optimizers.scip_optimizer import run_scip_optimization
 from optimizers.scip_optimizer import SCIPConfig
 from optimizers.scipy_optimizer import run_scipy_optimization
 from optimizers.scipy_optimizer import ScipyConfig
+# from optimizers.pso_optimizer import PSOConfig
+# from optimizers.pso_optimizer import run_pso_optimization
 # NLopt optimizers
 # PSO optimizers
 # Pylinkage PSO
@@ -66,14 +67,14 @@ AVAILABLE_OPTIMIZERS = {
         'gradient': False,
         'global': False,
     },
-    'pso': {
-        'function': run_pso_optimization,
-        'config_class': PSOConfig,
-        'description': 'Standalone Particle Swarm Optimization',
-        'package': None,  # Built-in
-        'gradient': False,
-        'global': True,
-    },
+    # 'pso': {
+    #     'function': run_pso_optimization,
+    #     'config_class': PSOConfig,
+    #     'description': 'Standalone Particle Swarm Optimization',
+    #     'package': None,  # Built-in
+    #     'gradient': False,
+    #     'global': True,
+    # },
     'pylinkage': {
         'function': run_pylinkage_pso,
         'config_class': PylinkagePSOConfig,

@@ -1,5 +1,5 @@
 """
-NLopt MLSL (Multi-Level Single-Linkage) optimizer with L-BFGS local search.
+NLopt MLSL optimizer with L-BFGS local search.
 
 MLSL is a global optimization algorithm that:
 - Uses low-discrepancy sequences to sample the search space
@@ -20,15 +20,12 @@ from typing import Literal
 from typing import TYPE_CHECKING
 
 import numpy as np
-# import copy
-# from dataclasses import field
 
-if TYPE_CHECKING:
-    from pylink_tools.optimization_types import (
-        DimensionSpec,
-        OptimizationResult,
-        TargetTrajectory,
-    )
+from pylink_tools.mechanism import create_mechanism_fitness
+from pylink_tools.mechanism import Mechanism
+from pylink_tools.optimization_types import DimensionBoundsSpec
+from pylink_tools.optimization_types import OptimizationResult
+from pylink_tools.optimization_types import TargetTrajectory
 
 logger = logging.getLogger(__name__)
 
@@ -49,8 +46,8 @@ class NLoptMLSLConfig:
         gradient_epsilon: Step size for finite difference gradient computation
         stopval: Stop when objective reaches this value (0 = disabled)
     """
-    max_eval: int = 1000
-    local_max_eval: int = 100
+    max_eval: int = 1024
+    local_max_eval: int = 128
     ftol_rel: float = 1e-6
     xtol_rel: float = 1e-6
     population: int = 0  # 0 = use heuristic default
@@ -61,9 +58,9 @@ class NLoptMLSLConfig:
 
 
 def run_nlopt_mlsl(
-    pylink_data: dict,
+    mechanism: Mechanism,
     target: TargetTrajectory,
-    dimension_spec: DimensionSpec | None = None,
+    dimension_bounds_spec: DimensionBoundsSpec | None = None,
     config: NLoptMLSLConfig | None = None,
     metric: str = 'mse',
     verbose: bool = True,
@@ -86,9 +83,9 @@ def run_nlopt_mlsl(
     4. Returning the best found solution
 
     Args:
-        pylink_data: Base pylink document with linkage configuration
+        mechanism: Base mechanism to optimize (will be modified in place)
         target: Target trajectory to match (joint name + positions)
-        dimension_spec: Dimensions to optimize (extracted if not provided)
+        dimension_bounds_spec: Dimensions to optimize (extracted from mechanism if not provided)
         config: MLSL configuration (uses defaults if not provided)
         metric: Error metric ('mse', 'rmse', 'total', 'max')
         verbose: Print progress information
@@ -100,7 +97,7 @@ def run_nlopt_mlsl(
         OptimizationResult with:
             - success: True if optimization converged
             - optimized_dimensions: Best found dimension values
-            - optimized_pylink_data: Updated linkage with optimized dimensions
+            - optimized_mechanism: Mechanism object with optimized dimensions
             - initial_error: Error before optimization
             - final_error: Best achieved error
             - iterations: Number of function evaluations
@@ -111,9 +108,11 @@ def run_nlopt_mlsl(
 
     Example:
         >>> from optimizers import run_nlopt_mlsl, NLoptMLSLConfig
+        >>> from pylink_tools.mechanism import Mechanism
+        >>> mechanism = Mechanism(...)  # Create mechanism
         >>> config = NLoptMLSLConfig(max_eval=2000, ftol_rel=1e-8)
         >>> result = run_nlopt_mlsl(
-        ...     pylink_data, target,
+        ...     mechanism, target,
         ...     config=config,
         ...     verbose=True
         ... )
@@ -126,10 +125,6 @@ def run_nlopt_mlsl(
         - MLSL_LDS variant uses Sobol sequences for better coverage
         - Local L-BFGS requires gradient estimation (finite differences)
     """
-    from pylink_tools.optimization_types import OptimizationResult
-    from pylink_tools.optimization_helpers import extract_dimensions, apply_dimensions
-    from pylink_tools.optimize import create_fitness_function
-
     # Import here to provide clear error if not installed
     try:
         import nlopt
@@ -150,10 +145,10 @@ def run_nlopt_mlsl(
         config = NLoptMLSLConfig()
 
     # Extract dimension specification if not provided
-    if dimension_spec is None:
-        dimension_spec = extract_dimensions(pylink_data)
+    if dimension_bounds_spec is None:
+        dimension_bounds_spec = mechanism.get_dimension_bounds_spec()
 
-    dim = len(dimension_spec)
+    dim = len(dimension_bounds_spec)
     if dim == 0:
         return OptimizationResult(
             success=False,
@@ -161,23 +156,30 @@ def run_nlopt_mlsl(
             error='No dimensions to optimize',
         )
 
-    fitness_func = create_fitness_function(
-        pylink_data,
-        target,
-        dimension_spec,
+    # Ensure mechanism has correct n_steps for target trajectory
+    if mechanism._n_steps != target.n_steps:
+        mechanism._n_steps = target.n_steps
+
+    translation_invariant = True
+    # Create fast fitness function using Mechanism
+    # target_arr = np.array(target.positions)
+    fitness_func = create_mechanism_fitness(
+        mechanism=mechanism,
+        target=target,  # TargetTrajectory
+        target_joint=target.joint_name,
         metric=metric,
-        verbose=False,
         phase_invariant=phase_invariant,
         phase_align_method=phase_align_method,
+        translation_invariant=translation_invariant,
     )
 
     # Compute initial error
-    x0 = np.array(dimension_spec.initial_values, dtype=np.float64)
+    x0 = np.array(dimension_bounds_spec.initial_values, dtype=np.float64)
     initial_error = fitness_func(tuple(x0))
 
     # Get bounds
-    lower_bounds = np.array([b[0] for b in dimension_spec.bounds], dtype=np.float64)
-    upper_bounds = np.array([b[1] for b in dimension_spec.bounds], dtype=np.float64)
+    lower_bounds = np.array([b[0] for b in dimension_bounds_spec.bounds], dtype=np.float64)
+    upper_bounds = np.array([b[1] for b in dimension_bounds_spec.bounds], dtype=np.float64)
 
     if verbose:
         logger.info('Starting NLopt MLSL optimization')
@@ -186,8 +188,8 @@ def run_nlopt_mlsl(
         logger.info(f'  Max evaluations: {config.max_eval}')
         logger.info(f'  Local max evaluations: {config.local_max_eval}')
         logger.info(f'  Initial error: {initial_error:.6f}')
-        logger.info(f'  Bounds:')
-        for name, lo, hi, init in zip(dimension_spec.names, lower_bounds, upper_bounds, x0):
+        logger.info('  Bounds:')
+        for name, lo, hi, init in zip(dimension_bounds_spec.names, lower_bounds, upper_bounds, x0):
             logger.info(f'    {name}: [{lo:.2f}, {hi:.2f}] (init: {init:.2f})')
 
     # Track convergence history
@@ -291,8 +293,8 @@ def run_nlopt_mlsl(
         logger.error(f'NLopt optimization failed: {e}')
         return OptimizationResult(
             success=False,
-            optimized_dimensions=dict(zip(dimension_spec.names, x0)),
-            optimized_pylink_data=pylink_data,
+            optimized_dimensions=dict(zip(dimension_bounds_spec.names, x0)),
+            optimized_mechanism=mechanism.copy(),
             initial_error=initial_error,
             final_error=initial_error,
             iterations=eval_count[0],
@@ -321,30 +323,31 @@ def run_nlopt_mlsl(
         success = True  # Count as success if we improved
 
     # Build optimized dimensions dict
-    optimized_dims = dict(zip(dimension_spec.names, xopt))
+    optimized_dims = dict(zip(dimension_bounds_spec.names, xopt))
 
-    # Apply to pylink_data
-    optimized_pylink_data = apply_dimensions(pylink_data, optimized_dims, dimension_spec)
+    # Update mechanism with optimized dimensions and return copy
+    mechanism.set_dimensions(xopt)
+    optimized_mechanism = mechanism.copy()
 
     if verbose:
         result_name = _get_result_name(result_code)
         improvement = (1 - final_error / initial_error) * 100 if initial_error > 0 else 0
-        logger.info(f'NLopt MLSL completed:')
+        logger.info('NLopt MLSL completed:')
         logger.info(f'  Result: {result_name}')
         logger.info(f'  Evaluations: {eval_count[0]}')
         logger.info(f'  Time: {elapsed_time:.2f}s')
         logger.info(f'  Initial error: {initial_error:.6f}')
         logger.info(f'  Final error: {final_error:.6f}')
         logger.info(f'  Improvement: {improvement:.1f}%')
-        logger.info(f'  Optimized dimensions:')
+        logger.info('  Optimized dimensions:')
         for name, val in optimized_dims.items():
-            init_val = dict(zip(dimension_spec.names, x0))[name]
+            init_val = dict(zip(dimension_bounds_spec.names, x0))[name]
             logger.info(f'    {name}: {init_val:.2f} -> {val:.2f}')
 
     return OptimizationResult(
         success=success,
         optimized_dimensions=optimized_dims,
-        optimized_pylink_data=optimized_pylink_data,
+        optimized_mechanism=optimized_mechanism,
         initial_error=initial_error,
         final_error=final_error,
         iterations=eval_count[0],
@@ -379,9 +382,9 @@ def _get_result_name(result_code) -> str:
 # =============================================================================
 
 def run_nlopt_mlsl_gf(
-    pylink_data: dict,
+    mechanism: Mechanism,
     target: TargetTrajectory,
-    dimension_spec: DimensionSpec | None = None,
+    dimension_bounds_spec: DimensionBoundsSpec | None = None,
     config: NLoptMLSLConfig | None = None,
     metric: str = 'mse',
     verbose: bool = True,
@@ -413,9 +416,9 @@ def run_nlopt_mlsl_gf(
         )
 
     return run_nlopt_mlsl(
-        pylink_data=pylink_data,
+        mechanism=mechanism,
         target=target,
-        dimension_spec=dimension_spec,
+        dimension_bounds_spec=dimension_bounds_spec,
         config=config,
         metric=metric,
         verbose=verbose,

@@ -1,11 +1,9 @@
 """
-Adapter for pylinkage's native hypergraph module.
+hypergraph_adapter.py - Convert pylink_data to pylinkage Linkage and extract dimensions.
 
 This module bridges our JSON format (used by frontend) to pylinkage's native
-HypergraphLinkage class, enabling:
-- Direct use of pylinkage's `to_linkage()` for simulation
-- Cleaner code with less custom conversion logic
-- Better compatibility with pylinkage updates
+HypergraphLinkage class for simulation, and provides utilities for extracting
+optimizable dimensions from hypergraph format.
 
 Our JSON format (frontend-friendly, dict-keyed):
     {
@@ -15,42 +13,24 @@ Our JSON format (frontend-friendly, dict-keyed):
         }
     }
 
-pylinkage format (array-based, enum roles):
-    {
-        "nodes": [{ "id": "A", "position": [x, y], "role": "GROUND", ... }, ...],
-        "edges": [{ "id": "link1", "source": "A", "target": "B", "distance": 20 }, ...]
-    }
-
 Usage:
-    from pylink_tools.hypergraph_adapter import (
-        to_pylinkage_hypergraph,
-        from_pylinkage_hypergraph,
-        simulate_hypergraph,
-    )
+    from pylink_tools.hypergraph_adapter import to_simulatable_linkage, extract_dimensions
 
-    # Convert our format to pylinkage's HypergraphLinkage
-    hg = to_pylinkage_hypergraph(pylink_data)
-
-    # Simulate and get trajectories
-    trajectories = simulate_hypergraph(hg, n_steps=24)
+    linkage = to_simulatable_linkage(pylink_data)
+    dim_spec = extract_dimensions(pylink_data)
 """
 from __future__ import annotations
 
 import copy
-from dataclasses import dataclass
-from typing import Any
 from typing import TYPE_CHECKING
+
+from pylink_tools.optimization_types import DimensionBoundsSpec
 
 if TYPE_CHECKING:
     from pylinkage.hypergraph import HypergraphLinkage
     from pylinkage.linkage.linkage import Linkage
 
-
-# =============================================================================
-# Role Mapping
-# =============================================================================
-
-# Our frontend uses lowercase role names, pylinkage uses uppercase enum names
+# Role mapping: our frontend uses lowercase, pylinkage uses uppercase
 ROLE_TO_PYLINKAGE = {
     'fixed': 'GROUND',
     'ground': 'GROUND',
@@ -60,46 +40,6 @@ ROLE_TO_PYLINKAGE = {
     'driven': 'DRIVEN',
 }
 
-ROLE_FROM_PYLINKAGE = {v: k for k, v in ROLE_TO_PYLINKAGE.items()}
-# Normalize to our preferred names
-ROLE_FROM_PYLINKAGE['GROUND'] = 'fixed'
-ROLE_FROM_PYLINKAGE['DRIVER'] = 'crank'
-ROLE_FROM_PYLINKAGE['DRIVEN'] = 'follower'
-
-
-# =============================================================================
-# Format Detection
-# =============================================================================
-
-def is_our_hypergraph_format(data: dict) -> bool:
-    """Check if data is in our dict-keyed hypergraph format."""
-    linkage = data.get('linkage', {})
-    nodes = linkage.get('nodes', {})
-    edges = linkage.get('edges', {})
-
-    # Our format: nodes and edges are dicts keyed by ID
-    return isinstance(nodes, dict) and isinstance(edges, dict) and len(nodes) > 0
-
-
-def is_pylinkage_hypergraph_format(data: dict) -> bool:
-    """Check if data is in pylinkage's array-based hypergraph format."""
-    nodes = data.get('nodes', [])
-    edges = data.get('edges', [])
-
-    # pylinkage format: nodes and edges are arrays
-    return isinstance(nodes, list) and isinstance(edges, list)
-
-
-def is_legacy_joints_format(data: dict) -> bool:
-    """Check if data is in legacy pylinkage.joints format."""
-    pylinkage = data.get('pylinkage', {})
-    joints = pylinkage.get('joints', [])
-    return isinstance(joints, list) and len(joints) > 0
-
-
-# =============================================================================
-# Conversion: Our Format → pylinkage HypergraphLinkage
-# =============================================================================
 
 def to_pylinkage_dict(pylink_data: dict) -> dict:
     """
@@ -182,7 +122,8 @@ def to_simulatable_linkage(pylink_data: dict) -> Linkage:
     """
     Convert our format directly to a simulatable Linkage.
 
-    This is the preferred method for trajectory computation.
+    This is the preferred method for creating Linkage objects.
+    Use Mechanism.from_pylink_data() for the full API with dimension tracking.
 
     Args:
         pylink_data: Our format with 'linkage.nodes' and 'linkage.edges'
@@ -194,189 +135,6 @@ def to_simulatable_linkage(pylink_data: dict) -> Linkage:
 
     hg = to_pylinkage_hypergraph(pylink_data)
     return to_linkage(hg)
-
-
-# =============================================================================
-# Conversion: pylinkage HypergraphLinkage → Our Format
-# =============================================================================
-
-def from_pylinkage_hypergraph(hg: HypergraphLinkage) -> dict:
-    """
-    Convert pylinkage's HypergraphLinkage back to our dict-keyed format.
-
-    Args:
-        hg: pylinkage HypergraphLinkage instance
-
-    Returns:
-        Our format with 'linkage.nodes' and 'linkage.edges' as dicts
-    """
-    from pylinkage.hypergraph import graph_to_dict
-
-    pylinkage_dict = graph_to_dict(hg)
-
-    # Convert arrays back to dicts
-    nodes = {}
-    for node in pylinkage_dict.get('nodes', []):
-        node_id = node['id']
-        role = node.get('role', 'DRIVEN')
-        our_role = ROLE_FROM_PYLINKAGE.get(role, 'follower')
-
-        nodes[node_id] = {
-            'id': node_id,
-            'position': node.get('position', [None, None]),
-            'role': our_role,
-            'jointType': node.get('joint_type', 'REVOLUTE').lower(),
-            'angle': node.get('angle'),
-            'name': node.get('name', node_id),
-        }
-
-    edges = {}
-    for edge in pylinkage_dict.get('edges', []):
-        edge_id = edge['id']
-        edges[edge_id] = {
-            'id': edge_id,
-            'source': edge['source'],
-            'target': edge['target'],
-            'distance': edge.get('distance'),
-        }
-
-    hyperedges = {}
-    for he in pylinkage_dict.get('hyperedges', []):
-        he_id = he['id']
-        hyperedges[he_id] = he
-
-    return {
-        'name': pylinkage_dict.get('name', 'unnamed'),
-        'linkage': {
-            'name': pylinkage_dict.get('name', 'unnamed'),
-            'nodes': nodes,
-            'edges': edges,
-            'hyperedges': hyperedges,
-        },
-    }
-
-
-# =============================================================================
-# Simulation
-# =============================================================================
-
-@dataclass
-class SimulationResult:
-    """Result of hypergraph simulation."""
-    success: bool
-    trajectories: dict[str, list[tuple[float, float]]]
-    n_steps: int
-    joint_names: list[str]
-    error: str | None = None
-
-
-def simulate_hypergraph(
-    pylink_data: dict,
-    n_steps: int = 24,
-) -> SimulationResult:
-    """
-    Simulate a mechanism using pylinkage's native hypergraph.
-
-    This is the preferred method for trajectory computation with hypergraph format.
-
-    Args:
-        pylink_data: Our format with 'linkage.nodes' and 'linkage.edges'
-        n_steps: Number of simulation steps (default 24 for full rotation)
-
-    Returns:
-        SimulationResult with trajectories for each joint
-    """
-    import math
-    from pylinkage.joints import Crank
-
-    try:
-        linkage = to_simulatable_linkage(pylink_data)
-
-        # CRITICAL FIX: pylinkage's Crank.angle is the angular VELOCITY (radians per step),
-        # not the initial angle. We need to set it to 2*pi/n_steps for a full rotation.
-        # The initial angle is already encoded in the crank's position.
-        angle_per_step = 2 * math.pi / n_steps
-
-        for joint in linkage.joints:
-            if isinstance(joint, Crank):
-                joint.angle = angle_per_step
-
-        # Rebuild linkage after modifying crank angles
-        linkage.rebuild()
-
-        # Initialize trajectories dict
-        joint_names = [j.name for j in linkage.joints]
-        trajectories = {name: [] for name in joint_names}
-
-        # Run simulation - step() is a GENERATOR that yields coords at each step
-        for step_coords in linkage.step(iterations=n_steps):
-            for i, (x, y) in enumerate(step_coords):
-                trajectories[joint_names[i]].append((x, y))
-
-        return SimulationResult(
-            success=True,
-            trajectories=trajectories,
-            n_steps=n_steps,
-            joint_names=joint_names,
-        )
-
-    except Exception as e:
-        return SimulationResult(
-            success=False,
-            trajectories={},
-            n_steps=n_steps,
-            joint_names=[],
-            error=str(e),
-        )
-
-
-# =============================================================================
-# Edge Dimension Utilities
-# =============================================================================
-
-def get_edge_distances(pylink_data: dict) -> dict[str, float]:
-    """
-    Extract edge distances from our hypergraph format.
-
-    Args:
-        pylink_data: Our format with 'linkage.edges'
-
-    Returns:
-        Dict mapping edge_id -> distance
-    """
-    edges = pylink_data.get('linkage', {}).get('edges', {})
-    return {
-        edge_id: edge.get('distance', 0.0)
-        for edge_id, edge in edges.items()
-    }
-
-
-def set_edge_distance(
-    pylink_data: dict,
-    edge_id: str,
-    distance: float,
-    inplace: bool = False,
-) -> dict:
-    """
-    Set an edge distance in our hypergraph format.
-
-    Args:
-        pylink_data: Our format with 'linkage.edges'
-        edge_id: ID of the edge to modify
-        distance: New distance value
-        inplace: If True, modify in place; otherwise return copy
-
-    Returns:
-        Modified pylink_data
-    """
-    if not inplace:
-        pylink_data = copy.deepcopy(pylink_data)
-
-    edges = pylink_data.get('linkage', {}).get('edges', {})
-    if edge_id in edges:
-        edges[edge_id]['distance'] = distance
-
-    return pylink_data
 
 
 def set_edge_distances(
@@ -404,6 +162,23 @@ def set_edge_distances(
             edges[edge_id]['distance'] = distance
 
     return pylink_data
+
+
+def get_edge_distances(pylink_data: dict) -> dict[str, float]:
+    """
+    Extract edge distances from our hypergraph format.
+
+    Args:
+        pylink_data: Our format with 'linkage.edges'
+
+    Returns:
+        Dict mapping edge_id -> distance
+    """
+    edges = pylink_data.get('linkage', {}).get('edges', {})
+    return {
+        edge_id: edge.get('distance', 0.0)
+        for edge_id, edge in edges.items()
+    }
 
 
 def sync_hypergraph_distances(
@@ -472,94 +247,136 @@ def sync_hypergraph_distances(
 
 
 # =============================================================================
-# Linkage Mutation for Optimization
+# Dimension Extraction
 # =============================================================================
 
-def create_linkage_mutator(pylink_data: dict) -> tuple[Linkage, dict[str, Any]]:
-    """
-    Create a mutable Linkage for optimization.
 
-    Returns a Linkage instance and a mapping dict that allows fast
-    edge distance updates without recreating the linkage.
-
-    Args:
-        pylink_data: Our format with 'linkage.nodes' and 'linkage.edges'
-
-    Returns:
-        (linkage, edge_lookup) where edge_lookup maps edge_id -> edge object
-
-    Usage:
-        linkage, edge_lookup = create_linkage_mutator(pylink_data)
-
-        # Fast dimension update in optimization loop
-        edge_lookup['crank_link'].distance = 25.0
-        edge_lookup['coupler'].distance = 55.0
-
-        # Simulate with new dimensions
-        linkage.step()
-    """
-    from pylinkage.hypergraph import to_linkage
-
-    hg = to_pylinkage_hypergraph(pylink_data)
-    linkage = to_linkage(hg)
-
-    # Build edge lookup for fast updates
-    # Note: The linkage stores edges internally, we need to find them
-    # For now, return the hypergraph's edge dict for reference
-    edge_lookup = {edge.id: edge for edge in hg.edges.values()}
-
-    return linkage, edge_lookup
-
-
-# =============================================================================
-# Compatibility Layer
-# =============================================================================
-
-def compute_trajectory_native(
+def extract_dimensions(
     pylink_data: dict,
-    n_steps: int | None = None,
-    verbose: bool = False,
-) -> SimulationResult:
+) -> tuple[DimensionBoundsSpec, set[str]]:
     """
-    Compute trajectory using pylinkage's native hypergraph (if applicable).
+    Extract optimizable dimensions (link lengths) from pylink_data.
 
-    Falls back to legacy format if the data isn't in hypergraph format.
+    This function ONLY extracts what IS - it does not compute bounds,
+    exclude edges, or apply any configuration. It simply identifies
+    which dimensions exist and their current values.
 
     Args:
-        pylink_data: Either our hypergraph format or legacy joints format
-        n_steps: Number of steps (default from pylink_data or 24)
-        verbose: Print progress information
+        pylink_data: Full pylink document with 'linkage.edges'
 
     Returns:
-        SimulationResult with trajectories
+        Tuple of:
+        - DimensionBoundsSpec with names, initial_values, edge_mapping (NO BOUNDS - empty list)
+        - set of static node IDs (for future static joint variation support)
+
+    Note:
+        - Bounds should be set via Mechanism.apply_variation_config() post-init
+        - Default bounds can be set using MechVariationConfig(default_variation_range=2.0)
+        - Exclusions should be handled via MechVariationConfig
+        - This is a pure extraction function - no policy decisions
     """
-    if n_steps is None:
-        n_steps = pylink_data.get('n_steps', 24)
+    linkage = pylink_data.get('linkage', {})
+    nodes = linkage.get('nodes', {})
+    edges = linkage.get('edges', {})
 
-    if is_our_hypergraph_format(pylink_data):
-        if verbose:
-            print('  Using native pylinkage hypergraph simulation')
-        return simulate_hypergraph(pylink_data, n_steps=n_steps)
+    names: list[str] = []
+    initial_values: list[float] = []
+    edge_mapping: dict[str, tuple[str, str]] = {}
 
-    elif is_legacy_joints_format(pylink_data):
-        if verbose:
-            print('  Using legacy joints format (no conversion needed)')
-        # Fall back to existing kinematic.py implementation
-        from pylink_tools.kinematic import compute_trajectory as legacy_compute
-        result = legacy_compute(pylink_data, verbose=verbose)
-        return SimulationResult(
-            success=result.success,
-            trajectories=result.trajectories,
-            n_steps=result.n_steps,
-            joint_names=list(result.trajectories.keys()),
-            error=result.error,
-        )
+    # Get static node IDs (for future static joint variation support)
+    static_nodes = {
+        node_id for node_id, node in nodes.items()
+        if node.get('role', '').lower() in ('fixed', 'ground', 'static')
+    }
 
-    else:
-        return SimulationResult(
-            success=False,
-            trajectories={},
-            n_steps=n_steps,
-            joint_names=[],
-            error='Unknown data format: expected hypergraph or legacy joints',
-        )
+    # Extract all edge distances (except edges between two static nodes)
+    for edge_id, edge in edges.items():
+        source = edge.get('source', '')
+        target = edge.get('target', '')
+
+        # Skip edges between two static nodes (ground links - not optimizable)
+        if source in static_nodes and target in static_nodes:
+            continue
+
+        distance = edge.get('distance', 1.0)
+        if distance is None:
+            distance = 1.0
+
+        dim_name = f'{edge_id}_distance'
+
+        names.append(dim_name)
+        initial_values.append(float(distance))
+        edge_mapping[dim_name] = (edge_id, 'distance')
+
+    # Return spec WITHOUT bounds - bounds will be set post-init via apply_variation_config()
+    return DimensionBoundsSpec(
+        names=names,
+        initial_values=initial_values,
+        bounds=[],  # Empty - will be set via apply_variation_config() with default config
+        edge_mapping=edge_mapping,
+    ), static_nodes
+
+
+def _build_joint_attr_mapping(
+    linkage: Linkage,
+    pylink_data: dict,
+    dimension_spec: DimensionBoundsSpec,
+) -> list[tuple[object, str] | None]:
+    """
+    Build mapping from dimension index to (joint, attribute_name).
+
+    This allows direct joint attribute updates without invalidating solver_data.
+
+    Args:
+        linkage: Compiled Linkage object
+        pylink_data: Original pylink_data dict
+        dimension_spec: Dimension specification
+
+    Returns:
+        List where index i maps to (joint_obj, attr_name) or None
+    """
+    from pylinkage.joints import Crank, Revolute, Static
+
+    edges = pylink_data.get('linkage', {}).get('edges', {})
+    edge_mapping = getattr(dimension_spec, 'edge_mapping', {}) or {}
+
+    # Build (source, target) -> edge_id lookup
+    edge_by_nodes: dict[tuple[str, str], str] = {}
+    for edge_id, edge in edges.items():
+        edge_by_nodes[(edge['source'], edge['target'])] = edge_id
+        edge_by_nodes[(edge['target'], edge['source'])] = edge_id
+
+    # Build edge_id -> (joint, attr_name) mapping
+    edge_to_joint_attr: dict[str, tuple[object, str]] = {}
+
+    for joint in linkage.joints:
+        if isinstance(joint, Static) and not isinstance(joint, Crank):
+            # Static joints (non-crank) don't have distance attributes
+            continue
+        elif isinstance(joint, Crank):
+            # Crank has 'r' attribute for radius
+            if joint.joint0:
+                key = (joint.joint0.name, joint.name)
+                if key in edge_by_nodes:
+                    edge_to_joint_attr[edge_by_nodes[key]] = (joint, 'r')
+        elif isinstance(joint, Revolute):
+            # Revolute has 'r0' and 'r1' for two link distances
+            if joint.joint0:
+                key = (joint.joint0.name, joint.name)
+                if key in edge_by_nodes:
+                    edge_to_joint_attr[edge_by_nodes[key]] = (joint, 'r0')
+            if joint.joint1:
+                key = (joint.joint1.name, joint.name)
+                if key in edge_by_nodes:
+                    edge_to_joint_attr[edge_by_nodes[key]] = (joint, 'r1')
+
+    # Map dimension index to (joint, attr)
+    mapping: list[tuple[object, str] | None] = []
+    for dim_name in dimension_spec.names:
+        if dim_name in edge_mapping:
+            edge_id, _ = edge_mapping[dim_name]
+            mapping.append(edge_to_joint_attr.get(edge_id))
+        else:
+            mapping.append(None)
+
+    return mapping

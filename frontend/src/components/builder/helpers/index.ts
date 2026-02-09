@@ -98,5 +98,13 @@ export {
   changeNodeRole
 } from './linkageMutations'
 
+// Apply loaded document (file load / demo load)
+export { applyLoadedDocument } from './applyLoadedDocument'
+export type { ApplyLoadedDocumentParams } from './applyLoadedDocument'
+
+// Optimizer sync status (pure comparison)
+export { computeOptimizerSyncStatus } from './optimizerSyncStatus'
+export type { OptimizerSyncResult } from './optimizerSyncStatus'
+
 // Type exports
 export type { CreateLinkResult } from './linkageMutations'

@@ -11,192 +11,86 @@ All functions use consistent styling defined at module level.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
 from pathlib import Path
-from typing import Sequence
 
-import matplotlib as mpl
 import matplotlib.pyplot as plt
 import numpy as np
+from pylinkage.joints import Crank
+from pylinkage.joints import Static
 
-from pylink_tools.kinematic import compute_trajectory
-
-
-# =============================================================================
-# GLOBAL STYLE CONFIGURATION
-# =============================================================================
-# Configure matplotlib rcParams for consistent, publication-quality plots.
-# These settings apply to all plots created by this module.
-
-# Use a clean style as base
-plt.style.use('seaborn-v0_8-whitegrid')
-
-# Override with custom settings
-mpl.rcParams.update({
-    # Figure
-    'figure.figsize': (12, 10),
-    'figure.dpi': 100,
-    'figure.facecolor': 'white',
-    'figure.edgecolor': 'white',
-    'savefig.dpi': 150,
-    'savefig.facecolor': 'white',
-    'savefig.bbox': 'tight',
-    
-    # Fonts
-    'font.size': 11,
-    'font.family': 'sans-serif',
-    'axes.titlesize': 14,
-    'axes.titleweight': 'bold',
-    'axes.labelsize': 12,
-    'xtick.labelsize': 10,
-    'ytick.labelsize': 10,
-    'legend.fontsize': 10,
-    'legend.title_fontsize': 11,
-    
-    # Lines
-    'lines.linewidth': 2.0,
-    'lines.markersize': 6,
-    
-    # Axes
-    'axes.spines.top': False,
-    'axes.spines.right': False,
-    'axes.linewidth': 1.0,
-    'axes.grid': True,
-    'axes.axisbelow': True,
-    
-    # Grid
-    'grid.alpha': 0.4,
-    'grid.linewidth': 0.8,
-    'grid.linestyle': '-',
-    
-    # Legend
-    'legend.framealpha': 0.9,
-    'legend.edgecolor': '0.8',
-    'legend.fancybox': True,
-})
+from pylink_tools.mechanism import Mechanism
+from pylink_tools.optimization_types import TargetTrajectory
+from viz_tools.opt_viz import _shorten_dim_name
+from viz_tools.viz_styling import _save_or_show
+from viz_tools.viz_styling import DemoVizStyle
+from viz_tools.viz_styling import STYLE
 
 
-@dataclass(frozen=True)
-class DemoVizStyle:
+def _get_linkage_geometry_from_mechanism(mechanism: Mechanism) -> tuple[dict[str, str], list[tuple[str, str, str]]]:
     """
-    Style configuration for demo visualizations.
-    
-    Uses a carefully selected color palette optimized for:
-    - Colorblind accessibility
-    - Print and screen readability
-    - Clear visual hierarchy
+    Extract node roles and edges from a Mechanism for rendering.
+
+    Returns (node_roles, edges) where:
+    - node_roles: dict mapping joint_name -> role ('fixed', 'crank', 'follower')
+    - edges: list of (source, target, edge_id) tuples
+
+    Note: Uses mechanism.to_dict() only to extract linkage structure (edges),
+    not for simulation or trajectory computation.
     """
-    # Primary colors (high contrast, distinct)
-    base_color: str = '#2C3E50'       # Dark blue-gray (base/original)
-    target_color: str = '#E74C3C'     # Red (target)
-    optimized_color: str = '#9B59B6'  # Purple (optimized results)
-    initial_color: str = '#27AE60'    # Green (initial/start)
-    
-    # Variation colors (for multiple items, colorblind-friendly)
-    variation_colors: tuple = (
-        '#3498DB',  # Blue
-        '#E67E22',  # Orange
-        '#1ABC9C',  # Teal
-        '#F1C40F',  # Yellow
-        '#9B59B6',  # Purple
-        '#E91E63',  # Pink
-        '#00BCD4',  # Cyan
-        '#8BC34A',  # Light green
-        '#FF5722',  # Deep orange
-        '#607D8B',  # Blue gray
-    )
-    
-    # Neutral colors
-    bounds_color: str = '#BDC3C7'     # Light gray
-    grid_color: str = '#ECF0F1'       # Very light gray
-    text_color: str = '#2C3E50'       # Dark text
-    muted_color: str = '#95A5A6'      # Muted gray
-    
-    # Alpha values
-    base_alpha: float = 1.0
-    target_alpha: float = 0.85
-    variation_alpha: float = 0.5
-    faded_alpha: float = 0.3
-    
-    # Line widths
-    base_linewidth: float = 3.5
-    target_linewidth: float = 2.5
-    variation_linewidth: float = 1.8
-    link_linewidth: float = 4.0
-    
-    # Marker sizes
-    marker_size: float = 80
-    base_marker_size: float = 120
-    variation_marker_size: float = 50
-    
-    # Figure settings
-    figsize: tuple = (12, 10)
-    figsize_wide: tuple = (14, 8)
-    figsize_tall: tuple = (10, 14)
-    dpi: int = 150
-
-
-# Global style instance
-STYLE = DemoVizStyle()
-
-
-def _save_or_show(fig: plt.Figure, out_path: Path | str | None, dpi: int = 150):
-    """Save figure to path or show interactively."""
-    if out_path is not None:
-        out_path = Path(out_path)
-        out_path.parent.mkdir(parents=True, exist_ok=True)
-        fig.savefig(out_path, dpi=dpi, bbox_inches='tight', facecolor='white')
-        plt.close(fig)
-        print(f'  Saved: {out_path.name}')
-    else:
-        plt.show()
-        plt.close(fig)
-
-
-def _get_linkage_geometry(pylink_data: dict) -> tuple[dict, list]:
-    """Extract node roles and edges for rendering. Returns (node_roles, edges)."""
     node_roles = {}
     edges = []
-    linkage = pylink_data.get('linkage', {})
-    for name, node in linkage.get('nodes', {}).items():
-        node_roles[name] = node.get('role', 'follower')
-    for edge_id, edge in linkage.get('edges', {}).items():
-        if edge.get('source') and edge.get('target'):
-            edges.append((edge['source'], edge['target'], edge_id))
+
+    linkage = mechanism.linkage
+
+    # Get node roles from joints
+    for joint in linkage.joints:
+        name = joint.name
+        if isinstance(joint, Static):
+            node_roles[name] = 'fixed'
+        elif isinstance(joint, Crank):
+            node_roles[name] = 'crank'
+        else:
+            node_roles[name] = 'follower'
+
+    # Get edges from mechanism's dict representation (structure only)
+    # This is the only use of to_dict() - just for extracting edge connectivity
+    mechanism_dict = mechanism.to_dict()
+    linkage_dict = mechanism_dict.get('linkage', {})
+    edges_dict = linkage_dict.get('edges', {})
+
+    for edge_id, edge_data in edges_dict.items():
+        source = edge_data.get('source')
+        target = edge_data.get('target')
+        if source and target:
+            edges.append((source, target, edge_id))
+
     return node_roles, edges
 
 
-def _compute_positions(pylink_data: dict, target_joint: str):
+def _get_initial_positions_from_mechanism(mechanism: Mechanism) -> dict[str, tuple[float, float]]:
     """
-    Compute trajectory and first positions for visualization.
-    
-    Returns (first_positions, target_traj, all_trajs) or (None, None, None) on failure.
+    Get initial positions of all joints from a Mechanism.
+
+    Returns dict mapping joint_name -> (x, y)
     """
-    result = compute_trajectory(pylink_data, verbose=False, skip_sync=True)
-    if not result.success:
-        return None, None, None
-    
-    first_positions = {}
-    all_trajs = {}
-    for name, positions in result.trajectories.items():
-        arr = np.array(positions)
-        all_trajs[name] = arr
-        first_positions[name] = (arr[0, 0], arr[0, 1])
-    
-    return first_positions, all_trajs.get(target_joint), all_trajs
+    coords = mechanism.linkage.get_coords()
+    positions = {}
+    for i, name in enumerate(mechanism.joint_names):
+        if i < len(coords):
+            x, y = coords[i]
+            positions[name] = (float(x), float(y))
+    return positions
 
 
 def variation_plot(
     target_joint: str,
     out_path: Path | str,
-    # Base mechanism (bold, foreground)
-    base_pylink_data: dict | None = None,
-    base_trajectory: np.ndarray | list | None = None,
+    base_mechanism: Mechanism,
     # Target trajectory (dashed, distinct)
-    target_pylink_data: dict | None = None,
-    target_trajectory: np.ndarray | list | None = None,
+    target_mechanism: Mechanism | None = None,
+    target_trajectory: TargetTrajectory | np.ndarray | list | None = None,
     # Additional variations (faded, background)
-    variation_pylink_data: list[dict] | None = None,
+    variation_mechanisms: list[Mechanism] | None = None,
     variation_trajectories: list[np.ndarray | list] | None = None,
     # Display options
     title: str = 'Trajectory Variation',
@@ -208,50 +102,49 @@ def variation_plot(
 ):
     """
     Unified plot for trajectory and linkage variations.
-    
+
     This function can display:
     - A base mechanism/trajectory (bold black, in foreground)
     - A target trajectory (dashed red, distinct)
     - Multiple variation trajectories (colored, semi-transparent)
-    
+
     Supports two modes:
     - Trajectory-only: Just plot trajectory curves
     - With linkages: Also show mechanism structure at initial position
-    
+
     Args:
         target_joint: Name of joint to track for trajectories
         out_path: Where to save the plot
-        
-        base_pylink_data: Base mechanism (plots trajectory, optionally linkage)
-        base_trajectory: Pre-computed base trajectory (alternative to pylink_data)
-        
-        target_pylink_data: Target mechanism for comparison
-        target_trajectory: Pre-computed target trajectory
-        
-        variation_pylink_data: List of variation mechanisms
+
+        base_mechanism: Base mechanism (plots trajectory, optionally linkage)
+
+        target_mechanism: Target mechanism for comparison
+        target_trajectory: Pre-computed target trajectory (TargetTrajectory or array)
+
+        variation_mechanisms: List of variation mechanisms
         variation_trajectories: List of pre-computed variation trajectories
-        
+
         title: Main plot title
         subtitle: Description below title
         show_linkages: If True, draw linkage structures at initial positions
         show_start_marker: If True, mark trajectory start points
         figsize: Figure size override
         style: Style configuration
-    
+
     Example usage:
         # Plot base with variations (achievable_demo style)
         variation_plot(
             target_joint='foot',
-            base_pylink_data=original_mechanism,
-            variation_pylink_data=variations,
+            base_mechanism=original_mechanism,
+            variation_mechanisms=variations,
             title='Link Variations',
             out_path='variations.png',
         )
-        
+
         # Plot target vs optimized (optimization result)
         variation_plot(
             target_joint='foot',
-            base_pylink_data=optimized_mechanism,
+            base_mechanism=optimized_mechanism,
             target_trajectory=target_positions,
             title='Optimization Result',
             out_path='result.png',
@@ -259,39 +152,41 @@ def variation_plot(
     """
     fig_size = figsize or (style.figsize if not show_linkages else (14, 11))
     fig, ax = plt.subplots(figsize=fig_size, dpi=style.dpi)
-    
+
     # Track geometry info if showing linkages
     node_roles, edges = None, None
-    if show_linkages and base_pylink_data:
-        node_roles, edges = _get_linkage_geometry(base_pylink_data)
-    
+    if show_linkages and base_mechanism:
+        node_roles, edges = _get_linkage_geometry_from_mechanism(base_mechanism)
+
     valid_variation_count = 0
-    
+
     # -------------------------------------------------------------------------
     # Layer 1: Variations (faded, background)
     # -------------------------------------------------------------------------
-    if variation_pylink_data or variation_trajectories:
-        # Use provided trajectories or compute from pylink_data
+    if variation_mechanisms or variation_trajectories:
+        # Use provided trajectories or compute from mechanisms
         variations = variation_trajectories or []
         var_linkage_states = []
-        
-        if variation_pylink_data:
-            for var_data in variation_pylink_data:
-                var_positions, var_traj, _ = _compute_positions(var_data, target_joint)
-                if var_traj is not None:
+        # print(f'variation_mechanisms: {variation_mechanisms}')
+        if variation_mechanisms:
+            for var_mech in variation_mechanisms:
+                var_traj = var_mech.get_trajectory(target_joint)
+                if var_traj is not None and len(var_traj) > 0:
                     variations.append(var_traj)
                     if show_linkages:
+                        var_positions = _get_initial_positions_from_mechanism(var_mech)
                         var_linkage_states.append(var_positions)
-        
+
         # Plot variation trajectories
         for i, var_traj in enumerate(variations):
+            # print(f'var_traj: {var_traj}')
             var_arr = np.array(var_traj)
             if var_arr.size == 0:
                 continue
-            
+
             valid_variation_count += 1
             color = style.variation_colors[i % len(style.variation_colors)]
-            
+
             # Trajectory line
             ax.plot(
                 var_arr[:, 0], var_arr[:, 1],
@@ -300,7 +195,7 @@ def variation_plot(
                 alpha=style.variation_alpha,
                 zorder=1,
             )
-            
+
             # Trajectory points (subtle)
             ax.scatter(
                 var_arr[:, 0], var_arr[:, 1],
@@ -309,14 +204,14 @@ def variation_plot(
                 alpha=style.faded_alpha,
                 zorder=2,
             )
-        
+
         # Plot variation linkages if enabled
         if show_linkages and edges and var_linkage_states:
             for i, var_positions in enumerate(var_linkage_states):
                 if not var_positions:
                     continue
                 color = style.variation_colors[i % len(style.variation_colors)]
-                
+
                 # Draw edges (links)
                 for source, target, _ in edges:
                     if source in var_positions and target in var_positions:
@@ -330,7 +225,7 @@ def variation_plot(
                             zorder=3,
                             solid_capstyle='round',
                         )
-                
+
                 # Draw nodes
                 for name, (x, y) in var_positions.items():
                     role = node_roles.get(name, 'follower') if node_roles else 'follower'
@@ -346,22 +241,26 @@ def variation_plot(
                         edgecolors='white',
                         linewidths=0.5,
                     )
-    
+
     # -------------------------------------------------------------------------
     # Layer 2: Target trajectory (dashed, distinct)
     # -------------------------------------------------------------------------
     target_arr = None
     if target_trajectory is not None:
-        target_arr = np.array(target_trajectory)
-    elif target_pylink_data is not None:
-        _, target_arr, _ = _compute_positions(target_pylink_data, target_joint)
-    
+        # Handle TargetTrajectory type
+        if hasattr(target_trajectory, 'positions'):
+            target_arr = np.array(target_trajectory.positions)
+        else:
+            target_arr = np.array(target_trajectory)
+    elif target_mechanism is not None:
+        target_arr = target_mechanism.get_trajectory(target_joint)
+
     if target_arr is not None and target_arr.size > 0:
         ax.plot(
             target_arr[:, 0], target_arr[:, 1],
             color=style.target_color,
             linewidth=style.target_linewidth,
-            linestyle='--',
+            linestyle=':',
             alpha=style.target_alpha,
             label='Target',
             zorder=8,
@@ -369,24 +268,30 @@ def variation_plot(
         ax.scatter(
             target_arr[:, 0], target_arr[:, 1],
             color=style.target_color,
-            s=style.marker_size * 0.7,
-            marker='x',
-            linewidths=2,
+            s=style.marker_size,
+            marker='p',
+            facecolor=None,
+            edgecolor=style.target_color,
+            linewidths=.8,
             alpha=style.target_alpha,
             zorder=9,
         )
-    
+
     # -------------------------------------------------------------------------
     # Layer 3: Base mechanism (bold, foreground)
     # -------------------------------------------------------------------------
     base_arr = None
     base_positions = None
-    
-    if base_trajectory is not None:
-        base_arr = np.array(base_trajectory)
-    elif base_pylink_data is not None:
-        base_positions, base_arr, _ = _compute_positions(base_pylink_data, target_joint)
-    
+
+    # Determine what to plot for base based on target type:
+    # - If target_trajectory is provided → plot base trajectory (trajectory-only)
+    # - If target_mechanism is provided → plot base mechanism (with linkages)
+    base_arr = base_mechanism.get_trajectory(target_joint)
+
+    # Set base positions for plotting mechanism linkages
+    if show_linkages:
+        base_positions = _get_initial_positions_from_mechanism(base_mechanism)
+
     if base_arr is not None and base_arr.size > 0:
         # Base trajectory (bold)
         ax.plot(
@@ -394,32 +299,34 @@ def variation_plot(
             color=style.base_color,
             linewidth=style.base_linewidth,
             alpha=style.base_alpha,
-            label='Original' if variation_pylink_data else f'{target_joint} trajectory',
+            label='Original' if variation_mechanisms else f'{target_joint} trajectory',
             zorder=10,
         )
         ax.scatter(
             base_arr[:, 0], base_arr[:, 1],
             color=style.base_color,
-            s=style.base_marker_size * 0.5,
+            s=style.base_marker_size * 1,
             alpha=0.8,
-            edgecolors='white',
-            linewidths=1.5,
+            edgecolors=None,
+            linewidths=1.0,
             zorder=11,
         )
-        
+
         # Start marker
         if show_start_marker:
             ax.scatter(
                 [base_arr[0, 0]], [base_arr[0, 1]],
                 color=style.initial_color,
-                s=style.marker_size * 1.8,
+                s=style.marker_size * 1,
                 marker='o',
-                edgecolors='white',
-                linewidths=2,
+                # fillcolor=None,
+                edgecolors=None,
+                alpha=.8,
+                linewidths=1.0,
                 zorder=15,
                 label='Start',
             )
-    
+
     # Draw base linkage if enabled
     if show_linkages and edges and base_positions:
         # Draw edges
@@ -435,12 +342,12 @@ def variation_plot(
                     zorder=12,
                     solid_capstyle='round',
                 )
-        
+
         # Draw nodes with labels
         legend_added = {'fixed': False, 'crank': False, 'follower': False}
         for name, (x, y) in base_positions.items():
             role = node_roles.get(name, 'follower') if node_roles else 'follower'
-            
+
             if role == 'fixed':
                 marker, size, color = '^', 180, style.muted_color
                 label = 'Fixed joint' if not legend_added['fixed'] else None
@@ -453,13 +360,13 @@ def variation_plot(
                 marker, size, color = 'o', 120, '#3498DB'
                 label = 'Follower' if not legend_added['follower'] else None
                 legend_added['follower'] = True
-            
+
             # Highlight target joint
             if name == target_joint:
                 size *= 1.3
                 color = style.optimized_color
                 label = f'Target ({name})'
-            
+
             ax.scatter(
                 [x], [y],
                 color=color,
@@ -470,7 +377,7 @@ def variation_plot(
                 zorder=13,
                 label=label,
             )
-            
+
             # Node label
             ax.annotate(
                 name[:15] + ('...' if len(name) > 15 else ''),
@@ -483,16 +390,16 @@ def variation_plot(
                 zorder=14,
                 bbox=dict(boxstyle='round,pad=0.2', facecolor='white', alpha=0.7, edgecolor='none'),
             )
-    
+
     full_title = title
     if subtitle:
         full_title += f'\n{subtitle}'
-    
+
     ax.set_title(full_title, fontsize=14, fontweight='bold')
     ax.set_xlabel('X Position', fontsize=12)
     ax.set_ylabel('Y Position', fontsize=12)
     ax.set_aspect('equal')
-    
+
     # Info text
     if valid_variation_count > 0:
         info_text = f'{valid_variation_count} variations shown'
@@ -506,9 +413,9 @@ def variation_plot(
             verticalalignment='top',
             bbox=dict(boxstyle='round', facecolor='white', alpha=0.9),
         )
-    
+
     ax.legend(loc='upper right', fontsize=10, framealpha=0.9)
-    
+
     plt.tight_layout()
     _save_or_show(fig, out_path, style.dpi)
 
@@ -523,7 +430,7 @@ def plot_convergence_comparison(
 ):
     """
     Plot convergence histories for multiple optimizers.
-    
+
     Args:
         histories: Dict of {solver_name: error_history_list}
         out_path: Where to save the plot
@@ -534,7 +441,7 @@ def plot_convergence_comparison(
             - 'individual': Save separate files (out_path used as base)
         log_scale: Use logarithmic y-scale
         style: Style configuration
-    
+
     Example:
         histories = {
             'PSO': pso_result.convergence_history,
@@ -546,24 +453,24 @@ def plot_convergence_comparison(
     if not histories:
         print('  Warning: No convergence histories to plot')
         return
-    
+
     # Filter out empty histories
     histories = {k: v for k, v in histories.items() if v and len(v) > 0}
     if not histories:
         print('  Warning: All convergence histories are empty')
         return
-    
+
     n_solvers = len(histories)
     colors = style.variation_colors
-    
+
     if layout == 'overlay':
         # All histories on one plot
         fig, ax = plt.subplots(figsize=style.figsize_wide, dpi=style.dpi)
-        
+
         for i, (name, history) in enumerate(histories.items()):
             color = colors[i % len(colors)]
             iterations = np.arange(len(history))
-            
+
             ax.plot(
                 iterations, history,
                 color=color,
@@ -571,7 +478,7 @@ def plot_convergence_comparison(
                 alpha=0.85,
                 label=name,
             )
-            
+
             # Mark best point
             best_idx = np.argmin(history)
             best_val = history[best_idx]
@@ -584,23 +491,23 @@ def plot_convergence_comparison(
                 linewidths=1,
                 zorder=5,
             )
-        
+
         ax.set_xlabel('Iteration / Evaluation', fontsize=12)
         ax.set_ylabel('Error', fontsize=12)
         ax.set_title(title, fontsize=14, fontweight='bold')
         ax.legend(loc='upper right', fontsize=10)
-        
+
         if log_scale:
             ax.set_yscale('log')
-        
+
         plt.tight_layout()
         _save_or_show(fig, out_path, style.dpi)
-        
+
     elif layout == 'grid':
         # Subplots in a grid
         n_cols = min(3, n_solvers)
         n_rows = (n_solvers + n_cols - 1) // n_cols
-        
+
         fig, axes = plt.subplots(
             n_rows, n_cols,
             figsize=(5 * n_cols, 4 * n_rows),
@@ -608,36 +515,42 @@ def plot_convergence_comparison(
             squeeze=False,
         )
         axes = axes.flatten()
-        
+
         for i, (name, history) in enumerate(histories.items()):
             ax = axes[i]
             color = colors[i % len(colors)]
             iterations = np.arange(len(history))
-            
+
             ax.plot(
                 iterations, history,
                 color=color,
                 linewidth=2.0,
                 alpha=0.85,
             )
-            
+
             # Mark key points
             best_idx = np.argmin(history)
             best_val = history[best_idx]
-            ax.scatter([best_idx], [best_val], color=style.optimized_color, 
-                      s=100, marker='*', zorder=5, edgecolors='white')
-            ax.scatter([0], [history[0]], color=style.initial_color,
-                      s=60, marker='s', zorder=5, edgecolors='white')
-            ax.scatter([len(history)-1], [history[-1]], color=style.target_color,
-                      s=60, marker='D', zorder=5, edgecolors='white')
-            
+            ax.scatter(
+                [best_idx], [best_val], color=style.optimized_color,
+                s=100, marker='*', zorder=5, edgecolors='white',
+            )
+            ax.scatter(
+                [0], [history[0]], color=style.initial_color,
+                s=60, marker='s', zorder=5, edgecolors='white',
+            )
+            ax.scatter(
+                [len(history)-1], [history[-1]], color=style.target_color,
+                s=60, marker='D', zorder=5, edgecolors='white',
+            )
+
             ax.set_title(name, fontsize=11, fontweight='bold')
             ax.set_xlabel('Iteration', fontsize=10)
             ax.set_ylabel('Error', fontsize=10)
-            
+
             if log_scale and min(history) > 0:
                 ax.set_yscale('log')
-            
+
             # Add stats annotation
             if len(history) > 1 and history[0] > 0:
                 reduction = (1 - history[-1] / history[0]) * 100
@@ -647,54 +560,60 @@ def plot_convergence_comparison(
                     ha='right', va='top', fontsize=9,
                     bbox=dict(boxstyle='round,pad=0.3', facecolor='white', alpha=0.8),
                 )
-        
+
         # Hide unused axes
         for j in range(i + 1, len(axes)):
             axes[j].set_visible(False)
-        
+
         fig.suptitle(title, fontsize=14, fontweight='bold')
         plt.tight_layout()
         _save_or_show(fig, out_path, style.dpi)
-        
+
     elif layout == 'individual':
         # Save separate files
         out_path = Path(out_path)
         base_name = out_path.stem
         suffix = out_path.suffix
-        
+
         for i, (name, history) in enumerate(histories.items()):
             fig, ax = plt.subplots(figsize=(10, 6), dpi=style.dpi)
             color = colors[i % len(colors)]
             iterations = np.arange(len(history))
-            
+
             ax.plot(
                 iterations, history,
                 color=color,
                 linewidth=2.5,
                 alpha=0.9,
             )
-            
+
             # Mark key points
             best_idx = np.argmin(history)
             best_val = history[best_idx]
-            ax.scatter([best_idx], [best_val], color=style.optimized_color,
-                      s=150, marker='*', zorder=5, edgecolors='black', linewidths=1,
-                      label=f'Best: {best_val:.6f} @ iter {best_idx}')
-            ax.scatter([0], [history[0]], color=style.initial_color,
-                      s=100, marker='s', zorder=5, edgecolors='black', linewidths=1,
-                      label=f'Initial: {history[0]:.6f}')
-            ax.scatter([len(history)-1], [history[-1]], color=style.target_color,
-                      s=100, marker='D', zorder=5, edgecolors='black', linewidths=1,
-                      label=f'Final: {history[-1]:.6f}')
-            
+            ax.scatter(
+                [best_idx], [best_val], color=style.optimized_color,
+                s=150, marker='*', zorder=5, edgecolors='black', linewidths=1,
+                label=f'Best: {best_val:.6f} @ iter {best_idx}',
+            )
+            ax.scatter(
+                [0], [history[0]], color=style.initial_color,
+                s=100, marker='s', zorder=5, edgecolors='black', linewidths=1,
+                label=f'Initial: {history[0]:.6f}',
+            )
+            ax.scatter(
+                [len(history)-1], [history[-1]], color=style.target_color,
+                s=100, marker='D', zorder=5, edgecolors='black', linewidths=1,
+                label=f'Final: {history[-1]:.6f}',
+            )
+
             ax.set_xlabel('Iteration', fontsize=12)
             ax.set_ylabel('Error', fontsize=12)
             ax.set_title(f'{title}: {name}', fontsize=14, fontweight='bold')
             ax.legend(loc='upper right', fontsize=10)
-            
+
             if log_scale and min(history) > 0:
                 ax.set_yscale('log')
-            
+
             # Improvement annotation
             if len(history) > 1 and history[0] > 0:
                 reduction = (1 - history[-1] / history[0]) * 100
@@ -704,9 +623,9 @@ def plot_convergence_comparison(
                     ha='right', va='top', fontsize=11, fontweight='bold',
                     bbox=dict(boxstyle='round,pad=0.5', facecolor='#E8F6F3', alpha=0.9),
                 )
-            
+
             plt.tight_layout()
-            
+
             # Generate filename for this solver
             safe_name = name.lower().replace(' ', '_').replace('(', '').replace(')', '').replace(',', '')
             individual_path = out_path.parent / f'{base_name}_{safe_name}{suffix}'
@@ -724,15 +643,15 @@ def plot_dimension_bounds(
 ):
     """
     Visualize optimization bounds for each dimension.
-    
+
     Shows a horizontal bar chart with:
     - Gray bar: full bounds range
     - Green circle: initial value
     - Red square: target value
     - Purple diamond: optimized value
-    
+
     Args:
-        dimension_spec: DimensionSpec with names, bounds, initial_values
+        dimension_spec: DimensionBoundsSpec with names, bounds, initial_values
         out_path: Where to save the plot
         initial_values: Override initial values from spec
         target_values: Target dimension values to mark
@@ -741,34 +660,34 @@ def plot_dimension_bounds(
         style: Style configuration
     """
     n_dims = len(dimension_spec)
-    
+
     fig, ax = plt.subplots(
         figsize=(12, max(5, n_dims * 0.9)),
         dpi=style.dpi,
     )
-    
+
     y_positions = np.arange(n_dims)
     bar_height = 0.6
-    
+
     legend_added = {'initial': False, 'target': False, 'optimized': False}
-    
+
     for i, (name, bounds) in enumerate(zip(dimension_spec.names, dimension_spec.bounds)):
         lower, upper = bounds
         width = upper - lower
-        
+
         # Bounds bar
         ax.barh(
             i, width, left=lower, height=bar_height,
             color=style.bounds_color, alpha=0.7,
             edgecolor='#7F8C8D', linewidth=1,
         )
-        
+
         # Initial value marker
         if initial_values and name in initial_values:
             initial = initial_values[name]
         else:
             initial = dimension_spec.initial_values[i]
-        
+
         ax.scatter(
             [initial], [i],
             color=style.initial_color,
@@ -780,7 +699,7 @@ def plot_dimension_bounds(
             linewidths=1.5,
         )
         legend_added['initial'] = True
-        
+
         # Target value marker
         if target_values and name in target_values:
             target = target_values[name]
@@ -795,7 +714,7 @@ def plot_dimension_bounds(
                 linewidths=1.5,
             )
             legend_added['target'] = True
-        
+
         # Optimized value marker (open diamond, won't cover others)
         if optimized_values and name in optimized_values:
             opt = optimized_values[name]
@@ -810,7 +729,7 @@ def plot_dimension_bounds(
                 label='Optimized' if not legend_added['optimized'] else '',
             )
             legend_added['optimized'] = True
-        
+
         # Bound labels
         ax.text(
             lower - width * 0.03, i, f'{lower:.1f}',
@@ -820,15 +739,15 @@ def plot_dimension_bounds(
             upper + width * 0.03, i, f'{upper:.1f}',
             ha='left', va='center', fontsize=9, color='#666',
         )
-    
+
     # Format dimension names
     display_names = [_shorten_dim_name(n) for n in dimension_spec.names]
-    
+
     ax.set_yticks(y_positions)
     ax.set_yticklabels(display_names, fontsize=10)
     ax.set_xlabel('Value', fontsize=12)
     ax.set_title(title, fontsize=14, fontweight='bold')
-    
+
     # Legend
     handles, labels = ax.get_legend_handles_labels()
     by_label = dict(zip(labels, handles))
@@ -837,27 +756,16 @@ def plot_dimension_bounds(
             by_label.values(), by_label.keys(),
             loc='upper right', fontsize=10, framealpha=0.9,
         )
-    
+
     # Adjust x limits
     all_bounds = dimension_spec.bounds
     x_min = min(b[0] for b in all_bounds)
     x_max = max(b[1] for b in all_bounds)
     x_range = x_max - x_min
     ax.set_xlim(x_min - x_range * 0.15, x_max + x_range * 0.15)
-    
+
     # Remove left spine for cleaner look
     ax.spines['left'].set_visible(False)
-    
+
     plt.tight_layout()
     _save_or_show(fig, out_path, style.dpi)
-
-
-def _shorten_dim_name(name: str) -> str:
-    """Shorten dimension name for display."""
-    name = name.replace('_distance', '')
-    name = name.replace('distance', 'dist')
-    if len(name) > 25:
-        parts = name.split('_')
-        if len(parts) > 2:
-            name = '_'.join([parts[0][:4], parts[-1]])
-    return name

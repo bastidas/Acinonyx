@@ -154,8 +154,8 @@ export const DraggableToolbar: React.FC<DraggableToolbarProps> = ({
         </IconButton>
       </Box>
 
-      {/* Content area */}
-      <Box sx={{ overflow: 'auto', flex: 1 }}>
+      {/* Content area - userSelect unset so range/inputs work; sliders stop propagation in their own wrappers */}
+      <Box sx={{ overflow: 'auto', flex: 1, userSelect: 'unset' }}>
         {children}
       </Box>
     </Paper>
@@ -184,7 +184,7 @@ export const TOOLBAR_CONFIGS: ToolbarConfig[] = [
   { id: 'optimize', title: 'Optimize', icon: '✦', defaultPosition: { x: 8, y: -630 } }, // Bottom left (negative y = from bottom)
   { id: 'links', title: 'Links', icon: '—', defaultPosition: { x: -220, y: 8 } },      // Far right edge (negative = from right)
   { id: 'nodes', title: 'Nodes', icon: '○', defaultPosition: { x: -220, y: 500 } },    // Below Links on far right
-  { id: 'settings', title: 'Settings', icon: '⚙', defaultPosition: { x: 500, y: 60 } } // Settings panel
+  { id: 'settings', title: 'Settings', icon: '⚙', defaultPosition: { x: -280, y: 12 } } // Upper right, near top of canvas
 ]
 
 export interface ToolbarToggleButtonsProps {
@@ -487,6 +487,13 @@ export interface TargetPath {
   targetJoint: string | null  // Which joint should follow this path
   color: string
   isComplete: boolean
+  // Optional: Stored TargetTrajectory from preprocessing (for optimizer)
+  targetTrajectory?: {
+    joint_name: string
+    positions: number[][]
+    n_steps: number
+    weights?: number[]
+  }
 }
 
 export interface PathDrawState {
@@ -1271,32 +1278,33 @@ export const FooterToolbar: React.FC<FooterToolbarProps> = ({
     <Box
       className="footer-toolbar"
       sx={{
-        position: 'fixed',
+        position: 'absolute',
         bottom: 0,
-        left: '50%',
-        transform: 'translateX(-50%)',
-        width: canvasWidth ? `${canvasWidth}px` : '100%',
-        maxWidth: canvasWidth ? `${canvasWidth}px` : '1600px',
-        height: 38,
-        backgroundColor: darkMode ? 'rgba(30, 30, 30, 0.98)' : 'rgba(255, 255, 255, 0.98)',
-        backdropFilter: 'blur(8px)',
+        left: 0,
+        right: 0,
+        width: '100%',
+        height: 42,
+        backgroundColor: darkMode ? 'rgba(25, 25, 30, 0.85)' : 'rgba(250, 250, 252, 0.85)',
+        //backdropFilter: 'blur(8px)',
         borderTop: darkMode ? '1px solid #444' : '1px solid #e0e0e0',
+        borderBottomLeftRadius: 8,  // Match canvas border radius (borderRadius: 2 = 8px)
+        borderBottomRightRadius: 8,
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'space-between',
         px: 1.5,
-        zIndex: 1200,
+        zIndex: 2300,  // Above canvas content but below modals
         transition: 'background-color 0.25s ease, border-color 0.25s ease'
       }}
     >
       {/* LEFT: Tool indicator + Selection */}
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, minWidth: 200 }}>
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75 }}>
-          <Typography sx={{ fontSize: '1rem', color: darkMode ? '#e0e0e0' : 'inherit' }}>{activeTool?.icon}</Typography>
-          <Typography sx={{ fontSize: '0.7rem', fontWeight: 600, color: darkMode ? '#e0e0e0' : 'inherit' }}>
+          <Typography sx={{ fontSize: '1.1rem', color: darkMode ? '#e0e0e0' : 'inherit' }}>{activeTool?.icon}</Typography>
+          <Typography sx={{ fontSize: '0.8rem', fontWeight: 600, color: darkMode ? '#e0e0e0' : 'inherit' }}>
             {activeTool?.label}
           </Typography>
-          <Typography sx={{ fontSize: '0.55rem', color: darkMode ? '#888' : 'text.secondary' }}>
+          <Typography sx={{ fontSize: '0.65rem', color: darkMode ? '#888' : 'text.secondary' }}>
             [{activeTool?.shortcut}]
           </Typography>
         </Box>
@@ -1304,7 +1312,7 @@ export const FooterToolbar: React.FC<FooterToolbarProps> = ({
         {(selectedJoints.length > 0 || selectedLinks.length > 0) && (
           <>
             <Box sx={{ width: '1px', height: 18, backgroundColor: darkMode ? '#555' : '#e0e0e0' }} />
-            <Typography sx={{ fontSize: '0.7rem', color: darkMode ? '#ccc' : 'inherit' }}>
+            <Typography sx={{ fontSize: '0.8rem', color: darkMode ? '#ccc' : 'inherit' }}>
               {selectedJoints.length > 1 ? (
                 <span>⬤ <strong>{selectedJoints.length} joints</strong></span>
               ) : selectedJoints.length === 1 ? (
@@ -1346,7 +1354,7 @@ export const FooterToolbar: React.FC<FooterToolbarProps> = ({
           />
           <Typography
             sx={{
-              fontSize: '0.75rem',
+              fontSize: '0.85rem',
               fontWeight: 500,
               // In dark mode: use white text for maximum readability
               color: darkMode ? '#ffffff' : getStatusColor(statusMessage.type, darkMode)
@@ -1385,7 +1393,7 @@ export const FooterToolbar: React.FC<FooterToolbarProps> = ({
           <Typography
             component="span"
             sx={{
-              fontSize: '0.7rem',
+              fontSize: '0.8rem',
               fontStyle: 'italic',
               // Use !important to override MUI defaults in dark mode
               color: darkMode ? '#ffffff !important' : 'text.secondary'
@@ -1398,20 +1406,20 @@ export const FooterToolbar: React.FC<FooterToolbarProps> = ({
 
       {/* RIGHT: Counts + Logo */}
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, minWidth: 180, justifyContent: 'flex-end' }}>
-        <Typography sx={{ fontSize: '0.7rem', color: darkMode ? '#bbb' : 'text.secondary' }}>
+        <Typography sx={{ fontSize: '0.8rem', color: darkMode ? '#bbb' : 'text.secondary' }}>
           <strong style={{ color: darkMode ? '#e0e0e0' : 'inherit' }}>{jointCount}</strong> joints
         </Typography>
-        <Typography sx={{ fontSize: '0.7rem', color: darkMode ? '#bbb' : 'text.secondary' }}>
+        <Typography sx={{ fontSize: '0.8rem', color: darkMode ? '#bbb' : 'text.secondary' }}>
           <strong style={{ color: darkMode ? '#e0e0e0' : 'inherit' }}>{linkCount}</strong> links
         </Typography>
-        <Box sx={{ width: '1px', height: 18, backgroundColor: darkMode ? '#444' : '#e0e0e0' }} />
+        <Box sx={{ width: '1px', height: 20, backgroundColor: darkMode ? '#444' : '#e0e0e0' }} />
         <img
           src={acinonyxLogo}
           alt="Acinonyx"
           className="footer-logo"
           style={{
-            width: '24px',
-            height: '24px',
+            width: '28px',
+            height: '28px',
             objectFit: 'contain',
             borderRadius: '4px'
           }}

@@ -1,7 +1,7 @@
 """
 Pylinkage-native PSO optimizer for linkage trajectory optimization.
 
-Uses pylinkage's numba-optimized solver for maximum performance:
+Uses Mechanism class for maximum performance:
   - Compiles linkage once (no recompilation per evaluation)
   - Updates joint attributes + syncs to SolverData (avoids invalidation)
   - Uses step_fast() for 5x faster simulation than step()
@@ -13,7 +13,7 @@ License: pylinkage is GPL-3.0 (note: may have commercial restrictions)
 from __future__ import annotations
 
 import logging
-import math
+import time
 from dataclasses import dataclass
 from typing import Literal
 from typing import TYPE_CHECKING
@@ -21,7 +21,13 @@ from typing import TYPE_CHECKING
 import numpy as np
 
 if TYPE_CHECKING:
-    from pylink_tools.optimization_types import DimensionSpec, OptimizationResult, TargetTrajectory
+    from pylink_tools.mechanism import Mechanism
+    from pylink_tools.optimization_types import DimensionBoundsSpec, OptimizationResult, TargetTrajectory
+
+import pylinkage as pl
+from pylink_tools.mechanism import create_mechanism_fitness
+from pylink_tools.optimization_types import OptimizationResult
+
 
 logger = logging.getLogger(__name__)
 
@@ -40,59 +46,10 @@ class PylinkagePSOConfig:
     c2: float = 1.5   # Social/follower (pylinkage default: 0.1 - too low!)
 
 
-def build_joint_attr_mapping(linkage, pylink_data: dict, dimension_spec: DimensionSpec):
-    """
-    Build mapping from dimension index to (joint, attribute_name).
-
-    This allows direct joint attribute updates without invalidating solver_data.
-    """
-    from pylinkage.joints import Crank, Revolute, Static
-
-    edges = pylink_data.get('linkage', {}).get('edges', {})
-    edge_mapping = getattr(dimension_spec, 'edge_mapping', {}) or {}
-
-    # Build (source, target) -> edge_id
-    edge_by_nodes = {}
-    for edge_id, edge in edges.items():
-        edge_by_nodes[(edge['source'], edge['target'])] = edge_id
-        edge_by_nodes[(edge['target'], edge['source'])] = edge_id
-
-    # Build edge_id -> (joint, attr_name)
-    edge_to_joint_attr = {}
-    for joint in linkage.joints:
-        if isinstance(joint, Static) and not isinstance(joint, Crank):
-            continue
-        elif isinstance(joint, Crank):
-            if joint.joint0:
-                key = (joint.joint0.name, joint.name)
-                if key in edge_by_nodes:
-                    edge_to_joint_attr[edge_by_nodes[key]] = (joint, 'r')
-        elif isinstance(joint, Revolute):
-            if joint.joint0:
-                key = (joint.joint0.name, joint.name)
-                if key in edge_by_nodes:
-                    edge_to_joint_attr[edge_by_nodes[key]] = (joint, 'r0')
-            if joint.joint1:
-                key = (joint.joint1.name, joint.name)
-                if key in edge_by_nodes:
-                    edge_to_joint_attr[edge_by_nodes[key]] = (joint, 'r1')
-
-    # Map dimension index to (joint, attr)
-    mapping = []
-    for dim_name in dimension_spec.names:
-        if dim_name in edge_mapping:
-            edge_id, _ = edge_mapping[dim_name]
-            mapping.append(edge_to_joint_attr.get(edge_id))
-        else:
-            mapping.append(None)
-
-    return mapping
-
-
 def run_pylinkage_pso(
-    pylink_data: dict,
+    mechanism: Mechanism,
     target: TargetTrajectory,
-    dimension_spec: DimensionSpec | None = None,
+    dimension_bounds_spec: DimensionBoundsSpec | None = None,
     config: PylinkagePSOConfig | None = None,
     metric: str = 'mse',
     verbose: bool = True,
@@ -101,23 +58,35 @@ def run_pylinkage_pso(
     **kwargs,
 ) -> OptimizationResult:
     """
-    Run PSO using pylinkage's numba-optimized solver.
+    Run PSO using pylinkage's numba-optimized solver via Mechanism.
 
-    Optimizations:
+    Optimizations via Mechanism class:
       - Compiles once (no per-evaluation recompilation)
       - Direct joint attribute updates (faster than set_num_constraints)
       - Uses step_fast() with numba JIT (5x faster than step())
-    """
-    import pylinkage as pl
-    from pylinkage.joints import Crank
-    from pylinkage.bridge.solver_conversion import update_solver_constraints, update_solver_positions
 
-    from pylink_tools.hypergraph_adapter import is_our_hypergraph_format, to_simulatable_linkage
-    from pylink_tools.optimization_helpers import (
-        apply_dimensions_from_array, dimensions_to_dict, extract_dimensions, presample_valid_positions,
-    )
-    from pylink_tools.optimization_types import OptimizationResult
-    from pylink_tools.trajectory_utils import compute_trajectory_error
+    Args:
+        mechanism: Mechanism object to optimize (will be modified in place)
+        target: Target trajectory to match (joint name + positions)
+        dimension_bounds_spec: Dimensions to optimize (extracted from mechanism if not provided)
+        config: Pylinkage PSO configuration (uses defaults if not provided)
+        metric: Error metric ('mse', 'rmse', 'total', 'max')
+        verbose: Print progress information
+        phase_invariant: Use phase-aligned scoring
+        phase_align_method: Phase alignment algorithm
+        **kwargs: Additional arguments (n_particles, iterations, etc.)
+
+    Returns:
+        OptimizationResult with optimized dimensions and mechanism state
+    """
+    # Validate mechanism type
+    from pylink_tools.mechanism import Mechanism as MechanismType
+    if not isinstance(mechanism, MechanismType):
+        return OptimizationResult(
+            success=False, optimized_dimensions={},
+            error=f'Expected Mechanism object, got {type(mechanism).__name__}. '
+                  f'Convert pylink_data to Mechanism using create_mechanism_from_dict()',
+        )
 
     config = config or PylinkagePSOConfig()
     n_particles = max(kwargs.get('n_particles', config.n_particles), 20)
@@ -130,104 +99,66 @@ def run_pylinkage_pso(
     c1 = kwargs.get('c1', config.c1)
     c2 = kwargs.get('c2', config.c2)
 
-    if not is_our_hypergraph_format(pylink_data):
-        return OptimizationResult(
-            success=False, optimized_dimensions={},
-            error='Legacy format not supported. Use linkage.nodes/edges format.',
-        )
+    # Extract dimensions if not provided
+    if dimension_bounds_spec is None:
+        dimension_bounds_spec = mechanism.get_dimension_bounds_spec()
 
-    dimension_spec = dimension_spec or extract_dimensions(pylink_data)
-    if len(dimension_spec) == 0:
+    if len(dimension_bounds_spec) == 0:
         return OptimizationResult(
             success=False, optimized_dimensions={},
             error='No optimizable dimensions found',
         )
 
-    n_steps = target.n_steps
-    angle_per_step = 2 * math.pi / n_steps
-
-    # Build and compile linkage once
-    try:
-        linkage = to_simulatable_linkage(pylink_data)
-        for joint in linkage.joints:
-            if isinstance(joint, Crank):
-                joint.angle = angle_per_step
-        linkage.rebuild()
-        linkage.compile()  # Creates _solver_data (numpy arrays)
-    except Exception as e:
-        return OptimizationResult(
-            success=False, optimized_dimensions={},
-            error=f'Failed to build linkage: {e}',
-        )
-
-    # Build fast mapping: dim_idx -> (joint, attr_name)
-    joint_attr_mapping = build_joint_attr_mapping(linkage, pylink_data, dimension_spec)
-
-    # Save initial state for reset
-    init_positions = linkage.get_coords()
-    init_dims = np.array(dimension_spec.initial_values)
-
-    # Find target joint
-    target_idx = next(
-        (i for i, j in enumerate(linkage.joints) if j.name == target.joint_name),
-        len(linkage.joints) - 1,
-    )
+    # Ensure mechanism has correct n_steps
+    if mechanism.n_steps != target.n_steps:
+        mechanism._n_steps = target.n_steps
 
     if verbose:
-        logger.info('Starting pylinkage PSO (numba-optimized, no recompilation)')
-        logger.info(f'  Dimensions: {len(dimension_spec)}, Particles: {n_particles}, Iterations: {iterations}')
+        logger.info('Starting pylinkage PSO (Mechanism fast path)')
+        logger.info(f'  Dimensions: {len(dimension_bounds_spec)}, Particles: {n_particles}, Iterations: {iterations}')
 
+    # Create fast fitness function
+    fitness = create_mechanism_fitness(
+        mechanism=mechanism,
+        target=target,
+        target_joint=target.joint_name,
+        metric=metric,
+        phase_invariant=phase_invariant,
+        phase_align_method=phase_align_method,
+    )
+
+    # Wrapper for pylinkage PSO interface (expects linkage, params, init_pos)
+    # We'll track history by wrapping the fitness function
     def fitness_func(linkage_obj, params, init_pos_arg=None):
-        """Ultra-fast fitness: direct joint updates + step_fast()."""
-        try:
-            # Update joint attributes directly (doesn't invalidate _solver_data)
-            for i, ja in enumerate(joint_attr_mapping):
-                if ja:
-                    setattr(ja[0], ja[1], params[i])
-
-            # Sync constraints to solver data (fast numpy update)
-            update_solver_constraints(linkage_obj._solver_data, linkage_obj)
-
-            # Reset positions
-            linkage_obj.set_coords(init_positions)
-            update_solver_positions(linkage_obj._solver_data, linkage_obj)
-
-            # Run simulation (no recompilation!)
-            trajectory = linkage_obj.step_fast(iterations=n_steps)
-
-            if np.isnan(trajectory).any():
-                return float('inf')
-
-            # Extract target joint trajectory
-            joint_traj = trajectory[:, target_idx, :]
-            computed = [(joint_traj[i, 0], joint_traj[i, 1]) for i in range(n_steps)]
-
-            if phase_invariant:
-                return compute_trajectory_error(
-                    computed, target, metric=metric,
-                    phase_invariant=True, phase_align_method=phase_align_method,
-                )
-            else:
-                total = sum((c[0]-t[0])**2 + (c[1]-t[1])**2 for c, t in zip(computed, target.positions))
-                return total / len(target.positions) if metric == 'mse' else total
-        except Exception:
-            return float('inf')
+        """Wrapper for pylinkage PSO - delegates to Mechanism fitness."""
+        error = fitness(tuple(params))
+        # Track best error (pylinkage PSO doesn't provide per-iteration history directly)
+        # We'll update history after each iteration via callback if available
+        return error
 
     # Compute initial error
-    initial_error = fitness_func(linkage, tuple(init_dims))
+    init_dims = np.array(dimension_bounds_spec.initial_values)
+    initial_error = fitness(tuple(init_dims))
     if verbose:
         logger.info(f'  Initial error: {initial_error:.4f}')
 
+    # Track convergence history
+    convergence_history = [initial_error]
+    best_error_so_far = initial_error
+
     # Initialize particles
-    bounds = dimension_spec.get_bounds_tuple()
+    bounds = dimension_bounds_spec.get_bounds_tuple()
     lower, upper = np.array(bounds[0]), np.array(bounds[1])
-    n_dims = len(dimension_spec)
+    n_dims = len(dimension_bounds_spec)
     init_pos = np.zeros((n_particles, n_dims))
 
     if init_mode in ('sobol', 'behnken'):
         try:
+            # presample_valid_positions still expects pylink_data, so convert mechanism
+            # TODO: Refactor presample_valid_positions to take Mechanism directly
+            pylink_data_for_presample = mechanism.to_dict()
             presampled, scores = presample_valid_positions(
-                pylink_data, target, dimension_spec, n_samples=init_samples,
+                pylink_data_for_presample, target, dimension_bounds_spec, n_samples=init_samples,
                 n_best=n_particles, mode=init_mode, metric=metric, phase_invariant=phase_invariant,
             )
             if len(presampled) > 0:
@@ -248,9 +179,34 @@ def run_pylinkage_pso(
             init_pos[i] = np.clip(init_dims + (np.random.random(n_dims)-0.5)*2*init_spread*(upper-lower), lower, upper)
 
     # Run PSO via pylinkage wrapper (uses pyswarms LocalBestPSO)
+    # Track history by monitoring best error across iterations
     try:
+        # Track evaluations to approximate iterations
+        evaluation_count = [0]
+        last_iteration_recorded = [0]
+
+        def tracked_fitness_func(linkage_obj, params, init_pos_arg=None):
+            """Fitness function that tracks convergence history."""
+            error = fitness_func(linkage_obj, params, init_pos_arg)
+            evaluation_count[0] += 1
+
+            # Track best error seen so far
+            nonlocal best_error_so_far
+            if error < best_error_so_far:
+                best_error_so_far = error
+
+            # Record history once per iteration (approximately)
+            # Each iteration evaluates n_particles, so we record when we've evaluated
+            # a multiple of n_particles
+            current_iteration = evaluation_count[0] // n_particles
+            if current_iteration > last_iteration_recorded[0] and current_iteration <= iterations:
+                convergence_history.append(best_error_so_far)
+                last_iteration_recorded[0] = current_iteration
+
+            return error
+
         results = pl.particle_swarm_optimization(
-            eval_func=fitness_func, linkage=linkage, bounds=bounds,
+            eval_func=tracked_fitness_func, linkage=mechanism.linkage, bounds=bounds,
             n_particles=n_particles, iters=iterations, order_relation=min,
             leader=c1, follower=c2, inertia=w,
             verbose=verbose, init_pos=init_pos,
@@ -260,23 +216,45 @@ def run_pylinkage_pso(
             best_score, best_dims, _ = results[0]
             best_dims = tuple(best_dims)
 
+            # Ensure final error is recorded
+            if len(convergence_history) == 1 or convergence_history[-1] != best_score:
+                convergence_history.append(best_score)
+
+            # Ensure we have at least initial + iterations entries
+            # If we have fewer, pad with the best score
+            expected_length = iterations + 1
+            while len(convergence_history) < expected_length:
+                convergence_history.append(best_score)
+            # Trim if we have too many
+            convergence_history = convergence_history[:expected_length]
+
             if verbose:
                 logger.info(f'  Final error: {best_score:.4f}')
                 if initial_error > 0 and initial_error != float('inf'):
                     logger.info(f'  Improvement: {(1 - best_score / initial_error) * 100:.1f}%')
 
+            # Update mechanism with optimized dimensions and return copy
+            mechanism.set_dimensions(best_dims)
+            optimized_mechanism = mechanism.copy()
+
+            # Create dimension dict: {name: value} mapping
+            optimized_dims = dict(zip(dimension_bounds_spec.names, best_dims))
+
             return OptimizationResult(
                 success=True,
-                optimized_dimensions=dimensions_to_dict(best_dims, dimension_spec),
-                optimized_pylink_data=apply_dimensions_from_array(pylink_data, best_dims, dimension_spec),
+                optimized_dimensions=optimized_dims,
+                optimized_mechanism=optimized_mechanism,
                 initial_error=initial_error,
                 final_error=best_score,
                 iterations=iterations,
+                convergence_history=convergence_history,
             )
         else:
             return OptimizationResult(
                 success=False, optimized_dimensions={},
-                initial_error=initial_error, error='PSO returned no results',
+                initial_error=initial_error,
+                convergence_history=convergence_history if len(convergence_history) > 1 else None,
+                error='PSO returned no results',
             )
 
     except Exception as e:
@@ -284,5 +262,7 @@ def run_pylinkage_pso(
             logger.error(f'PSO failed: {e}', exc_info=True)
         return OptimizationResult(
             success=False, optimized_dimensions={},
-            initial_error=initial_error, error=f'PSO failed: {e}',
+            initial_error=initial_error,
+            convergence_history=convergence_history if len(convergence_history) > 1 else None,
+            error=f'PSO failed: {e}',
         )

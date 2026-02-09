@@ -175,23 +175,25 @@ export const AnimateToolbar: React.FC<AnimateToolbarProps> = ({
     <Box
       sx={{
         position: 'fixed',
-        bottom: 20,  // Moved up to prevent clipping
+        top: 101,  // Align with canvas start (header ~46px + 12px margin)
         left: '50%',
         transform: 'translateX(-50%)',
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
-        gap: 2.2,  // 10% bigger gaps
-        px: 3.3,   // 10% bigger padding
-        py: 1.8,   // More vertical padding
-        backgroundColor: colors.bg,
-        backdropFilter: 'blur(12px)',
-        borderRadius: 3.3,  // 10% bigger radius
+        gap: 1.5,  // Reduced gap
+        px: 1.2,   // 30px less padding (was 2, now ~14px)
+        py: 1.5,   // Reduced vertical padding
+        backgroundColor: isDark
+          ? 'rgba(25, 25, 30, 0.85)'  // More transparent
+          : 'rgba(250, 250, 252, 0.85)',
+        //backdropFilter: 'blur(4px)',
+        borderRadius: 2.5,
         boxShadow: colors.shadow,
         border: `1px solid ${colors.border}`,
-        zIndex: 1000,
-        minWidth: 638,  // 10% bigger (580 * 1.1)
-        height: 88,     // Taller to prevent clipping (72 * 1.1 + extra)
+        zIndex: 1300,  // Above canvas (z-index 1) and toolbars (z-index 1200)
+        minWidth: 490,  // 30px narrower (was 520)
+        height: 91,     // Slightly shorter
       }}
     >
       {/* ═══════════════════════════════════════════════════════════════════════

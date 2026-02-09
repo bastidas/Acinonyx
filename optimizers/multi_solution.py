@@ -27,113 +27,21 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 from scipy.optimize import basinhopping
-from scipy.optimize import minimize
 from scipy.spatial.distance import pdist
 from scipy.spatial.distance import squareform
 from sklearn.cluster import DBSCAN
 
+from pylink_tools.optimization_types import MultiSolutionResult
+from pylink_tools.optimization_types import Solution
+
 if TYPE_CHECKING:
+    from pylink_tools.mechanism import Mechanism
     from pylink_tools.optimization_types import (
-        DimensionSpec,
+        DimensionBoundsSpec,
         TargetTrajectory,
     )
 
 logger = logging.getLogger(__name__)
-
-
-# =============================================================================
-# RETURN TYPES
-# =============================================================================
-
-@dataclass
-class Solution:
-    """
-    A single solution found during multi-solution optimization.
-
-    Attributes:
-        optimized_dimensions: Dimension values for this solution
-        optimized_pylink_data: Full linkage configuration
-        final_error: Objective function value (MSE, RMSE, etc.)
-        initial_error: Error before optimization (for comparison)
-        iterations: Number of function evaluations used
-        cluster_id: Which cluster this solution belongs to (for grouping similar solutions)
-        distance_to_best: L2 distance in dimension space to the global best solution
-        uniqueness_score: Measure of how different this is from other solutions (0-1)
-            1.0 = completely unique, 0.0 = identical to another solution
-        convergence_history: Error values over iterations (optional)
-        local_search_start: Starting point for local optimization (optional)
-    """
-    optimized_dimensions: dict[str, float]
-    optimized_pylink_data: dict
-    final_error: float
-    initial_error: float
-    iterations: int
-    cluster_id: int
-    distance_to_best: float
-    uniqueness_score: float
-    convergence_history: list[float] | None = None
-    local_search_start: np.ndarray | None = None
-
-
-@dataclass
-class MultiSolutionResult:
-    """
-    Results from multi-solution optimization containing multiple distinct optima.
-
-    The solutions list is sorted by final_error (best first). Solutions within
-    epsilon_threshold of the best are considered "near-optimal". The clustering
-    identifies groups of similar solutions to avoid redundant duplicates.
-
-    Attributes:
-        solutions: All distinct solutions found, sorted by quality (best first)
-        best_solution: The single best solution (convenience accessor)
-        n_unique_clusters: Number of distinct solution clusters found
-        epsilon_threshold: Error threshold used for "near-optimal" classification
-        search_space_coverage: Fraction of viable search space explored (0-1)
-        total_evaluations: Total number of objective function calls
-        success: Whether optimization completed successfully
-        method: Which algorithm was used ('basin_hopping', 'pso_niching', 'multi_start')
-        method_config: Configuration parameters used
-        error_message: Error description if success=False
-    """
-    solutions: list[Solution]
-    best_solution: Solution
-    n_unique_clusters: int
-    epsilon_threshold: float
-    search_space_coverage: float
-    total_evaluations: int
-    success: bool
-    method: Literal['basin_hopping', 'pso_niching', 'multi_start']
-    method_config: dict
-    error_message: str | None = None
-
-    def get_near_optimal_solutions(self, epsilon: float | None = None) -> list[Solution]:
-        """
-        Get all solutions within epsilon of the best solution.
-
-        Args:
-            epsilon: Error threshold (uses self.epsilon_threshold if None)
-
-        Returns:
-            Subset of solutions with final_error <= best_error + epsilon
-        """
-        threshold = epsilon if epsilon is not None else self.epsilon_threshold
-        best_error = self.best_solution.final_error
-        return [s for s in self.solutions if s.final_error <= best_error + threshold]
-
-    def get_solutions_by_cluster(self, cluster_id: int) -> list[Solution]:
-        """Get all solutions belonging to a specific cluster."""
-        return [s for s in self.solutions if s.cluster_id == cluster_id]
-
-    def get_cluster_representatives(self) -> list[Solution]:
-        """Get one representative solution from each cluster (the best one)."""
-        representatives = []
-        for cluster_id in range(self.n_unique_clusters):
-            cluster_solutions = self.get_solutions_by_cluster(cluster_id)
-            if cluster_solutions:
-                best_in_cluster = min(cluster_solutions, key=lambda s: s.final_error)
-                representatives.append(best_in_cluster)
-        return representatives
 
 
 # =============================================================================
@@ -168,41 +76,6 @@ class BasinHoppingConfig:
     epsilon_threshold: float = 1.0
     min_distance_threshold: float = 0.1
     accept_test: str | None = None
-    seed: int | None = None
-
-
-@dataclass
-class PSONichingConfig:
-    """
-    Configuration for PSO with Niching (species formation).
-
-    Niching PSO maintains multiple sub-swarms (species) that explore different
-    regions of the search space. When particles get too close, they form species
-    that preserve diversity and prevent convergence to a single optimum.
-
-    Attributes:
-        n_particles: Total number of particles across all species
-        n_iterations: Number of PSO iterations
-        species_radius: Distance threshold for forming species
-        min_species_size: Minimum particles per species (smaller species merge)
-        max_species: Maximum number of species to maintain
-        w: Inertia weight (particle momentum)
-        c1: Cognitive coefficient (personal best attraction)
-        c2: Social coefficient (species best attraction)
-        epsilon_threshold: Error threshold for "near-optimal" solutions
-        speciation_frequency: How often to recompute species (iterations)
-        seed: Random seed for reproducibility
-    """
-    n_particles: int = 100
-    n_iterations: int = 200
-    species_radius: float = 0.2
-    min_species_size: int = 3
-    max_species: int = 10
-    w: float = 0.7
-    c1: float = 1.5
-    c2: float = 1.5
-    epsilon_threshold: float = 1.0
-    speciation_frequency: int = 10
     seed: int | None = None
 
 
@@ -250,9 +123,9 @@ class MultiStartConfig:
 # =============================================================================
 
 def run_basin_hopping_multi(
-    pylink_data: dict,
+    mechanism: Mechanism,
     target: TargetTrajectory,
-    dimension_spec: DimensionSpec | None = None,
+    dimension_bounds_spec: DimensionBoundsSpec | None = None,
     config: BasinHoppingConfig | None = None,
     metric: str = 'mse',
     verbose: bool = True,
@@ -309,15 +182,15 @@ def run_basin_hopping_multi(
     - When you can afford many function evaluations
 
     Args:
-        pylink_data: Base pylink document with linkage configuration
+        mechanism: Mechanism object to optimize (will be modified in place)
         target: Target trajectory to match (joint name + positions)
-        dimension_spec: Dimensions to optimize (extracted if not provided)
+        dimension_bounds_spec: Dimensions to optimize (extracted from mechanism if not provided)
         config: Basin hopping configuration (uses defaults if not provided)
         metric: Error metric ('mse', 'rmse', 'total', 'max')
         verbose: Print progress information
         phase_invariant: Use phase-aligned scoring
         phase_align_method: Phase alignment algorithm
-        initial_point: Starting point for optimization (uses dimension_spec.initial_values if None).
+        initial_point: Starting point for optimization (uses dimension_bounds_spec.initial_values if None).
             Can be a single point (1D array) or you can generate valid starting points using:
             - generate_valid_samples(): Pre-validated mechanism configurations
             - presample_valid_positions(): Sample space with kinematic validation
@@ -339,16 +212,16 @@ def run_basin_hopping_multi(
         >>> print(f"Best error: {result.best_solution.final_error:.6f}")
         >>>
         >>> # Advanced: Start from a validated viable point for better exploration
-        >>> from pylink_tools.optimization_helpers import generate_valid_samples
-        >>> dim_spec = extract_dimensions(pylink_data)
+        >>> from target_gen.sampling import generate_valid_samples
+        >>> dim_spec = mechanism.get_dimension_bounds_spec()
         >>> valid_samples = generate_valid_samples(
-        ...     pylink_data, dim_spec, n_samples=10, max_attempts=100
+        ...     mechanism, dim_spec, n_samples=10, max_attempts=100
         ... )
         >>> if len(valid_samples) > 0:
         ...     # Use first valid sample as starting point
         ...     initial_pt = np.array([valid_samples[0][name] for name in dim_spec.names])
         ...     result = run_basin_hopping_multi(
-        ...         pylink_data, target, config=config, initial_point=initial_pt
+        ...         mechanism, target, config=config, initial_point=initial_pt
         ...     )
         >>>
         >>> # Get all solutions within 1.0 MSE of best
@@ -356,18 +229,37 @@ def run_basin_hopping_multi(
         >>> for sol in near_optimal:
         ...     print(f"Cluster {sol.cluster_id}: error={sol.final_error:.3f}")
     """
-    from pylink_tools.optimize import create_fitness_function
-    from pylink_tools.optimization_helpers import extract_dimensions, apply_dimensions
+
+    # Validate mechanism type
+    from pylink_tools.mechanism import Mechanism as MechanismType
+    if not isinstance(mechanism, MechanismType):
+        return MultiSolutionResult(
+            solutions=[],
+            best_solution=None,
+            n_unique_clusters=0,
+            epsilon_threshold=0.0,
+            search_space_coverage=0.0,
+            total_evaluations=0,
+            success=False,
+            method='basin_hopping',
+            method_config={},
+            error_message=f'Expected Mechanism object, got {type(mechanism).__name__}. '
+                          f'Convert pylink_data to Mechanism using create_mechanism_from_dict()',
+        )
 
     # Use default config if not provided
     if config is None:
         config = BasinHoppingConfig()
 
     # Extract dimension specification if not provided
-    if dimension_spec is None:
-        dimension_spec = extract_dimensions(pylink_data)
+    if dimension_bounds_spec is None:
+        dimension_bounds_spec = mechanism.get_dimension_bounds_spec()
 
-    dim = len(dimension_spec)
+    # Ensure mechanism has correct n_steps
+    if mechanism.n_steps != target.n_steps:
+        mechanism._n_steps = target.n_steps
+
+    dim = len(dimension_bounds_spec)
     if dim == 0:
         return MultiSolutionResult(
             solutions=[],
@@ -382,34 +274,34 @@ def run_basin_hopping_multi(
             error_message='No dimensions to optimize',
         )
 
-    # Create fitness function
-    fitness_func = create_fitness_function(
-        pylink_data,
-        target,
-        dimension_spec,
+    # Create fitness function using Mechanism
+    from pylink_tools.mechanism import create_mechanism_fitness
+    fitness_func = create_mechanism_fitness(
+        mechanism=mechanism,
+        target=target,
+        target_joint=target.joint_name,
         metric=metric,
-        verbose=False,
         phase_invariant=phase_invariant,
         phase_align_method=phase_align_method,
     )
 
     # Get bounds
-    lower_bounds = np.array([b[0] for b in dimension_spec.bounds], dtype=np.float64)
-    upper_bounds = np.array([b[1] for b in dimension_spec.bounds], dtype=np.float64)
+    lower_bounds = np.array([b[0] for b in dimension_bounds_spec.bounds], dtype=np.float64)
+    upper_bounds = np.array([b[1] for b in dimension_bounds_spec.bounds], dtype=np.float64)
 
-    # Initial point: use provided point or fall back to dimension_spec.initial_values
+    # Initial point: use provided point or fall back to dimension_bounds_spec.initial_values
     if initial_point is not None:
         x0 = np.array(initial_point, dtype=np.float64)
         if len(x0) != dim:
             raise ValueError(
-                f'initial_point has {len(x0)} dimensions but dimension_spec has {dim}. '
-                f'Ensure initial_point matches dimension_spec.names order.',
+                f'initial_point has {len(x0)} dimensions but dimension_bounds_spec has {dim}. '
+                f'Ensure initial_point matches dimension_bounds_spec.names order.',
             )
         # Clip to bounds if needed
         x0 = np.clip(x0, lower_bounds, upper_bounds)
     else:
-        # Use current dimensions from dimension_spec
-        x0 = np.array(dimension_spec.initial_values, dtype=np.float64)
+        # Use current dimensions from dimension_bounds_spec
+        x0 = np.array(dimension_bounds_spec.initial_values, dtype=np.float64)
 
     initial_error = fitness_func(tuple(x0))
 
@@ -479,11 +371,13 @@ def run_basin_hopping_multi(
     step_taker = BoundedStepTaker(config.stepsize, (lower_bounds, upper_bounds))
 
     # Custom acceptance test (optional)
-    accept_test = None
     if config.accept_test == 'all':
         # Accept all steps (pure random walk)
-        def accept_test(f_new, f_old, x_new, x_old): return True
-    # 'metropolis' or None uses default Metropolis criterion
+        def accept_all(f_new, f_old, x_new, x_old): return True
+        accept_test = accept_all
+    else:
+        # 'metropolis' or None uses default Metropolis criterion
+        accept_test = None
 
     # Set random seed if provided
     if config.seed is not None:
@@ -559,7 +453,6 @@ def run_basin_hopping_multi(
     # Find best solution
     best_idx = np.argmin(all_f)
     best_x = all_x[best_idx]
-    best_error = all_f[best_idx]
 
     # Compute distances to best
     distances_to_best = np.linalg.norm(all_x - best_x, axis=1)
@@ -567,14 +460,17 @@ def run_basin_hopping_multi(
     # Create Solution objects
     solutions = []
     for i in range(len(all_x)):
-        optimized_dims = dict(zip(dimension_spec.names, all_x[i]))
-        optimized_pylink = apply_dimensions(pylink_data, optimized_dims, dimension_spec)
+        optimized_dims = dict(zip(dimension_bounds_spec.names, all_x[i]))
+        # Update mechanism with optimized dimensions and return copy
+        mechanism.set_dimensions(tuple(optimized_dims.values()))
+        optimized_mechanism = mechanism.copy()
 
         sol = Solution(
+            success=True,
             optimized_dimensions=optimized_dims,
-            optimized_pylink_data=optimized_pylink,
-            final_error=all_f[i],
+            optimized_mechanism=optimized_mechanism,
             initial_error=initial_error,
+            final_error=all_f[i],
             iterations=all_iter[i],
             cluster_id=int(cluster_labels[i]),
             distance_to_best=distances_to_best[i],
@@ -608,106 +504,10 @@ def run_basin_hopping_multi(
     )
 
 
-def run_pso_niching_multi(
-    pylink_data: dict,
-    target: TargetTrajectory,
-    dimension_spec: DimensionSpec | None = None,
-    config: PSONichingConfig | None = None,
-    metric: str = 'mse',
-    verbose: bool = True,
-    phase_invariant: bool = True,
-    phase_align_method: Literal['rotation', 'fft', 'frechet'] = 'rotation',
-    **kwargs,
-) -> MultiSolutionResult:
-    """
-    Find multiple distinct solutions using PSO with Niching (species formation).
-
-    Niching PSO extends standard Particle Swarm Optimization by maintaining
-    multiple sub-populations (species) that explore different regions. When
-    particles get within species_radius of each other, they form a species
-    with its own local best, preventing premature convergence to a single optimum.
-
-    ALGORITHM OVERVIEW:
-    ------------------
-    1. Initialize n_particles randomly across search space
-    2. For n_iterations:
-        a. Evaluate fitness for all particles
-        b. Every speciation_frequency iterations:
-            - Compute pairwise distances between particles
-            - Form species by grouping nearby particles (< species_radius)
-            - Identify species_best for each species
-        c. Update particle velocities:
-            - Attracted to personal best (c1)
-            - Attracted to their species_best (c2), not global best
-            - Maintain inertia (w)
-        d. Update particle positions
-    3. Extract best particle from each species as distinct solutions
-    4. Filter solutions by epsilon_threshold and cluster
-
-    BENEFITS:
-    ---------
-    ✓ Explicitly maintains diversity through species separation
-    ✓ Naturally finds multiple optima in parallel
-    ✓ No local search needed (PSO explores directly)
-    ✓ Works well in high-dimensional spaces (tested up to 50+ dims)
-    ✓ Automatic adaptation to landscape structure
-    ✓ Less sensitive to parameter tuning than basin hopping
-    ✓ Can handle multi-modal, multi-objective landscapes
-
-    DRAWBACKS:
-    ----------
-    ✗ More complex to implement than standard PSO
-    ✗ Species_radius parameter critical (problem-dependent)
-    ✗ May form too many species in early iterations (merge overhead)
-    ✗ Slower convergence than single-optimum PSO
-    ✗ Cannot leverage mechanism-specific viable sampling directly
-    ✗ Memory overhead scales with n_particles * n_species
-
-    WHEN TO USE:
-    -----------
-    - When you suspect many distinct local optima exist
-    - High-dimensional problems (>15 dimensions)
-    - When you want automatic diversity preservation
-    - When parallel exploration is valuable
-    - When landscape has clear basins of attraction
-
-    Args:
-        pylink_data: Base pylink document with linkage configuration
-        target: Target trajectory to match (joint name + positions)
-        dimension_spec: Dimensions to optimize (extracted if not provided)
-        config: PSO niching configuration (uses defaults if not provided)
-        metric: Error metric ('mse', 'rmse', 'total', 'max')
-        verbose: Print progress information
-        phase_invariant: Use phase-aligned scoring
-        phase_align_method: Phase alignment algorithm
-        **kwargs: Additional arguments (ignored, for interface compatibility)
-
-    Returns:
-        MultiSolutionResult with one solution per stable species
-
-    Example:
-        >>> config = PSONichingConfig(
-        ...     n_particles=100,
-        ...     n_iterations=200,
-        ...     species_radius=0.15,
-        ...     epsilon_threshold=0.5
-        ... )
-        >>> result = run_pso_niching_multi(pylink_data, target, config=config)
-        >>> print(f"Found {result.n_unique_clusters} species")
-        >>>
-        >>> # Get representative from each cluster
-        >>> representatives = result.get_cluster_representatives()
-        >>> for sol in representatives:
-        ...     print(f"Species {sol.cluster_id}: error={sol.final_error:.3f}, "
-        ...           f"uniqueness={sol.uniqueness_score:.2f}")
-    """
-    raise NotImplementedError('PSO with Niching not yet implemented')
-
-
 def run_multi_start(
-    pylink_data: dict,
+    mechanism: Mechanism,
     target: TargetTrajectory,
-    dimension_spec: DimensionSpec | None = None,
+    dimension_bounds_spec: DimensionBoundsSpec | None = None,
     config: MultiStartConfig | None = None,
     metric: str = 'mse',
     verbose: bool = True,
@@ -770,9 +570,9 @@ def run_multi_start(
     - Medium-dimensional problems (<20 dimensions)
 
     Args:
-        pylink_data: Base pylink document with linkage configuration
+        mechanism: Mechanism object to optimize (will be modified in place)
         target: Target trajectory to match (joint name + positions)
-        dimension_spec: Dimensions to optimize (extracted if not provided)
+        dimension_bounds_spec: Dimensions to optimize (extracted from mechanism if not provided)
         config: Multi-start configuration (uses defaults if not provided)
         metric: Error metric ('mse', 'rmse', 'total', 'max')
         verbose: Print progress information
@@ -792,7 +592,7 @@ def run_multi_start(
         ...     epsilon_threshold=0.5,
         ...     parallel=True
         ... )
-        >>> result = run_multi_start(pylink_data, target, config=config)
+        >>> result = run_multi_start(mechanism, target, config=config)
         >>> print(f"Found {result.n_unique_clusters} distinct solution clusters")
         >>> print(f"Coverage: {result.search_space_coverage:.1%}")
         >>>

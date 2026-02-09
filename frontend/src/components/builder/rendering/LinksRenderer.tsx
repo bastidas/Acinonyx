@@ -2,6 +2,8 @@
  * Links Renderer
  *
  * Pure function to render link lines between joints.
+ * Supports merge mode: optional onMergeLinkClick for single-click in merge mode.
+ * Double-click for edit is unchanged.
  */
 
 import React from 'react'
@@ -25,7 +27,10 @@ function renderLink(
     getHighlightStyle,
     unitsToPixels,
     onLinkHover,
-    onLinkDoubleClick
+    onLinkDoubleClick,
+    mergeMode = false,
+    onMergeLinkClick,
+    hitAreaStrokeWidthPx
   } = props
 
   const {
@@ -59,10 +64,9 @@ function renderLink(
   // Get highlight styling - links glow in their original color
   const linkHighlightStyle = getHighlightStyle('link', linkHighlightType, baseLinkColor, linkThickness)
 
-  // Ground links are rendered slightly thinner
-  const effectiveStrokeWidth = isGround
-    ? Math.max(linkHighlightStyle.strokeWidth * 0.8, 2)
-    : linkHighlightStyle.strokeWidth
+  // Use base stroke width - the glow filter handles the visual effect without changing line width
+  // This ensures ground links don't shrink on hover
+  const effectiveStrokeWidth = linkThickness
 
   // Calculate midpoint for label
   const midX = (position0[0] + position1[0]) / 2
@@ -73,8 +77,42 @@ function renderLink(
   const x2 = unitsToPixels(position1[0])
   const y2 = unitsToPixels(position1[1])
 
+  const handleClick = (e: React.MouseEvent) => {
+    if (mergeMode && onMergeLinkClick) {
+      e.stopPropagation()
+      onMergeLinkClick(name)
+    }
+  }
+
+  const eventHandlers = {
+    onMouseEnter: () => !moveGroupIsDragging && onLinkHover(name),
+    onMouseLeave: () => onLinkHover(null),
+    onClick: handleClick,
+    onDoubleClick: (e: React.MouseEvent) => {
+      if (toolMode === 'select') {
+        e.stopPropagation()
+        onLinkDoubleClick(name)
+      }
+    }
+  }
+
+  const lineStyle = { cursor: moveGroupIsActive ? 'move' : 'pointer' as const }
+
   return (
     <g key={name}>
+      {hitAreaStrokeWidthPx != null && (
+        <line
+          x1={x1}
+          y1={y1}
+          x2={x2}
+          y2={y2}
+          stroke="transparent"
+          strokeWidth={hitAreaStrokeWidthPx}
+          strokeLinecap="round"
+          style={lineStyle}
+          {...eventHandlers}
+        />
+      )}
       <line
         x1={x1}
         y1={y1}
@@ -83,17 +121,9 @@ function renderLink(
         stroke={baseLinkColor}
         strokeWidth={effectiveStrokeWidth}
         strokeLinecap="round"
-        strokeDasharray={isGround ? '8,4' : undefined}  // Dashed for ground links
         filter={linkHighlightStyle.filter}
-        style={{ cursor: moveGroupIsActive ? 'move' : 'pointer' }}
-        onMouseEnter={() => !moveGroupIsDragging && onLinkHover(name)}
-        onMouseLeave={() => onLinkHover(null)}
-        onDoubleClick={(e) => {
-          if (toolMode === 'select') {
-            e.stopPropagation()
-            onLinkDoubleClick(name)
-          }
-        }}
+        style={hitAreaStrokeWidthPx != null ? { ...lineStyle, pointerEvents: 'none' } : lineStyle}
+        {...(hitAreaStrokeWidthPx == null ? eventHandlers : {})}
       />
 
       {/* Link label - show on hover/selected, or when showLinkLabels is enabled */}

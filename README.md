@@ -1,8 +1,9 @@
 # Acinonyx 🐆
 
-**Design tools for planar mechanisms and automata.**
+**Design tools for planar mechanisms, automata, and
+path synthesis optimization.**
 
-An *automaton* is a mechanical device—often shaped like a human or animal—that moves as if by its own power, yet contains only gears, linkages, and levers. Acinonyx helps you design the multi-link mechanisms that bring these creations to life.
+An *automaton* is a mechanical device—often shaped like a human or animal—that moves as if by its own power, yet contains only gears, linkages, and levers. Acinonyx helps you design the multi-link mechanisms that bring these creations to life by targeting a trajectory and creatin a mechanism that can follow that trajectory.
 
 > **The problem:** Given a planar path (or set of paths), construct a mechanism that traces those paths while satisfying design constraints.
 
@@ -392,21 +393,23 @@ More complex mechanisms are built by combining multiple linkages.
 
 **Given a planar path (or set of paths), how do we construct a multi-link mechanism that closely traces those paths while satisfying design constraints?**
 
-This is an inverse problem in mechanism synthesis. While several tools above address related problems, only SAM, LInK, and Four-bar-rs solve subsets of the path synthesis problem. Acinonyx aims to provide a flexible, open-source solution with support for multi-link mechanisms beyond simple four-bars.
+This is an **inverse problem** in mechanism synthesis. The goal is to choose mechanism **dimensions** (link lengths, joint positions) so that a point on the coupler link follows a target path as closely as possible. Some of the tools mentioned here address path synthesis such as SAM, LInK, and Four-bar-rs, however for my use case they were all limited in someway (though each has strengths). Acinonyx aims to be a flexible, open-source option with support for **multi-link** mechanisms well beyond four-bars.
+
+**Two synthesis approaches:**
+- **Dimensional synthesis** — The mechanism type (topology) is fixed; the task is to find link lengths and geometry that achieve a desired function, path, or motion. Currently we do this.
+
+-  **type synthesis** - a designer initially specifies a predefined motion transmission and is supposed not initially to know the mechanism type. This method is analogous to topology design in structural optimization. Having finished synthesizing, a certain mechanism type is received. This is future work.
+
 
 ### Technical Challenges
 
-Path synthesis optimization is difficult because:
+Path synthesis is hard because:
 
-- **Non-convex search space**: The objective landscape has many local minima—gradient descent can get stuck far from the optimal solution
-- **Mixed variables**: The problem involves both discrete choices (mechanism topology) and continuous parameters (link lengths, joint positions)
-- **Phase invariance**: A mechanism may trace the correct path shape but at a different phase (starting point along the curve), leading to a key challenge:
-  - Optimizer finds dimensions that produce the correct path shape
-  - But the phase differs from the target → computed error remains high
-  - Optimizer overcorrects by distorting the path to minimize phase error
-  - Result: wrong dimensions, wrong path
+- **Non-convex search space** — Many local minima; gradient-based methods often get stuck.
+- **Mixed variables** — Both discrete choices (topology) and continuous parameters (lengths, positions).
+- **Timing** — Path generation can be *without* prescribed timing (phase-invariant) or *with* prescribed timing; both cases matter in practice.
 
-Acinonyx addresses these challenges through phase-invariant distance metrics and global optimization strategies.
+Acinonyx tackles these with multiple **distance metrics** and **global optimization** strategies (e.g. MLSL, PSO), while type/topology synthesis remains a future goal.
 
 ## License
 

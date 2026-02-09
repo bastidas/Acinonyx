@@ -30,7 +30,6 @@ def configure_matplotlib_for_backend():
 def get_safe_backend():
     """Return a safe backend for the current environment."""
     try:
-        import matplotlib.pyplot as plt
         return matplotlib.get_backend()
-    except:
+    except Exception:
         return 'Agg'

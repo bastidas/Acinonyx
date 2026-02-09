@@ -163,8 +163,12 @@ function App() {
           </Tabs>
         </Box>
 
-        {currentTab === 0 && <BuilderTab />}
-        {currentTab === 1 && <StatusAboutTab />}
+        <Box sx={{ display: currentTab === 0 ? 'block' : 'none' }} aria-hidden={currentTab !== 0}>
+          <BuilderTab />
+        </Box>
+        <Box sx={{ display: currentTab === 1 ? 'block' : 'none' }} aria-hidden={currentTab !== 1}>
+          <StatusAboutTab />
+        </Box>
       </Container>
 
       {/* Log Viewer - toggled with ~ key */}

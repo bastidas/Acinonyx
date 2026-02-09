@@ -38,11 +38,14 @@ const LogViewer: React.FC<LogViewerProps> = ({
     setLoading(true)
     setError(null)
     try {
-      const response = await fetch('/api/logs/backend?lines=1000')
+      const response = await fetch('/api/logs/backend?lines=1000&quiet=true')
       const data = await response.json()
 
       if (data.status === 'success') {
-        setLogContent(data.content || '(Empty log)')
+        // Limit display to last 1000 lines
+        const lines = (data.content || '').split('\n')
+        const displayLines = lines.slice(-1000)
+        setLogContent(displayLines.join('\n'))
         setTotalLines(data.total_lines || 0)
       } else {
         setError(data.message || 'Failed to fetch logs')
@@ -97,40 +100,46 @@ const LogViewer: React.FC<LogViewerProps> = ({
     return () => document.removeEventListener('keydown', handleKeyDown)
   }, [open, onClose])
 
-  if (!open) return null
-
   return (
     <Box
       sx={{
         position: 'fixed',
         top: 0,
-        left: 0,
-        right: 0,
-        bottom: 0,
-        backgroundColor: 'rgba(0, 0, 0, 0.85)',
+        right: open ? 0 : '-33.33%',
+        width: '33.33%',
+        height: '100%',
+        backgroundColor: 'rgba(13, 17, 23, 0.98)',
+        backdropFilter: 'blur(8px)',
         zIndex: 9999,
         display: 'flex',
         flexDirection: 'column',
-        p: 2,
-      }}
-      onClick={(e) => {
-        // Close if clicking the backdrop
-        if (e.target === e.currentTarget) {
-          onClose()
-        }
+        boxShadow: '-4px 0 24px rgba(0, 0, 0, 0.3)',
+        borderLeft: '1px solid rgba(255, 255, 255, 0.1)',
+        transition: 'right 0.3s ease-in-out',
+        pointerEvents: 'auto',
       }}
     >
-      {/* Header */}
       <Box
         sx={{
+          width: '100%',
+          height: '100%',
           display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          mb: 1,
-          pb: 1,
-          borderBottom: '1px solid rgba(255, 255, 255, 0.2)',
+          flexDirection: 'column',
+          p: 2,
         }}
       >
+        {/* Header */}
+        <Box
+          sx={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            mb: 1,
+            pb: 1,
+            borderBottom: '1px solid rgba(255, 255, 255, 0.2)',
+            flexShrink: 0,
+          }}
+        >
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
           <Typography
             variant="h6"
@@ -202,10 +211,10 @@ const LogViewer: React.FC<LogViewerProps> = ({
             <CloseIcon fontSize="small" />
           </IconButton>
         </Box>
-      </Box>
+        </Box>
 
-      {/* Content */}
-      <Box
+        {/* Content */}
+        <Box
         sx={{
           flex: 1,
           overflow: 'hidden',
@@ -271,35 +280,37 @@ const LogViewer: React.FC<LogViewerProps> = ({
             {logContent || '(No log content)'}
           </pre>
         )}
-      </Box>
+        </Box>
 
-      {/* Footer hint */}
-      <Box
-        sx={{
-          mt: 1,
-          display: 'flex',
-          justifyContent: 'center',
-        }}
-      >
-        <Typography
-          variant="caption"
+        {/* Footer hint */}
+        <Box
           sx={{
-            color: 'rgba(255, 255, 255, 0.4)',
-            fontFamily: 'monospace',
+            mt: 1,
+            display: 'flex',
+            justifyContent: 'center',
+            flexShrink: 0,
           }}
         >
-          Press <kbd style={{
-            padding: '2px 6px',
-            backgroundColor: 'rgba(255,255,255,0.1)',
-            borderRadius: '3px',
-            border: '1px solid rgba(255,255,255,0.2)'
-          }}>~</kbd> or <kbd style={{
-            padding: '2px 6px',
-            backgroundColor: 'rgba(255,255,255,0.1)',
-            borderRadius: '3px',
-            border: '1px solid rgba(255,255,255,0.2)'
-          }}>Esc</kbd> to close
-        </Typography>
+          <Typography
+            variant="caption"
+            sx={{
+              color: 'rgba(255, 255, 255, 0.4)',
+              fontFamily: 'monospace',
+            }}
+          >
+            Press <kbd style={{
+              padding: '2px 6px',
+              backgroundColor: 'rgba(255,255,255,0.1)',
+              borderRadius: '3px',
+              border: '1px solid rgba(255,255,255,0.2)'
+            }}>~</kbd> or <kbd style={{
+              padding: '2px 6px',
+              backgroundColor: 'rgba(255,255,255,0.1)',
+              borderRadius: '3px',
+              border: '1px solid rgba(255,255,255,0.2)'
+            }}>Esc</kbd> to close
+          </Typography>
+        </Box>
       </Box>
     </Box>
   )

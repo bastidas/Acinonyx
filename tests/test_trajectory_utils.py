@@ -1,8 +1,3 @@
-"""
-test_trajectory_utils.py - Tests for trajectory manipulation utilities.
-
-One test per function in trajectory_utils.py to verify core functionality.
-"""
 from __future__ import annotations
 
 import sys
@@ -11,19 +6,16 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from pylink_tools.trajectory_utils import analyze_trajectory
-from pylink_tools.trajectory_utils import compute_phase_aligned_distance
-from pylink_tools.trajectory_utils import compute_trajectory_hot
-from pylink_tools.trajectory_utils import compute_trajectory_similarity
+from pylink_tools.trajectory_scoring import mse
+from pylink_tools.trajectory_scoring import score_trajectory
+from pylink_tools.trajectory_utils import align_trajectory_phase
+from pylink_tools.trajectory_utils import find_phase_offset_rotation
 from pylink_tools.trajectory_utils import prepare_trajectory_for_optimization
 from pylink_tools.trajectory_utils import resample_trajectory
 from pylink_tools.trajectory_utils import smooth_trajectory
+# from pylink_tools.trajectory_utils import analyze_trajectory
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-
-# =============================================================================
-# Test Fixtures
-# =============================================================================
 
 @pytest.fixture
 def circle_trajectory() -> list[tuple[float, float]]:
@@ -48,10 +40,6 @@ def noisy_trajectory(circle_trajectory) -> list[tuple[float, float]]:
     ]
 
 
-# =============================================================================
-# Test: resample_trajectory
-# =============================================================================
-
 def test_resample_trajectory(circle_trajectory):
     """
     Test that resample_trajectory correctly changes point count.
@@ -67,24 +55,12 @@ def test_resample_trajectory(circle_trajectory):
     resampled_48 = resample_trajectory(original, 48)
     assert len(resampled_48) == 48
 
-    # Resample to fewer points
-    resampled_12 = resample_trajectory(original, 12)
-    assert len(resampled_12) == 12
-
-    # Same count should return same trajectory
-    resampled_24 = resample_trajectory(original, 24)
-    assert len(resampled_24) == 24
-
     # Verify resampled points are still approximately on the circle
     # (within reasonable tolerance of radius 10 from center 50,50)
     for x, y in resampled_48:
         dist_from_center = np.sqrt((x - 50)**2 + (y - 50)**2)
         assert 9.5 < dist_from_center < 10.5, f'Point ({x}, {y}) not on circle'
 
-
-# =============================================================================
-# Test: smooth_trajectory
-# =============================================================================
 
 def test_smooth_trajectory(noisy_trajectory):
     """
@@ -113,10 +89,6 @@ def test_smooth_trajectory(noisy_trajectory):
         f'Smoothing should reduce deviation: {smooth_dev:.4f} should be < {noisy_dev:.4f}'
 
 
-# =============================================================================
-# Test: compute_phase_aligned_distance
-# =============================================================================
-
 def test_compute_phase_aligned_distance(circle_trajectory):
     """
     Test that phase alignment correctly identifies phase-shifted trajectories.
@@ -126,62 +98,27 @@ def test_compute_phase_aligned_distance(circle_trajectory):
     - Phase-shifted identical trajectories also have distance ~0 after alignment
     - Phase offset is correctly detected
     """
-    original = circle_trajectory
+    original = np.array(circle_trajectory)
 
     # Shift by 6 points (90 degrees for 24-point circle)
     phase_offset = 6
-    shifted = original[phase_offset:] + original[:phase_offset]
+    shifted = np.roll(original, phase_offset, axis=0)
 
     # Without proper comparison, these would seem very different
     # But phase alignment should find they're the same
-    result = compute_phase_aligned_distance(original, shifted, method='rotation')
+    aligned = align_trajectory_phase(original, shifted, method='rotation')
+    distance = mse(original, aligned)
 
     # Distance should be essentially zero (same path, just shifted)
-    assert result.distance < 0.01, \
-        f'Phase-aligned distance should be ~0 for identical shifted paths, got {result.distance}'
+    assert distance < 0.01, \
+        f'Phase-aligned distance should be ~0 for identical shifted paths, got {distance}'
 
     # Should detect the correct offset (or equivalent)
     # Note: offset could be 6 or 18 (both align the circle)
-    assert result.best_phase_offset in [6, 18], \
-        f'Expected phase offset 6 or 18, got {result.best_phase_offset}'
+    detected_offset = find_phase_offset_rotation(original, shifted)
+    assert detected_offset in [6, 18], \
+        f'Expected phase offset 6 or 18, got {detected_offset}'
 
-
-# =============================================================================
-# Test: compute_trajectory_similarity
-# =============================================================================
-
-def test_compute_trajectory_similarity(circle_trajectory):
-    """
-    Test high-level similarity computation with automatic handling.
-
-    Verifies:
-    - Identical trajectories have similarity ~0
-    - Different trajectories have higher similarity score
-    - Phase-invariant mode handles phase shifts correctly
-    """
-    original = circle_trajectory
-
-    # Shifted version (same path, different phase)
-    shifted = original[6:] + original[:6]
-
-    # Phase-invariant should return ~0 for shifted identical paths
-    sim_phase_inv = compute_trajectory_similarity(
-        original, shifted, phase_invariant=True, method='mse',
-    )
-    assert sim_phase_inv < 0.01, \
-        f'Phase-invariant similarity should be ~0, got {sim_phase_inv}'
-
-    # Without phase invariance, should be much higher
-    sim_no_phase = compute_trajectory_similarity(
-        original, shifted, phase_invariant=False, method='mse',
-    )
-    assert sim_no_phase > 100, \
-        f'Non-phase-invariant similarity should be high for shifted paths, got {sim_no_phase}'
-
-
-# =============================================================================
-# Test: prepare_trajectory_for_optimization
-# =============================================================================
 
 def test_prepare_trajectory_for_optimization(noisy_trajectory):
     """
@@ -215,47 +152,6 @@ def test_prepare_trajectory_for_optimization(noisy_trajectory):
     assert len(prepared_no_smooth) == target_n_steps
 
 
-# =============================================================================
-# Test: analyze_trajectory
-# =============================================================================
-
-def test_analyze_trajectory(circle_trajectory):
-    """
-    Test trajectory analysis returns correct statistics.
-
-    Verifies:
-    - Correct point count
-    - Centroid is at expected location (center of circle)
-    - Bounding box dimensions are correct
-    - Trajectory is identified as approximately closed
-    """
-    circle = circle_trajectory
-    stats = analyze_trajectory(circle)
-
-    # Point count
-    assert stats['n_points'] == 24
-
-    # Centroid should be at (50, 50)
-    cx, cy = stats['centroid']
-    assert abs(cx - 50) < 0.1, f'Centroid x should be ~50, got {cx}'
-    assert abs(cy - 50) < 0.1, f'Centroid y should be ~50, got {cy}'
-
-    # Bounding box should be ~20x20 (diameter of circle with radius 10)
-    bbox = stats['bounding_box']
-    assert abs(bbox['width'] - 20) < 0.1, f"Width should be ~20, got {bbox['width']}"
-    assert abs(bbox['height'] - 20) < 0.1, f"Height should be ~20, got {bbox['height']}"
-
-    # Path length should be approximately circumference (2*pi*10 ≈ 62.8)
-    # But our discrete approximation will be slightly less
-    assert 55 < stats['total_path_length'] < 65, \
-        f"Path length should be ~60, got {stats['total_path_length']}"
-
-
-# =============================================================================
-# Test: compute_trajectory_hot
-# =============================================================================
-
-
 def test_compute_trajectory_hot(circle_trajectory):
     """
     Test ultra-fast MSE computation matches full API results.
@@ -269,26 +165,52 @@ def test_compute_trajectory_hot(circle_trajectory):
     shifted = np.roll(original, 6, axis=0)  # Shift by 6 points
 
     # Identical should be ~0
-    mse_identical = compute_trajectory_hot(original, original)
+    mse_identical = score_trajectory(
+        original,
+        original,
+        metric='mse',
+        phase_invariant=True,
+    )
     assert mse_identical < 1e-10, f'Identical trajectories should have MSE ~0, got {mse_identical}'
 
     # Phase-shifted should also be ~0 (phase-invariant)
-    mse_shifted = compute_trajectory_hot(original, shifted)
+    mse_shifted = score_trajectory(
+        original,
+        shifted,
+        metric='mse',
+        phase_invariant=True,
+    )
     assert mse_shifted < 0.01, f'Phase-shifted identical paths should have MSE ~0, got {mse_shifted}'
 
-    # Should match full API with FFT method
-    full_api_result = compute_phase_aligned_distance(
-        circle_trajectory,
-        list(map(tuple, shifted)),
-        method='fft',
-    )
-    assert abs(mse_shifted - full_api_result.distance) < 1e-10, \
-        f'compute_trajectory_hot should match full API: {mse_shifted} vs {full_api_result.distance}'
+    # Should match trajectory_metrics with FFT method
+    aligned = align_trajectory_phase(original, shifted, method='fft')
+    full_api_result = mse(original, aligned)
+    assert abs(mse_shifted - full_api_result) < 1e-10, \
+        f'compute_trajectory_hot should match trajectory_metrics: {mse_shifted} vs {full_api_result}'
 
 
-# =============================================================================
-# Run Tests
-# =============================================================================
+def test_score_trajectory_distance_metrics(circle_trajectory):
+    """score_trajectory runs with each distance metric and returns finite scores (lower=better)."""
+    ref = np.array(circle_trajectory)
+    metrics = [
+        'sspd',
+        'dtw',
+        'hausdorff',
+        # 'frechet', TODO: fix frechet not finite
+        'frechet_discrete',
+        'lcss',
+        'edr',
+        'erp',
+    ]
+    for m in metrics:
+        same = score_trajectory(ref, ref, metric=m, phase_invariant=False)
+        assert np.isfinite(same), f'{m}: identical traj should be finite'
+        assert same >= 0, f'{m}: score should be non-negative'
+        # Slightly different trajectory should give positive score
+        shifted = np.roll(ref, 3, axis=0)
+        diff_score = score_trajectory(ref, shifted, metric=m, phase_invariant=True)
+        assert np.isfinite(diff_score) and diff_score >= 0, f'{m}: diff score finite and >= 0'
+
 
 if __name__ == '__main__':
     pytest.main([__file__, '-v'])

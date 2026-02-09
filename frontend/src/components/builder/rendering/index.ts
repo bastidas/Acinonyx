@@ -28,6 +28,10 @@ export type { HighlightStyle } from './utils'
 // SVG Filters (should be included in <defs> section)
 export { SVGFilters } from './SVGFilters'
 
+// Canvas (SVG structure and layer order)
+export { CanvasRenderer } from './CanvasRenderer'
+export type { CanvasRendererProps, CanvasLayerRender } from './CanvasRenderer'
+
 // Renderers
 export { GridRenderer, renderGrid } from './GridRenderer'
 export { JointsRenderer, renderJoints } from './JointsRenderer'

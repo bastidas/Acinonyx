@@ -22,108 +22,71 @@ Main functions:
 """
 from __future__ import annotations
 
-import copy
+import logging
 import random
-from dataclasses import dataclass
-from dataclasses import field
 
 import numpy as np
+from pylinkage.bridge.solver_conversion import update_solver_positions
+from pylinkage.joints import Static
 
-from .variation_config import AchievableTargetConfig
+from .variation_config import AchievableTargetResult
 from .variation_config import DimensionVariationConfig
+from .variation_config import MechVariationConfig
 from .variation_config import StaticJointMovementConfig
-from pylink_tools.kinematic import compute_trajectory
-from pylink_tools.optimization_helpers import apply_dimensions
-from pylink_tools.optimization_types import DimensionSpec
+from pylink_tools.mechanism import Mechanism
+from pylink_tools.optimization_types import DimensionBoundsSpec
 from pylink_tools.optimization_types import TargetTrajectory
 
-
-@dataclass
-class AchievableTargetResult:
-    """
-    Result of create_achievable_target().
-
-    Contains the generated target trajectory along with all information
-    needed to understand and reproduce the target.
-
-    Attributes:
-        target: The generated TargetTrajectory object.
-        target_dimensions: Dict of dimension values that produce this target.
-        target_pylink_data: Modified mechanism data with target dimensions.
-        static_joint_movements: Dict of movements applied to static joints
-            (if any). Format: {joint_name: (dx, dy)}
-        attempts_needed: Number of attempts to find valid configuration.
-        fallback_range_used: The variation range that succeeded (None if primary).
-    """
-    target: TargetTrajectory
-    target_dimensions: dict[str, float]
-    target_pylink_data: dict
-    static_joint_movements: dict[str, tuple[float, float]] = field(default_factory=dict)
-    attempts_needed: int = 1
-    fallback_range_used: float | None = None
+logger = logging.getLogger(__name__)
 
 
-def verify_mechanism_viable(
-    pylink_data: dict,
-    target_joint: str | None = None,
-) -> bool:
+def verify_mechanism_viable(mechanism: Mechanism) -> bool:
     """
     Verify that a mechanism configuration is geometrically viable.
 
-    A viable mechanism:
-    1. Can complete a full crank rotation without breaking
-    2. Has the target joint in its computed trajectories (if specified)
+    A viable mechanism can complete a full crank rotation without breaking.
 
     Args:
-        pylink_data: The mechanism data to verify.
-        target_joint: Optional specific joint to check for in trajectories.
-            If provided, the mechanism is only viable if this joint exists.
+        mechanism: Mechanism to verify.
 
     Returns:
         True if the mechanism is viable, False otherwise.
-
-    Example:
-        >>> if verify_mechanism_viable(modified_data, "coupler_joint"):
-        ...     print("Mechanism is valid")
     """
     try:
-        result = compute_trajectory(pylink_data, verbose=False, skip_sync=True)
-        if not result.success:
+        trajectory = mechanism.simulate()
+
+        # Check for NaN (simulation failure)
+        if np.isnan(trajectory).any():
             return False
-        if target_joint and target_joint not in result.trajectories:
-            return False
+
         return True
     except Exception:
         return False
 
 
 def apply_dimension_variations(
-    pylink_data: dict,
-    dim_spec: DimensionSpec,
+    mechanism: Mechanism,
+    dim_spec: DimensionBoundsSpec,
     config: DimensionVariationConfig,
     rng: np.random.Generator,
-) -> tuple[dict, dict[str, float]]:
+) -> tuple[Mechanism, dict[str, float]]:
     """
     Apply dimension variations according to configuration.
 
     Varies each dimension based on its configuration settings, respecting
-    per-dimension overrides and exclusions.
+    per-dimension overrides and exclusions. Returns a new Mechanism with
+    modified dimensions.
 
     Args:
-        pylink_data: Base mechanism data (will not be modified).
+        mechanism: Base mechanism (will not be modified).
         dim_spec: Specification of optimizable dimensions.
         config: Configuration for dimension variation.
         rng: NumPy random generator for reproducibility.
 
     Returns:
-        (modified_pylink_data, applied_dimensions)
-        - modified_pylink_data: Copy with new dimension values
+        (modified_mechanism, applied_dimensions)
+        - modified_mechanism: New Mechanism with new dimension values
         - applied_dimensions: Dict mapping dimension names to new values
-
-    Example:
-        >>> rng = np.random.default_rng(42)
-        >>> config = DimensionVariationConfig(default_variation_range=0.3)
-        >>> new_data, dims = apply_dimension_variations(data, spec, config, rng)
     """
     target_dims = {}
 
@@ -135,7 +98,6 @@ def apply_dimension_variations(
         enabled, min_pct, max_pct = config.get_variation_for_dimension(name)
 
         if not enabled:
-            # Keep original value
             target_dims[name] = initial
             continue
 
@@ -147,51 +109,56 @@ def apply_dimension_variations(
         new_value = max(bounds[0], min(bounds[1], new_value))
         target_dims[name] = new_value
 
-    # Apply dimensions using the appropriate method for the data format
-    modified_data = _apply_dims_for_format(pylink_data, target_dims)
+    # Create new mechanism with modified dimensions using with_dimensions()
+    modified_mechanism = mechanism.with_dimensions(target_dims)
 
-    return modified_data, target_dims
+    return modified_mechanism, target_dims
 
 
 def apply_static_joint_movement(
-    pylink_data: dict,
+    mechanism: Mechanism,
     config: StaticJointMovementConfig,
     rng: np.random.Generator,
-) -> tuple[dict, dict[str, tuple[float, float]]]:
+) -> tuple[Mechanism, dict[str, tuple[float, float]]]:
     """
     Apply random movements to static joints according to configuration.
 
-    Moves static (ground/frame) joints within the configured bounds.
-    Linked joints are moved together to maintain relative positions.
+    Moves static (ground/frame) joints within the configured bounds using
+    mechanism.linkage.set_coords(). Linked joints are moved together to
+    maintain relative positions.
 
     Args:
-        pylink_data: Base mechanism data (will not be modified).
+        mechanism: Base mechanism (will not be modified).
         config: Configuration for static joint movement.
         rng: NumPy random generator for reproducibility.
 
     Returns:
-        (modified_pylink_data, movements_applied)
-        - modified_pylink_data: Copy with moved joints
+        (modified_mechanism, movements_applied)
+        - modified_mechanism: New Mechanism with moved joints
         - movements_applied: Dict mapping joint names to (dx, dy) movements
-
-    Example:
-        >>> config = StaticJointMovementConfig(enabled=True, max_x_movement=5.0)
-        >>> rng = np.random.default_rng(42)
-        >>> new_data, movements = apply_static_joint_movement(data, config, rng)
     """
     if not config.enabled:
-        return pylink_data, {}
+        return mechanism, {}
 
-    result = copy.deepcopy(pylink_data)
+    # Get current coordinates and convert to numpy array
+    current_coords = mechanism.linkage.get_coords()
+    # Convert to numpy array if it's a list/tuple
+    if not isinstance(current_coords, np.ndarray):
+        current_coords = np.array(current_coords, dtype=np.float64)
+
+    # Create a copy of coordinates to modify
+    new_coords = current_coords.copy()
+
     movements: dict[str, tuple[float, float]] = {}
-
-    # Track which joints have already been moved (for linked joints)
     moved_joints: set[str] = set()
 
-    # Get static joints from the mechanism
-    static_joints = _get_static_joints(result)
+    # Find static joints by checking joint types
+    static_joint_indices: dict[str, int] = {}
+    for i, joint in enumerate(mechanism.linkage.joints):
+        if isinstance(joint, Static):
+            static_joint_indices[joint.name] = i
 
-    for joint_name in static_joints:
+    for joint_name, joint_idx in static_joint_indices.items():
         if joint_name in moved_joints:
             continue
 
@@ -204,8 +171,9 @@ def apply_static_joint_movement(
         dx = rng.uniform(-max_x, max_x)
         dy = rng.uniform(-max_y, max_y)
 
-        # Apply movement to this joint
-        _move_static_joint(result, joint_name, dx, dy)
+        # Apply movement to this joint's coordinates
+        new_coords[joint_idx, 0] += dx
+        new_coords[joint_idx, 1] += dy
         movements[joint_name] = (dx, dy)
         moved_joints.add(joint_name)
 
@@ -217,49 +185,57 @@ def apply_static_joint_movement(
             elif link_b == joint_name:
                 linked_joint = link_a
 
-            if linked_joint and linked_joint not in moved_joints:
-                _move_static_joint(result, linked_joint, dx, dy)
+            if linked_joint and linked_joint in static_joint_indices and linked_joint not in moved_joints:
+                linked_idx = static_joint_indices[linked_joint]
+                new_coords[linked_idx, 0] += dx
+                new_coords[linked_idx, 1] += dy
                 movements[linked_joint] = (dx, dy)
                 moved_joints.add(linked_joint)
 
-    return result, movements
+    # Create a copy of the mechanism and apply coordinate changes directly
+    modified_mechanism = mechanism.copy()
+
+    # Convert numpy array back to list of tuples format for set_coords
+    # set_coords expects the same format as get_coords() returns
+    coords_list = [(float(new_coords[i, 0]), float(new_coords[i, 1]))
+                   for i in range(len(new_coords))]
+
+    # Apply the coordinate changes using set_coords
+    modified_mechanism.linkage.set_coords(coords_list)
+    # Sync to solver
+    update_solver_positions(modified_mechanism.linkage._solver_data, modified_mechanism.linkage)
+
+    return modified_mechanism, movements
 
 
 def create_achievable_target(
-    pylink_data: dict,
+    mechanism: Mechanism,
     target_joint: str,
-    dim_spec: DimensionSpec,
-    config: AchievableTargetConfig | None = None,
-    # Legacy API compatibility
-    randomize_range: float | None = None,
-    seed: int | None = None,
-    max_attempts: int | None = None,
+    dim_spec: DimensionBoundsSpec | None = None,
+    config: MechVariationConfig | None = None,
+    n_steps: int | None = None,
 ) -> AchievableTargetResult:
     """
     Create a target trajectory that is ACHIEVABLE by modifying the mechanism.
 
-    This is the main entry point for generating achievable optimization targets.
     It randomizes mechanism dimensions within configured bounds, validates the
     resulting mechanism is viable, and returns the target trajectory.
 
-    The function supports both:
-    - New config-based API with full control via AchievableTargetConfig
-    - Legacy API with simple parameters for backward compatibility
+    Very simlar to generate_valid_samples, but only returns a single target trajectory.
 
     Args:
-        pylink_data: Base mechanism data.
+        mechanism: Base mechanism to modify.
         target_joint: Name of the joint whose trajectory to use as target.
-        dim_spec: Specification of optimizable dimensions.
-        config: Full configuration (overrides legacy params if provided).
-        randomize_range: [LEGACY] ±percentage variation (0.5 = ±50%).
-        seed: [LEGACY] Random seed for reproducibility.
-        max_attempts: [LEGACY] Maximum attempts per variation range.
+        dim_spec: Specification of optimizable dimensions (extracted if None).
+        config: Full configuration (defaults to ±50% variation if None).
+        n_steps: Number of simulation steps (points in trajectory). If None, uses
+                 the mechanism's current n_steps value.
 
     Returns:
         AchievableTargetResult containing:
         - target: The generated TargetTrajectory
         - target_dimensions: Dict of dimension values that produce this target
-        - target_pylink_data: Mechanism with target dimensions applied
+        - target_mechanism: Mechanism with target dimensions applied
         - static_joint_movements: Any static joint movements applied
         - attempts_needed: Number of attempts to find valid config
         - fallback_range_used: Variation range that succeeded (None if primary)
@@ -268,28 +244,39 @@ def create_achievable_target(
         ValueError: If no valid configuration found after all attempts.
         NotImplementedError: If topology changes are enabled in config.
 
-    Example (new API):
-        >>> config = AchievableTargetConfig(
+    Example:
+        >>> from pylink_tools import Mechanism
+        >>> mechanism = Mechanism(...)  # Create mechanism from your data
+        >>> config = MechVariationConfig(
         ...     dimension_variation=DimensionVariationConfig(
         ...         default_variation_range=0.3,
         ...         exclude_dimensions=["ground_distance"],
         ...     ),
         ...     random_seed=42,
         ... )
-        >>> result = create_achievable_target(
-        ...     pylink_data, "coupler_joint", dim_spec, config=config
-        ... )
+        >>> result = create_achievable_target(mechanism, "coupler_joint", config=config, n_steps=96)
         >>> print(f"Found target after {result.attempts_needed} attempts")
-
-    Example (legacy API):
-        >>> target, dims, target_data = create_achievable_target(
-        ...     pylink_data, "coupler_joint", dim_spec,
-        ...     randomize_range=0.35, seed=42
-        ... )
+        >>> print(f"Target trajectory has {result.target.n_steps} points")
     """
-    # Handle legacy API vs new config API
+    # Default config
     if config is None:
-        config = _build_config_from_legacy(randomize_range, seed, max_attempts)
+        config = MechVariationConfig()
+
+    # Create a copy of the mechanism with specified n_steps if provided
+    if n_steps is not None and n_steps != mechanism._n_steps:
+        # Create a copy and modify its n_steps
+        working_mechanism = mechanism.copy()
+        working_mechanism._n_steps = n_steps
+    else:
+        working_mechanism = mechanism
+
+    # Extract dimensions if not provided
+    if dim_spec is None:
+        dim_spec = working_mechanism.get_dimension_bounds_spec()
+
+    # Validate target joint exists
+    if target_joint not in working_mechanism.joint_names:
+        raise ValueError(f"Target joint '{target_joint}' not found in mechanism. Available: {working_mechanism.joint_names}")
 
     # Validate config
     if config.topology_changes.enabled:
@@ -297,6 +284,26 @@ def create_achievable_target(
             'Topology changes are not yet implemented. '
             'Set topology_changes.enabled=False in config.',
         )
+
+    # Validate static joint movement config against mechanism
+    if config.static_joint_movement.enabled:
+        try:
+            config.static_joint_movement.validate(working_mechanism)
+        except ValueError as e:
+            logger.error(f'StaticJointMovementConfig validation failed: {e}')
+            raise
+
+    # Log start of target generation
+    logger.info(
+        f'Creating achievable target for joint "{target_joint}" '
+        f'with {len(dim_spec)} optimizable dimensions',
+    )
+    logger.debug(
+        f'Configuration: variation_range=±{config.dimension_variation.default_variation_range*100:.0f}%, '
+        f'static_joint_movement={config.static_joint_movement.enabled}, '
+        f'max_attempts={config.max_attempts}, '
+        f'seed={config.random_seed}',
+    )
 
     # Initialize random state
     if config.random_seed is not None:
@@ -306,14 +313,21 @@ def create_achievable_target(
     rng = np.random.default_rng(config.random_seed)
 
     # Build list of variation ranges to try
-    # Start with primary range, then fallbacks
     ranges_to_try = [config.dimension_variation.default_variation_range]
     ranges_to_try.extend(config.fallback_ranges)
+
+    logger.debug(f'Trying {len(ranges_to_try)} variation range(s): {[f"±{r*100:.0f}%" for r in ranges_to_try]}')
 
     total_attempts = 0
 
     for range_idx, variation_range in enumerate(ranges_to_try):
         is_fallback = range_idx > 0
+
+        if is_fallback:
+            logger.info(
+                f'Trying fallback variation range ±{variation_range*100:.0f}% '
+                f'(attempt {range_idx + 1}/{len(ranges_to_try)})',
+            )
 
         # Create a temporary config for this range
         temp_dim_config = DimensionVariationConfig(
@@ -326,164 +340,99 @@ def create_achievable_target(
         for attempt in range(config.max_attempts):
             total_attempts += 1
 
-            # Apply dimension variations
-            working_data = copy.deepcopy(pylink_data)
-            modified_data, target_dims = apply_dimension_variations(
-                working_data, dim_spec, temp_dim_config, rng,
+            # Log progress every 10 attempts
+            if total_attempts % 10 == 0:
+                logger.debug(f'Attempt {total_attempts} (range ±{variation_range*100:.0f}%)')
+
+            # Apply dimension variations (creates new mechanism)
+            modified_mechanism, target_dims = apply_dimension_variations(
+                working_mechanism, dim_spec, temp_dim_config, rng,
             )
+
+            # Ensure modified mechanism uses the correct n_steps
+            if n_steps is not None and modified_mechanism._n_steps != n_steps:
+                modified_mechanism._n_steps = n_steps
 
             # Apply static joint movement (if enabled)
             joint_movements = {}
             if config.static_joint_movement.enabled:
-                modified_data, joint_movements = apply_static_joint_movement(
-                    modified_data, config.static_joint_movement, rng,
+                modified_mechanism, joint_movements = apply_static_joint_movement(
+                    modified_mechanism, config.static_joint_movement, rng,
                 )
+                # Ensure n_steps is preserved after static joint movement
+                if n_steps is not None and modified_mechanism._n_steps != n_steps:
+                    modified_mechanism._n_steps = n_steps
 
-            # Compute trajectory with modified mechanism
-            result = compute_trajectory(modified_data, verbose=False, skip_sync=True)
+            # Try to simulate with modified mechanism
+            try:
+                if verify_mechanism_viable(modified_mechanism):
+                    trajectories = modified_mechanism.simulate_dict()
 
-            if result.success and target_joint in result.trajectories:
-                target_traj = result.trajectories[target_joint]
-                target = TargetTrajectory(
-                    joint_name=target_joint,
-                    positions=[tuple(pos) for pos in target_traj],
-                )
+                    if target_joint in trajectories:
+                        target_traj = trajectories[target_joint]
+                        target = TargetTrajectory(
+                            joint_name=target_joint,
+                            positions=[tuple(pos) for pos in target_traj],
+                        )
 
-                # Log success if it took multiple attempts
-                if total_attempts > 1:
-                    range_info = f' (±{variation_range*100:.0f}%)' if is_fallback else ''
-                    print(
-                        f'  Found valid target dimensions after {total_attempts} attempts{range_info}',
-                    )
+                        # Log success
+                        range_info = f' with fallback range ±{variation_range*100:.0f}%' if is_fallback else ''
+                        if total_attempts == 1:
+                            logger.info(f'Found valid target on first attempt{range_info}')
+                        else:
+                            logger.info(
+                                f'Found valid target after {total_attempts} attempts{range_info}',
+                            )
 
-                return AchievableTargetResult(
-                    target=target,
-                    target_dimensions=target_dims,
-                    target_pylink_data=modified_data,
-                    static_joint_movements=joint_movements,
-                    attempts_needed=total_attempts,
-                    fallback_range_used=variation_range if is_fallback else None,
-                )
+                        if joint_movements:
+                            logger.debug(
+                                f'Applied static joint movements: {list(joint_movements.keys())}',
+                            )
 
-        # Log fallback
+                        logger.debug(
+                            f'Target dimensions: {len(target_dims)} dimensions modified, '
+                            f'trajectory has {len(target_traj)} points',
+                        )
+
+                        return AchievableTargetResult(
+                            target=target,
+                            target_dimensions=target_dims,
+                            target_mechanism=modified_mechanism,
+                            static_joint_movements=joint_movements,
+                            attempts_needed=total_attempts,
+                            fallback_range_used=variation_range if is_fallback else None,
+                        )
+            except Exception as e:
+                # Simulation failed, try again
+                logger.debug(f'Attempt {total_attempts} failed: {type(e).__name__}')
+                continue
+
+        # Log fallback warning
         if is_fallback and range_idx < len(ranges_to_try) - 1:
-            print(
-                f"  Warning: Couldn't find valid dimensions with ±{variation_range*100:.0f}%, "
-                f'trying smaller range...',
+            logger.warning(
+                f"Couldn't find valid dimensions with ±{variation_range*100:.0f}% "
+                f'after {config.max_attempts} attempts, trying smaller range...',
             )
+        elif not is_fallback and len(ranges_to_try) > 1:
+            logger.warning(
+                f"Couldn't find valid dimensions with primary range ±{variation_range*100:.0f}% "
+                f'after {config.max_attempts} attempts, trying fallback ranges...',
+            )
+
+    # All attempts failed
+    logger.error(
+        f'Failed to find valid target dimensions after {total_attempts} attempts '
+        f'across {len(ranges_to_try)} variation range(s)',
+    )
+    logger.error(
+        f'Mechanism may be over-constrained. Consider: '
+        f'1) Increasing max_attempts (current: {config.max_attempts}), '
+        f'2) Using smaller variation ranges, '
+        f'3) Adjusting dimension bounds, '
+        f'4) Checking mechanism geometry',
+    )
 
     raise ValueError(
         f'Could not find valid target dimensions after {total_attempts} attempts '
         f'across {len(ranges_to_try)} variation ranges.',
     )
-
-
-# =============================================================================
-# Helper Functions
-# =============================================================================
-
-
-def _build_config_from_legacy(
-    randomize_range: float | None,
-    seed: int | None,
-    max_attempts: int | None,
-) -> AchievableTargetConfig:
-    """Build AchievableTargetConfig from legacy parameters."""
-    dim_config = DimensionVariationConfig(
-        default_variation_range=randomize_range if randomize_range is not None else 0.5,
-    )
-
-    return AchievableTargetConfig(
-        dimension_variation=dim_config,
-        max_attempts=max_attempts if max_attempts is not None else 128,
-        random_seed=seed,
-    )
-
-
-def _apply_dims_for_format(pylink_data: dict, target_dims: dict) -> dict:
-    """Apply dimensions using the appropriate method for the data format."""
-    # Check if this is edges format (complex/hypergraph) or joints format (simple)
-    if 'linkage' in pylink_data and 'edges' in pylink_data['linkage']:
-        return _apply_edge_dimensions(pylink_data, target_dims)
-    else:
-        return apply_dimensions(pylink_data, target_dims)
-
-
-def _apply_edge_dimensions(
-    pylink_data: dict,
-    dimensions: dict[str, float],
-) -> dict:
-    """
-    Apply dimension values to a linkage edges format mechanism.
-
-    Args:
-        pylink_data: Mechanism data with 'linkage.edges' structure
-        dimensions: Dict mapping dimension names to values
-                   (e.g., {'crank_link_distance': 25.0})
-
-    Returns:
-        Copy of pylink_data with updated edge distances
-    """
-    result = copy.deepcopy(pylink_data)
-
-    linkage = result.get('linkage', {})
-    edges = linkage.get('edges', {})
-
-    for dim_name, value in dimensions.items():
-        # Parse edge_id from dimension name (e.g., 'crank_link_distance' -> 'crank_link')
-        if dim_name.endswith('_distance'):
-            edge_id = dim_name[:-len('_distance')]
-            if edge_id in edges:
-                edges[edge_id]['distance'] = value
-
-    return result
-
-
-def _get_static_joints(pylink_data: dict) -> list[str]:
-    """Get list of static joint names from mechanism data."""
-    static_joints = []
-
-    # Check hypergraph format
-    if 'linkage' in pylink_data and 'nodes' in pylink_data['linkage']:
-        nodes = pylink_data['linkage']['nodes']
-        for name, node in nodes.items():
-            role = node.get('role', '')
-            if role in ('static', 'ground', 'frame', 'fixed'):
-                static_joints.append(name)
-
-    # Check legacy format
-    elif 'pylinkage' in pylink_data and 'joints' in pylink_data['pylinkage']:
-        for joint in pylink_data['pylinkage']['joints']:
-            if joint.get('type') == 'Static':
-                static_joints.append(joint['name'])
-
-    return static_joints
-
-
-def _move_static_joint(pylink_data: dict, joint_name: str, dx: float, dy: float) -> None:
-    """
-    Move a static joint by (dx, dy) in place.
-
-    Modifies pylink_data directly.
-    """
-    # Check hypergraph format
-    if 'linkage' in pylink_data and 'nodes' in pylink_data['linkage']:
-        nodes = pylink_data['linkage']['nodes']
-        if joint_name in nodes:
-            node = nodes[joint_name]
-            # Handle "position": [x, y] array format
-            if 'position' in node:
-                pos = node['position']
-                node['position'] = [pos[0] + dx, pos[1] + dy]
-            else:
-                # Fallback to x, y fields
-                node['x'] = node.get('x', 0) + dx
-                node['y'] = node.get('y', 0) + dy
-
-    # Check legacy format
-    elif 'pylinkage' in pylink_data and 'joints' in pylink_data['pylinkage']:
-        for joint in pylink_data['pylinkage']['joints']:
-            if joint['name'] == joint_name and joint.get('type') == 'Static':
-                joint['x'] = joint.get('x', 0) + dx
-                joint['y'] = joint.get('y', 0) + dy
-                break

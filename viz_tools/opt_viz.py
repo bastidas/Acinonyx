@@ -7,76 +7,22 @@ Provides functions to visualize:
   - Linkage state at different iterations
   - Convergence progress
 
-Uses seaborn for consistent styling and colorblind-friendly color palettes.
+Uses unified styling from viz_styling module.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
 from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
 import seaborn as sns
 
-# Try to import project modules
-try:
-    from pylink_tools.optimize import (
-        DimensionSpec, TargetTrajectory, OptimizationResult,
-    )
-    from pylink_tools.kinematic import compute_trajectory
-except ImportError:
-    pass  # Allow file to be imported even if pylink_tools not available
-
-
-# =============================================================================
-# Style Configuration - SEABORN STYLING
-# =============================================================================
-
-# Set consistent seaborn style for all plots
-sns.set_theme(style='whitegrid', context='notebook', palette='colorblind')
-sns.set_palette('colorblind')
-
-
-@dataclass
-class OptVizStyle:
-    """
-    Style configuration for optimization visualizations.
-
-    Uses seaborn's colorblind-friendly palette for all colors.
-    """
-    # Get seaborn's colorblind palette
-    _palette = sns.color_palette('colorblind', 10)
-
-    # Assign semantic colors from palette
-    target_color: str = sns.color_palette('colorblind')[3]      # Red/coral
-    current_color: str = sns.color_palette('colorblind')[0]     # Blue
-    initial_color: str = sns.color_palette('colorblind')[2]     # Green
-    optimized_color: str = sns.color_palette('colorblind')[4]   # Purple
-    bounds_color: str = sns.color_palette('gray', 5)[2]         # Gray
-
-    # Additional colors for multi-trajectory plots
-    accent_colors: tuple = tuple(sns.color_palette('colorblind', 10))
-
-    # Line properties
-    target_linewidth: float = 3.0
-    current_linewidth: float = 2.5
-    trajectory_alpha: float = 0.85
-
-    # Marker properties
-    marker_size: float = 80
-    start_marker: str = 'o'
-    end_marker: str = 's'
-
-    # Figure properties
-    figsize: tuple[int, int] = (12, 10)
-    dpi: int = 150
-
-    # Bounds bar properties
-    bar_height: float = 0.6
-    bar_alpha: float = 0.7
-
-
-DEFAULT_STYLE = OptVizStyle()
+from pylink_tools.mechanism import Mechanism
+from pylink_tools.optimization_types import DimensionBoundsSpec
+from pylink_tools.optimization_types import TargetTrajectory
+from viz_tools.viz_styling import _save_or_show
+from viz_tools.viz_styling import DEFAULT_STYLE
+from viz_tools.viz_styling import OptVizStyle
 
 
 # =============================================================================
@@ -316,7 +262,7 @@ def plot_trajectory_overlay(
 # =============================================================================
 
 def plot_dimension_bounds(
-    dimension_spec: DimensionSpec,
+    dimension_spec: DimensionBoundsSpec,
     initial_values: dict[str, float] | None = None,
     current_values: dict[str, float] | None = None,
     target_values: dict[str, float] | None = None,
@@ -335,7 +281,7 @@ def plot_dimension_bounds(
     - Purple marker: optimized value (if provided)
 
     Args:
-        dimension_spec: DimensionSpec with bounds and initial values
+        dimension_spec: DimensionBoundsSpec with bounds and initial values
         initial_values: Optional dict of initial dimension values (overrides spec)
         current_values: Optional dict of current dimension values
         target_values: Optional dict of target values to show
@@ -468,7 +414,7 @@ def _shorten_dim_name(name: str) -> str:
 
 
 def plot_bounds_summary(
-    dimension_spec: DimensionSpec,
+    dimension_spec: DimensionBoundsSpec,
     title: str = 'Dimension Bounds Summary',
     out_path: str | Path | None = None,
     style: OptVizStyle = DEFAULT_STYLE,
@@ -477,7 +423,7 @@ def plot_bounds_summary(
     Plot a summary table of dimension bounds.
 
     Args:
-        dimension_spec: DimensionSpec with bounds
+        dimension_spec: DimensionBoundsSpec with bounds
         title: Plot title
         out_path: Path to save figure
         style: Visualization style
@@ -518,7 +464,7 @@ def plot_bounds_summary(
 # =============================================================================
 
 def plot_linkage_state(
-    pylink_data: dict,
+    mechanism: Mechanism,
     target: TargetTrajectory | None = None,
     title: str = 'Linkage State',
     out_path: str | Path | None = None,
@@ -536,7 +482,7 @@ def plot_linkage_state(
     - Target trajectory (if provided)
 
     Args:
-        pylink_data: Pylink document with mechanism data
+        mechanism: Mechanism object to visualize
         target: Optional target trajectory to overlay
         title: Plot title
         out_path: Path to save figure
@@ -544,23 +490,29 @@ def plot_linkage_state(
         show_trajectory: Show computed trajectory
         highlight_target_joint: Highlight the target joint
     """
+    from viz_tools.viz_styling import _save_or_show
+
     fig, ax = plt.subplots(figsize=style.figsize, dpi=style.dpi)
 
-    # Compute trajectory with skip_sync=True to use stored dimensions
-    result = compute_trajectory(pylink_data, verbose=False, skip_sync=True)
+    # Get trajectories from mechanism
+    try:
+        trajectories_dict = mechanism.simulate_dict()
 
-    if not result.success:
+        # Get joint types from mechanism linkage
+        joint_types = {}
+        for joint in mechanism.linkage.joints:
+            joint_types[joint.name] = type(joint).__name__
+
+        trajectories = trajectories_dict
+    except Exception as e:
         ax.text(
-            0.5, 0.5, f'Failed to compute trajectory:\n{result.error}',
+            0.5, 0.5, f'Failed to compute trajectory:\n{str(e)}',
             ha='center', va='center', transform=ax.transAxes,
             fontsize=12, color='red',
         )
         plt.tight_layout()
         _save_or_show(fig, out_path, style.dpi)
         return
-
-    trajectories = result.trajectories
-    joint_types = result.joint_types
 
     # Distinct colors for each joint from seaborn palette
     palette = sns.color_palette('colorblind', 10)
@@ -642,8 +594,8 @@ def plot_linkage_state(
 
 
 def plot_linkage_comparison(
-    pylink_data_initial: dict,
-    pylink_data_target: dict,
+    mechanism_initial: Mechanism,
+    mechanism_target: Mechanism,
     title: str = 'Linkage Comparison: Initial vs Target',
     out_path: str | Path | None = None,
     style: OptVizStyle = DEFAULT_STYLE,
@@ -656,47 +608,41 @@ def plot_linkage_comparison(
     - Target: Open squares, dashed lines, solid
 
     Args:
-        pylink_data_initial: Initial pylink document
-        pylink_data_target: Target pylink document
+        mechanism_initial: Initial mechanism
+        mechanism_target: Target mechanism
         title: Plot title
         out_path: Path to save figure
         style: Visualization style
     """
-    from pylink_tools.kinematic import compute_trajectory
+    from viz_tools.viz_styling import _save_or_show
 
     fig, ax = plt.subplots(figsize=style.figsize, dpi=style.dpi)
 
-    # Compute trajectories for both linkages
-    result_initial = compute_trajectory(pylink_data_initial, verbose=False, skip_sync=True)
-    result_target = compute_trajectory(pylink_data_target, verbose=False, skip_sync=True)
+    # Get trajectories from mechanisms
+    try:
+        trajectories_initial_dict = mechanism_initial.simulate_dict()
+        trajectories_target_dict = mechanism_target.simulate_dict()
 
-    if not result_initial.success:
+        # Get joint types from mechanism linkages
+        joint_types_initial = {}
+        for joint in mechanism_initial.linkage.joints:
+            joint_types_initial[joint.name] = type(joint).__name__
+
+        joint_types_target = {}
+        for joint in mechanism_target.linkage.joints:
+            joint_types_target[joint.name] = type(joint).__name__
+
+        trajectories_initial = trajectories_initial_dict
+        trajectories_target = trajectories_target_dict
+    except Exception as e:
         ax.text(
-            0.5, 0.5, f'Failed to compute initial trajectory:\n{result_initial.error}',
+            0.5, 0.5, f'Failed to compute trajectories:\n{str(e)}',
             ha='center', va='center', transform=ax.transAxes,
             fontsize=12, color='red',
         )
         plt.tight_layout()
         _save_or_show(fig, out_path, style.dpi)
         return
-
-    if not result_target.success:
-        ax.text(
-            0.5, 0.5, f'Failed to compute target trajectory:\n{result_target.error}',
-            ha='center', va='center', transform=ax.transAxes,
-            fontsize=12, color='red',
-        )
-        plt.tight_layout()
-        _save_or_show(fig, out_path, style.dpi)
-        return
-
-    trajectories_initial = result_initial.trajectories
-    joint_types_initial = result_initial.joint_types
-    trajectories_target = result_target.trajectories
-    joint_types_target = result_target.joint_types
-
-    # Get seaborn palette colors
-    palette = sns.color_palette('colorblind', 10)
 
     # Plot INITIAL linkage with open markers, dotted lines, very transparent
     initial_color = style.current_color  # Blue
@@ -721,7 +667,6 @@ def plot_linkage_comparison(
             size = style.marker_size * 0.8
 
         # Plot with open (unfilled) markers
-        label = f'Initial {joint_name}' if i == 0 else None
         ax.scatter(
             [pos_arr[0, 0]], [pos_arr[0, 1]],
             facecolors='none', edgecolors=initial_color,
@@ -866,7 +811,7 @@ def plot_convergence_history(
 
 def plot_optimization_summary(
     result: OptimizationResult,
-    dimension_spec: DimensionSpec,
+    dimension_spec: DimensionBoundsSpec,
     title: str = 'Optimization Summary',
     out_path: str | Path | None = None,
     style: OptVizStyle = DEFAULT_STYLE,
@@ -881,7 +826,7 @@ def plot_optimization_summary(
 
     Args:
         result: OptimizationResult from optimization
-        dimension_spec: DimensionSpec used
+        dimension_spec: DimensionBoundsSpec used
         title: Plot title
         out_path: Path to save figure
         style: Visualization style
@@ -1017,21 +962,11 @@ def plot_optimization_summary(
 # Utility Functions
 # =============================================================================
 
-def _save_or_show(fig, out_path: str | Path | None, dpi: int):
-    """Save figure to path or show interactively."""
-    if out_path is not None:
-        out_path = Path(out_path)
-        out_path.parent.mkdir(parents=True, exist_ok=True)
-        fig.savefig(out_path, dpi=dpi, bbox_inches='tight', facecolor='white')
-        plt.close(fig)
-        print(f'Saved: {out_path}')
-    else:
-        plt.show()
-        plt.close(fig)
+# _save_or_show is imported from viz_styling
 
 
 def create_optimization_animation(
-    pylink_data_sequence: list[dict],
+    mechanism_sequence: list[Mechanism],
     target: TargetTrajectory,
     out_path: str | Path,
     fps: int = 5,
@@ -1041,13 +976,14 @@ def create_optimization_animation(
     Create an animation showing optimization progress.
 
     Args:
-        pylink_data_sequence: List of pylink_data at each iteration
+        mechanism_sequence: List of Mechanism objects at each iteration
         target: Target trajectory
         out_path: Path to save animation (gif or mp4)
         fps: Frames per second
         style: Visualization style
     """
     from matplotlib.animation import FuncAnimation
+    from pathlib import Path
 
     fig, ax = plt.subplots(figsize=style.figsize, dpi=style.dpi)
 
@@ -1056,11 +992,12 @@ def create_optimization_animation(
     def update(frame):
         ax.clear()
 
-        pylink_data = pylink_data_sequence[frame]
-        result = compute_trajectory(pylink_data, verbose=False, skip_sync=True)
+        mechanism = mechanism_sequence[frame]
 
-        if result.success and target.joint_name in result.trajectories:
-            current = np.array(result.trajectories[target.joint_name])
+        try:
+            trajectories_dict = mechanism.simulate_dict()
+            if target.joint_name in trajectories_dict:
+                current = np.array(trajectories_dict[target.joint_name])
 
             # Plot target
             ax.plot(
@@ -1081,6 +1018,9 @@ def create_optimization_animation(
                 color=style.current_color, s=40, marker='o',
                 edgecolors='white', linewidths=0.5,
             )
+        except Exception:
+            # If simulation fails, skip this frame
+            pass
 
         ax.set_title(f'Optimization Progress - Iteration {frame}', fontsize=14, fontweight='bold')
         ax.set_xlabel('X Position', fontsize=12)
@@ -1090,7 +1030,7 @@ def create_optimization_animation(
         ax.legend(loc='upper right', fontsize=10)
 
     anim = FuncAnimation(
-        fig, update, frames=len(pylink_data_sequence),
+        fig, update, frames=len(mechanism_sequence),
         interval=1000//fps, blit=False,
     )
 

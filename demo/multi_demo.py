@@ -38,12 +38,12 @@ from demo.helpers import load_mechanism
 from demo.helpers import print_section
 from optimizers.multi_solution import BasinHoppingConfig
 from optimizers.multi_solution import run_basin_hopping_multi
-from pylink_tools.optimization_helpers import extract_dimensions
-from pylink_tools.optimize import create_fitness_function
-from target_gen import AchievableTargetConfig
+from pylink_tools.hypergraph_adapter import extract_dimensions
 from target_gen import create_achievable_target
 from target_gen import DimensionVariationConfig
+from target_gen import MechVariationConfig
 from viz_tools.demo_viz import variation_plot
+# Note: create_fitness_function removed - use optimize_trajectory or create_mechanism_fitness
 
 
 # =============================================================================
@@ -174,7 +174,7 @@ def main():
     print_section('Step 1: Load Mechanism')
 
     pylink_data, target_joint, description = load_mechanism(MECHANISM)
-    dim_spec = extract_dimensions(pylink_data)
+    dim_spec, _ = extract_dimensions(pylink_data)
 
     print(f'\n{description}')
     print(f'Target joint: {target_joint}')
@@ -187,14 +187,18 @@ def main():
 
     print(f'\nRandomizing dimensions by ±{VARIATION_RANGE*100:.0f}%...')
 
-    config = AchievableTargetConfig(
+    config = MechVariationConfig(
         dimension_variation=DimensionVariationConfig(default_variation_range=VARIATION_RANGE),
         max_attempts=32,
         random_seed=RANDOM_SEED,
     )
 
+    # Create mechanism first
+    from demo.helpers import create_mechanism_from_dict
+    mechanism = create_mechanism_from_dict(pylink_data, dim_spec=dim_spec)
+
     target_result = create_achievable_target(
-        pylink_data=pylink_data,
+        mechanism=mechanism,
         target_joint=target_joint,
         dim_spec=dim_spec,
         config=config,
@@ -208,7 +212,16 @@ def main():
 
     # Test fitness function
     print('\nTesting fitness function...')
-    fitness_fn = create_fitness_function(pylink_data, target, dim_spec, metric='mse', phase_invariant=True)
+    # Create mechanism for fitness function
+    mechanism_for_fitness = create_mechanism_from_dict(pylink_data, dim_spec=dim_spec)
+    from pylink_tools.mechanism import create_mechanism_fitness
+    fitness_fn = create_mechanism_fitness(
+        mechanism=mechanism_for_fitness,
+        target=target,
+        target_joint=target.joint_name,
+        metric='mse',
+        phase_invariant=True,
+    )
     target_error = fitness_fn(tuple(target_dims[n] for n in dim_spec.names))
     print(f'  Target dimensions error: {target_error:.6f}')
 
@@ -237,9 +250,9 @@ def main():
     print('\nRunning optimization...\n')
 
     result = run_basin_hopping_multi(
-        pylink_data=pylink_data,
+        mechanism=create_mechanism_from_dict(pylink_data, dim_spec=dim_spec),
         target=target,
-        dimension_spec=dim_spec,
+        dimension_bounds_spec=dim_spec,
         config=bh_config,
         metric='mse',
         verbose=True,

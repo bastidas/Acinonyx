@@ -15,9 +15,10 @@ COMPARISON MODES:
 =================
 Change COMPARISON_MODE at the top to switch what's being compared:
 
+- 'all':           Test all optimizers from AVAILABLE_OPTIMIZERS
 - 'init_modes':    Compare random vs Sobol initialization
 - 'phase_methods': Compare rotation vs FFT phase alignment
-- 'solvers':       Compare PSO vs Scipy vs Pylinkage
+- 'solvers':       Compare main solver types (one of each category)
 - 'nlopt_mlsl':    Compare NLopt MLSL variants
 - 'quick':         Fast test with just 2 solvers
 
@@ -34,20 +35,19 @@ import time
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
+from typing import TYPE_CHECKING
 
-import numpy as np
+if TYPE_CHECKING:
+    from pylink_tools.mechanism import Mechanism
 
-from demo.helpers import get_dimension_spec
 from demo.helpers import load_mechanism
 from demo.helpers import print_section
-from optimizers.nlopt_mlsl import NLoptMLSLConfig
-from optimizers.nlopt_mlsl import run_nlopt_mlsl
-from pylink_tools.kinematic import compute_trajectory
-from pylink_tools.optimize import run_pso_optimization
-from pylink_tools.optimize import run_pylinkage_pso
-from pylink_tools.optimize import run_scipy_optimization
-from pylink_tools.optimize import TargetTrajectory
+from optimizers import AVAILABLE_OPTIMIZERS
+from optimizers.mlsl_optimizer import NLoptMLSLConfig
+from pylink_tools.optimization_types import TargetTrajectory
 from target_gen import create_achievable_target
+from target_gen import MechVariationConfig
+from target_gen import DimensionVariationConfig
 from target_gen import verify_mechanism_viable
 from viz_tools.demo_viz import plot_convergence_comparison
 from viz_tools.demo_viz import plot_dimension_bounds
@@ -62,7 +62,9 @@ from viz_tools.demo_viz import variation_plot
 MECHANISM = 'simple'  # Options: 'simple', 'intermediate', 'complex', 'leg'
 
 # What to compare (see docstring for options)
-COMPARISON_MODE = 'quick'  # 'init_modes', 'phase_methods', 'solvers', 'nlopt_mlsl', 'quick'
+COMPARISON_MODE = 'all'  # 'all', 'init_modes', 'phase_methods', 'solvers', 'nlopt_mlsl', 'quick'
+
+# Note: Set to 'quick' for faster testing, 'all' to test all optimizers
 
 # Optimization parameters
 N_PARTICLES = 64       # PSO particles
@@ -96,7 +98,7 @@ class SolverResult:
     elapsed_time: float
     iterations: int
     optimized_dimensions: dict
-    optimized_pylink_data: dict | None
+    optimized_mechanism: Mechanism | None
     convergence_history: list | None
     error_message: str | None = None
 
@@ -107,67 +109,147 @@ def get_solver_configs(mode: str) -> list[tuple[str, callable, dict]]:
 
     Returns list of (name, solver_func, kwargs) tuples.
     """
-    if mode == 'init_modes':
-        return [
-            ('PSO (random)', run_pso_optimization, {'init_mode': 'random'}),
-            ('PSO (sobol)', run_pso_optimization, {'init_mode': 'sobol'}),
-            ('Pylinkage (random)', run_pylinkage_pso, {'init_mode': 'random'}),
-            ('Pylinkage (sobol)', run_pylinkage_pso, {'init_mode': 'sobol'}),
-        ]
+    if mode == 'all':
+        # Test all optimizers from AVAILABLE_OPTIMIZERS
+        configs = []
+        for opt_name, opt_info in AVAILABLE_OPTIMIZERS.items():
+            solver_func = opt_info['function']
+            config_class = opt_info.get('config_class')
+
+            # Build kwargs based on optimizer type
+            kwargs = {}
+            if config_class:
+                if opt_name in ('nlopt', 'nlopt_gf'):
+                    kwargs['config'] = config_class(max_eval=MAX_EVAL)
+                elif opt_name == 'scipy':
+                    # Default scipy uses L-BFGS-B
+                    kwargs['config'] = config_class(method='L-BFGS-B', max_iterations=N_ITERATIONS)
+                elif opt_name in ('l-bfgs-b', 'powell', 'nelder-mead'):
+                    # Scipy variants with specific methods
+                    method_name = opt_name.upper()
+                    if opt_name == 'l-bfgs-b':
+                        method_name = 'L-BFGS-B'
+                    elif opt_name == 'nelder-mead':
+                        method_name = 'Nelder-Mead'
+                    kwargs['config'] = config_class(method=method_name, max_iterations=N_ITERATIONS)
+                elif opt_name == 'scip':
+                    kwargs['config'] = config_class()  # Uses defaults
+                elif opt_name == 'pylinkage':
+                    kwargs['config'] = config_class(n_particles=N_PARTICLES, iterations=N_ITERATIONS)
+
+            configs.append((opt_info['description'], solver_func, kwargs))
+
+        return configs
+
+    elif mode == 'init_modes':
+        # Compare initialization modes for PSO-based optimizers
+        configs = []
+        for opt_name, opt_info in AVAILABLE_OPTIMIZERS.items():
+            # Find PSO-based optimizers (pylinkage has init_mode support)
+            if opt_name == 'pylinkage':
+                solver_func = opt_info['function']
+                config_class = opt_info.get('config_class')
+                if config_class:
+                    for init_mode in ('random', 'sobol'):
+                        kwargs = {
+                            'config': config_class(n_particles=N_PARTICLES, iterations=N_ITERATIONS, init_mode=init_mode),
+                        }
+                        configs.append((f'{opt_info["description"]} ({init_mode})', solver_func, kwargs))
+        return configs
 
     elif mode == 'phase_methods':
-        return [
-            ('PSO (rotation)', run_pso_optimization, {'phase_align_method': 'rotation'}),
-            ('PSO (fft)', run_pso_optimization, {'phase_align_method': 'fft'}),
-            ('Scipy (rotation)', run_scipy_optimization, {'phase_align_method': 'rotation'}),
-            ('Scipy (fft)', run_scipy_optimization, {'phase_align_method': 'fft'}),
-        ]
+        # Compare phase alignment methods
+        from optimizers.scipy_optimizer import ScipyConfig
+        configs = []
+        # Test a few key optimizers with different phase methods
+        test_optimizers = ['l-bfgs-b', 'pylinkage', 'nlopt']
+        for opt_name in test_optimizers:
+            if opt_name not in AVAILABLE_OPTIMIZERS:
+                continue
+            opt_info = AVAILABLE_OPTIMIZERS[opt_name]
+            solver_func = opt_info['function']
+            config_class = opt_info.get('config_class')
+            for phase_method in ('rotation', 'fft'):
+                kwargs = {'phase_align_method': phase_method}
+                if config_class:
+                    if opt_name == 'l-bfgs-b':
+                        kwargs['config'] = ScipyConfig(method='L-BFGS-B', max_iterations=N_ITERATIONS)
+                    elif opt_name == 'pylinkage':
+                        kwargs['config'] = config_class(n_particles=N_PARTICLES, iterations=N_ITERATIONS)
+                    elif opt_name == 'nlopt':
+                        kwargs['config'] = config_class(max_eval=MAX_EVAL)
+                configs.append((f'{opt_info["description"]} ({phase_method})', solver_func, kwargs))
+        return configs
 
     elif mode == 'solvers':
+        # Compare main solver types (one of each category)
+        from optimizers.scipy_optimizer import ScipyConfig
         return [
-            ('PSO', run_pso_optimization, {}),
-            ('Pylinkage PSO', run_pylinkage_pso, {}),
+            (
+                'Scipy L-BFGS-B', AVAILABLE_OPTIMIZERS['l-bfgs-b']['function'], {
+                    'config': ScipyConfig(method='L-BFGS-B', max_iterations=N_ITERATIONS),
+                },
+            ),
+            (
+                'Pylinkage PSO', AVAILABLE_OPTIMIZERS['pylinkage']['function'], {
+                    'config': AVAILABLE_OPTIMIZERS['pylinkage']['config_class'](n_particles=N_PARTICLES, iterations=N_ITERATIONS),
+                },
+            ),
+            (
+                'NLopt MLSL', AVAILABLE_OPTIMIZERS['nlopt']['function'], {
+                    'config': AVAILABLE_OPTIMIZERS['nlopt']['config_class'](max_eval=MAX_EVAL),
+                },
+            ),
         ]
 
     elif mode == 'nlopt_mlsl':
         return [
             (
-                'MLSL (lbfgs)', run_nlopt_mlsl, {
+                'MLSL (lbfgs)', AVAILABLE_OPTIMIZERS['nlopt']['function'], {
                     'config': NLoptMLSLConfig(use_lds=False, local_algorithm='lbfgs', max_eval=MAX_EVAL),
                 },
             ),
             (
-                'MLSL (bobyqa)', run_nlopt_mlsl, {
+                'MLSL (bobyqa)', AVAILABLE_OPTIMIZERS['nlopt']['function'], {
                     'config': NLoptMLSLConfig(use_lds=False, local_algorithm='bobyqa', max_eval=MAX_EVAL),
                 },
             ),
             (
-                'MLSL+LDS (lbfgs)', run_nlopt_mlsl, {
+                'MLSL+LDS (lbfgs)', AVAILABLE_OPTIMIZERS['nlopt']['function'], {
                     'config': NLoptMLSLConfig(use_lds=True, local_algorithm='lbfgs', max_eval=MAX_EVAL),
                 },
             ),
             (
-                'MLSL+LDS (bobyqa)', run_nlopt_mlsl, {
+                'MLSL+LDS (bobyqa)', AVAILABLE_OPTIMIZERS['nlopt']['function'], {
                     'config': NLoptMLSLConfig(use_lds=True, local_algorithm='bobyqa', max_eval=MAX_EVAL),
                 },
             ),
         ]
 
     elif mode == 'quick':
+        from optimizers.scipy_optimizer import ScipyConfig
         return [
-            ('PSO', run_pso_optimization, {}),
-            ('Scipy', run_scipy_optimization, {}),
+            (
+                'Scipy L-BFGS-B', AVAILABLE_OPTIMIZERS['l-bfgs-b']['function'], {
+                    'config': ScipyConfig(method='L-BFGS-B', max_iterations=N_ITERATIONS),
+                },
+            ),
+            (
+                'Pylinkage PSO', AVAILABLE_OPTIMIZERS['pylinkage']['function'], {
+                    'config': AVAILABLE_OPTIMIZERS['pylinkage']['config_class'](n_particles=N_PARTICLES, iterations=N_ITERATIONS),
+                },
+            ),
         ]
 
     else:
-        available = ['init_modes', 'phase_methods', 'solvers', 'nlopt_mlsl', 'quick']
+        available = ['all', 'init_modes', 'phase_methods', 'solvers', 'nlopt_mlsl', 'quick']
         raise ValueError(f"Unknown mode '{mode}'. Available: {available}")
 
 
 def run_solver(
     name: str,
     solver_func: callable,
-    pylink_data: dict,
+    mechanism: Mechanism,
     target: TargetTrajectory,
     dim_spec,
     **kwargs,
@@ -175,25 +257,35 @@ def run_solver(
     """Run a single solver with timing."""
     print(f'\n  Running {name}...')
 
+    # Create a copy of the mechanism for this solver (optimizers modify in place)
+    working_mechanism = mechanism.copy()
+
     # Build solver arguments
     solver_kwargs = {
-        'pylink_data': pylink_data,
+        'mechanism': working_mechanism,
         'target': target,
-        'dimension_spec': dim_spec,
+        'dimension_bounds_spec': dim_spec,
         'metric': 'mse',
         'verbose': True,
         'phase_invariant': True,
-        'init_mode': 'random',
-        'init_samples': 128,
         'phase_align_method': 'rotation',
     }
 
-    # Add PSO-specific params
-    if solver_func in (run_pso_optimization, run_pylinkage_pso):
-        solver_kwargs['n_particles'] = N_PARTICLES
-        solver_kwargs['iterations'] = N_ITERATIONS
-    else:
-        solver_kwargs['max_iterations'] = N_ITERATIONS
+    # Add optimizer-specific params (if not already in config)
+    # Note: Most optimizers now use config objects, so these are fallbacks
+    # Only add if config is not provided (configs should contain all needed params)
+    if 'config' not in kwargs:
+        # Try to detect optimizer type from function name
+        func_name = solver_func.__name__
+        if 'pso' in func_name.lower() or 'pylinkage' in func_name.lower():
+            solver_kwargs['n_particles'] = N_PARTICLES
+            solver_kwargs['iterations'] = N_ITERATIONS
+            solver_kwargs['init_mode'] = 'random'
+            solver_kwargs['init_samples'] = 128
+        elif 'scipy' in func_name.lower():
+            solver_kwargs['max_iterations'] = N_ITERATIONS
+        elif 'nlopt' in func_name.lower() or 'mlsl' in func_name.lower():
+            solver_kwargs['max_eval'] = MAX_EVAL
 
     # Override with custom kwargs
     solver_kwargs.update(kwargs)
@@ -211,7 +303,7 @@ def run_solver(
             elapsed_time=elapsed,
             iterations=result.iterations or N_ITERATIONS,
             optimized_dimensions=result.optimized_dimensions,
-            optimized_pylink_data=result.optimized_pylink_data,
+            optimized_mechanism=working_mechanism if result.success else None,
             convergence_history=result.convergence_history,
         )
     except Exception as e:
@@ -225,7 +317,7 @@ def run_solver(
             elapsed_time=elapsed,
             iterations=0,
             optimized_dimensions={},
-            optimized_pylink_data=None,
+            optimized_mechanism=None,
             convergence_history=None,
             error_message=str(e),
         )
@@ -287,18 +379,37 @@ def main():
     # -------------------------------------------------------------------------
     print_section('Step 1: Load Mechanism')
 
-    pylink_data, target_joint, description = load_mechanism(MECHANISM)
+    mechanism, target_joint, description = load_mechanism(MECHANISM)
 
     # Verify mechanism is viable
-    if not verify_mechanism_viable(pylink_data, target_joint):
+    if not verify_mechanism_viable(mechanism):
         raise RuntimeError('Mechanism failed viability check!')
 
-    dim_spec = get_dimension_spec(pylink_data, MECHANISM, BOUNDS_FACTOR, MIN_LENGTH)
+    dim_spec = mechanism.get_dimension_bounds_spec()
     initial_dims = dict(zip(dim_spec.names, dim_spec.initial_values))
 
     print(f'\n{description}')
     print(f'Target joint: {target_joint}')
     print(f'Dimensions: {len(dim_spec)}')
+
+    # -------------------------------------------------------------------------
+    # Define optimization bounds configuration
+    # -------------------------------------------------------------------------
+    # Create MechVariationConfig for optimization bounds
+    optimization_config = MechVariationConfig(
+        dimension_variation=DimensionVariationConfig(
+            default_variation_range=BOUNDS_FACTOR,
+        ),
+    )
+
+    # Convert to DimensionBoundsSpec for optimizers
+    from pylink_tools.optimization_types import DimensionBoundsSpec
+    optimization_bounds_spec = DimensionBoundsSpec.from_mechanism(
+        mechanism, optimization_config,
+    )
+
+    print(f'\nOptimization bounds: ±{BOUNDS_FACTOR*100:.0f}% variation allowed')
+    print(f'  Optimizing {len(optimization_bounds_spec)} dimensions')
 
     # -------------------------------------------------------------------------
     # Step 2: Create target
@@ -309,10 +420,16 @@ def main():
     effective_range = min(VARIATION_RANGE, 0.25) if MECHANISM in ('complex', 'intermediate') else VARIATION_RANGE
     print(f'\nRandomizing dimensions by ±{effective_range*100:.0f}%...')
 
+    # Create MechVariationConfig for target generation
+    target_config = MechVariationConfig(
+        dimension_variation=DimensionVariationConfig(
+            default_variation_range=effective_range,
+        ),
+        random_seed=RANDOM_SEED,
+    )
+
     target_result = create_achievable_target(
-        pylink_data, target_joint, dim_spec,
-        randomize_range=effective_range,
-        seed=RANDOM_SEED,
+        mechanism, target_joint, dim_spec=dim_spec, config=target_config,
     )
     target = target_result.target
     target_dims = target_result.target_dimensions
@@ -320,7 +437,7 @@ def main():
     print(f'Target trajectory: {target.n_steps} points')
 
     # Compute initial trajectory
-    initial_traj = compute_trajectory(pylink_data, verbose=False).trajectories[target_joint]
+    initial_traj = mechanism.get_trajectory(target_joint)
 
     # -------------------------------------------------------------------------
     # Step 3: Run solvers
@@ -335,7 +452,7 @@ def main():
 
     results = []
     for name, solver_func, kwargs in solver_configs:
-        result = run_solver(name, solver_func, pylink_data, target, dim_spec, **kwargs)
+        result = run_solver(name, solver_func, mechanism, target, optimization_bounds_spec, **kwargs)
         results.append(result)
 
     # -------------------------------------------------------------------------
@@ -360,22 +477,24 @@ def main():
     print_section('Step 5: Visualize')
 
     # Collect trajectories
+    initial_mechanism = mechanism.copy()  # Preserve initial state
     trajectories = {'Initial': initial_traj}
+    variation_mechanisms = []
     for r in results:
-        if r.success and r.optimized_pylink_data:
-            traj_result = compute_trajectory(r.optimized_pylink_data, verbose=False, skip_sync=True)
-            if traj_result.success and target_joint in traj_result.trajectories:
-                trajectories[r.name] = traj_result.trajectories[target_joint]
+        if r.success and r.optimized_mechanism:
+            opt_traj = r.optimized_mechanism.get_trajectory(target_joint)
+            if opt_traj is not None and len(opt_traj) > 0:
+                trajectories[r.name] = opt_traj
+                variation_mechanisms.append(r.optimized_mechanism)
 
     # Plot trajectory comparison
     if len(trajectories) > 1:
-        variation_trajs = [np.array(t) for n, t in trajectories.items() if n != 'Initial']
         variation_plot(
             target_joint=target_joint,
             out_path=OUTPUT_DIR / f'trajectories_{TIMESTAMP}.png',
-            base_trajectory=np.array(trajectories['Initial']),
-            target_trajectory=np.array(target.positions),
-            variation_trajectories=variation_trajs,
+            base_mechanism=initial_mechanism,
+            target_trajectory=target,
+            variation_mechanisms=variation_mechanisms,
             title='Solver Comparison: Trajectories',
         )
 

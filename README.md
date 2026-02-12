@@ -1,7 +1,6 @@
 # Acinonyx 🐆
 
-**Design tools for planar mechanisms, automata, and
-path synthesis optimization.**
+**Design tools for planar mechanisms, automata, and path synthesis optimization including a complete user interface for simulating and visualizing mechanisms.** 
 
 An *automaton* is a mechanical device—often shaped like a human or animal—that moves as if by its own power, yet contains only gears, linkages, and levers. Acinonyx helps you design the multi-link mechanisms that bring these creations to life by targeting a trajectory and creatin a mechanism that can follow that trajectory.
 
@@ -14,6 +13,8 @@ This is an inverse problem in mechanism synthesis—and Acinonyx provides the si
 *The name comes from Greek: **akinetos** (ἀκίνητος) meaning "unmoved" + **onyx** (ὄνυξ) meaning "claw"—the genus of the cheetah, swift and precise.*
 
 ---
+
+![Example of UI](ui_example.png "Example of the UI") 
 
 ### Features
 
@@ -370,6 +371,17 @@ If you're interested in linkage mechanism design and simulation, here are some o
 
 ## Why This Project?
 
+### The Problem
+
+**Given a planar path (or set of paths), how do we construct a multi-link mechanism that closely traces those paths while satisfying design constraints?**
+
+This is an **inverse problem** in mechanism synthesis. The goal is to choose mechanism **dimensions** (link lengths, joint positions) so that a point on the coupler link follows a target path as closely as possible. Some of the tools mentioned here address path synthesis such as SAM, LInK, and Four-bar-rs, however for my use case they were all limited in someway (though each has strengths). Acinonyx aims to be a flexible, open-source option with support for **multi-link** mechanisms well beyond four-bars.
+
+**Two synthesis approaches:**
+- **Dimensional synthesis** — The mechanism type (topology) is fixed; the task is to find link lengths and geometry that achieve a desired function, path, or motion. Currently we do this.
+
+-  **type synthesis** - a designer initially specifies a predefined motion transmission and is supposed not initially to know the mechanism type. This method is analogous to topology design in structural optimization. Having finished synthesizing, a certain mechanism type is received. This is future work.
+
 ### Background
 
 A **mechanism** transforms input forces and movement into a desired set of output forces and movement. A **mechanical linkage** is an assembly of rigid bodies (links) connected by joints to manage forces and motion. When modeled as a network of rigid links and ideal joints, this is called a **kinematic chain**.
@@ -388,17 +400,6 @@ Key terminology for four-bar linkages:
 - **Coupler** (floating link): Connects two other links; traces the output path
 
 More complex mechanisms are built by combining multiple linkages.
-
-### The Problem
-
-**Given a planar path (or set of paths), how do we construct a multi-link mechanism that closely traces those paths while satisfying design constraints?**
-
-This is an **inverse problem** in mechanism synthesis. The goal is to choose mechanism **dimensions** (link lengths, joint positions) so that a point on the coupler link follows a target path as closely as possible. Some of the tools mentioned here address path synthesis such as SAM, LInK, and Four-bar-rs, however for my use case they were all limited in someway (though each has strengths). Acinonyx aims to be a flexible, open-source option with support for **multi-link** mechanisms well beyond four-bars.
-
-**Two synthesis approaches:**
-- **Dimensional synthesis** — The mechanism type (topology) is fixed; the task is to find link lengths and geometry that achieve a desired function, path, or motion. Currently we do this.
-
--  **type synthesis** - a designer initially specifies a predefined motion transmission and is supposed not initially to know the mechanism type. This method is analogous to topology design in structural optimization. Having finished synthesizing, a certain mechanism type is received. This is future work.
 
 
 ### Technical Challenges

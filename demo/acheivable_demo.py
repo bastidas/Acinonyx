@@ -38,21 +38,21 @@ from __future__ import annotations
 from datetime import datetime
 
 from configs.appconfig import USER_DIR
-from demo.helpers import get_dimension_spec
 from demo.helpers import load_mechanism
 from demo.helpers import print_section
-from target_gen import AchievableTargetConfig
+from pylink_tools.mechanism import Mechanism
 from target_gen import create_achievable_target
 from target_gen import DimensionVariationConfig
+from target_gen import MechVariationConfig
 from target_gen import StaticJointMovementConfig
 from viz_tools.demo_viz import variation_plot
 
 
 # Which mechanism to visualize
-MECHANISM = 'intermediate'  # Options: 'simple', 'intermediate', 'complex', 'leg'
+MECHANISM = 'complex'  # Options: 'simple', 'intermediate', 'complex', 'leg'
 
 # Number of random variations per plot
-N_VARIATIONS = 12
+N_VARIATIONS = 4
 
 # Default variation range for all dimensions
 VARIATION_RANGE = 0.35  # ±35%
@@ -60,9 +60,13 @@ VARIATION_RANGE = 0.35  # ±35%
 # Random seed for reproducibility
 BASE_SEED = 42
 
+# Number of trajectory steps for simulation
+N_STEPS = 96  # Number of points per full revolution of the crank
+
 # Output
 OUTPUT_DIR = USER_DIR / 'demo' / 'achievable_variations'
-TIMESTAMP = datetime.now().strftime('%Y%m%d_%H%M%S')
+# TIMESTAMP = datetime.now().strftime('%Y%m%d_%H%M%S')
+TIMESTAMP = ''
 
 
 def get_variation_configs(dim_spec):
@@ -81,7 +85,7 @@ def get_variation_configs(dim_spec):
     configs.append((
         'Type 1: Uniform Variation',
         f'All dimensions vary by ±{VARIATION_RANGE*100:.0f}%',
-        AchievableTargetConfig(
+        MechVariationConfig(
             dimension_variation=DimensionVariationConfig(
                 default_variation_range=VARIATION_RANGE,
             ),
@@ -114,7 +118,7 @@ def get_variation_configs(dim_spec):
     configs.append((
         'Type 2: Selective Variation',
         '\n'.join(subtitle_parts),
-        AchievableTargetConfig(
+        MechVariationConfig(
             dimension_variation=DimensionVariationConfig(
                 default_variation_range=VARIATION_RANGE,
                 exclude_dimensions=exclude_list,
@@ -130,7 +134,7 @@ def get_variation_configs(dim_spec):
     configs.append((
         'Type 3: Link + Position Variation',
         f'Links: ±{VARIATION_RANGE*100:.0f}%, Static joints: ±20 units',
-        AchievableTargetConfig(
+        MechVariationConfig(
             dimension_variation=DimensionVariationConfig(
                 default_variation_range=VARIATION_RANGE,
             ),
@@ -146,13 +150,13 @@ def get_variation_configs(dim_spec):
     return configs
 
 
-def generate_variations(pylink_data, target_joint, dim_spec, config, n_variations):
+def generate_variations(mechanism: Mechanism, target_joint: str, dim_spec, config, n_variations):
     """Generate N random achievable variations."""
     variations = []
 
     for i in range(n_variations):
         # Each variation gets a different seed
-        var_config = AchievableTargetConfig(
+        var_config = MechVariationConfig(
             dimension_variation=config.dimension_variation,
             static_joint_movement=config.static_joint_movement,
             max_attempts=config.max_attempts,
@@ -162,9 +166,14 @@ def generate_variations(pylink_data, target_joint, dim_spec, config, n_variation
 
         try:
             result = create_achievable_target(
-                pylink_data, target_joint, dim_spec, config=var_config,
+                mechanism,
+                target_joint,
+                dim_spec=dim_spec,
+                config=var_config,
+                n_steps=N_STEPS,
             )
-            variations.append(result.target_pylink_data)
+            # Keep as Mechanism object (no conversion to pylink_data)
+            variations.append(result.target_mechanism)
         except ValueError as e:
             print(f'    Warning: Variation {i+1} failed: {e}')
 
@@ -181,12 +190,18 @@ def main():
 
     # Load mechanism
     print('\nLoading mechanism...')
-    pylink_data, target_joint, description = load_mechanism(MECHANISM)
-    dim_spec = get_dimension_spec(pylink_data, MECHANISM)
+    mechanism, target_joint, description = load_mechanism(MECHANISM, n_steps=N_STEPS)
+    dim_spec = mechanism.get_dimension_bounds_spec()
 
     print(f'  {description}')
     print(f'  Target joint: {target_joint}')
     print(f'  Dimensions: {len(dim_spec)}')
+    print(f'  Mechanism created with {len(mechanism.joint_names)} joints')
+    print(f'  Simulation steps: {mechanism.n_steps}')
+
+    # Get base trajectory (like in demo_viz.py line 284)
+    # base_trajectory = mechanism.get_trajectory(target_joint)
+    # print(f'  Base trajectory shape: {base_trajectory.shape}')  # Should be (N_STEPS, 2)
 
     # Get variation configs
     configs = get_variation_configs(dim_spec)
@@ -199,7 +214,7 @@ def main():
         # Generate variations
         print(f'  Generating {N_VARIATIONS} variations...')
         variations = generate_variations(
-            pylink_data, target_joint, dim_spec, config, N_VARIATIONS,
+            mechanism, target_joint, dim_spec, config, N_VARIATIONS,
         )
         print(f'  Generated {len(variations)} valid variations')
 
@@ -207,8 +222,8 @@ def main():
         variation_plot(
             target_joint=target_joint,
             out_path=OUTPUT_DIR / f'trajectory_type{i}_{TIMESTAMP}.png',
-            base_pylink_data=pylink_data,
-            variation_pylink_data=variations,
+            base_mechanism=mechanism,
+            variation_mechanisms=variations,
             title=title,
             subtitle=subtitle,
             show_linkages=False,
@@ -218,8 +233,8 @@ def main():
         variation_plot(
             target_joint=target_joint,
             out_path=OUTPUT_DIR / f'linkage_type{i}_{TIMESTAMP}.png',
-            base_pylink_data=pylink_data,
-            variation_pylink_data=variations,
+            base_mechanism=mechanism,
+            variation_mechanisms=variations,
             title=f'{title} (Linkages)',
             subtitle=subtitle,
             show_linkages=True,

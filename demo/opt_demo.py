@@ -6,7 +6,7 @@ WHAT THIS DEMO DOES:
 ====================
 1. Loads a 4-bar linkage mechanism
 2. Creates a target trajectory by randomizing the link dimensions
-3. Runs PSO optimization to recover the original dimensions
+3. Runs MLSL (Multi-Level Single-Linkage) optimization to recover the original dimensions
 4. Visualizes the results
 
 This demonstrates the core optimization workflow: given a target trajectory,
@@ -30,18 +30,18 @@ from __future__ import annotations
 import json
 from datetime import datetime
 
+import numpy as np
+
 from configs.appconfig import USER_DIR
-from demo.helpers import get_dimension_spec
 from demo.helpers import load_mechanism
 from demo.helpers import print_dimensions
 from demo.helpers import print_mechanism_info
 from demo.helpers import print_section
-from pylink_tools.kinematic import compute_trajectory
-from pylink_tools.optimize import run_pso_optimization
-from target_gen import AchievableTargetConfig
+from optimizers.mlsl_optimizer import NLoptMLSLConfig
+from optimizers.mlsl_optimizer import run_nlopt_mlsl
 from target_gen import create_achievable_target
 from target_gen import DimensionVariationConfig
-from viz_tools.demo_viz import plot_convergence_comparison
+from target_gen import MechVariationConfig
 from viz_tools.demo_viz import plot_dimension_bounds
 from viz_tools.demo_viz import variation_plot
 
@@ -51,19 +51,20 @@ from viz_tools.demo_viz import variation_plot
 # =============================================================================
 
 # Which mechanism to optimize (simple is easiest to understand)
-MECHANISM = 'simple'  # Options: 'simple', 'intermediate', 'complex', 'leg'
+MECHANISM = 'intermediate'  # Options: 'simple', 'intermediate', 'complex', 'leg'
 
 # How much to randomize dimensions for the target (0.3 = ±30%)
 # Smaller = easier optimization, larger = harder
-VARIATION_RANGE = 0.35
+VARIATION_RANGE = 0.3
 
-# PSO optimizer settings
-N_PARTICLES = 64      # More particles = better exploration, slower
-N_ITERATIONS = 150    # More iterations = better convergence, slower
+# MLSL optimizer settings
+MAX_EVAL = 1000       # Maximum function evaluations for global search
+LOCAL_MAX_EVAL = 100  # Maximum evaluations per local search
+FTOL_REL = 1e-6       # Relative function tolerance for convergence
 
 # Bounds factor: how much optimizer can vary dimensions
 # 2.0 means dimensions can be anywhere from value/2 to value*2
-BOUNDS_FACTOR = 2.0
+BOUNDS_FACTOR = 0.3
 MIN_LENGTH = 5.0      # Minimum link length (prevents degenerate mechanisms)
 
 # Reproducibility
@@ -71,7 +72,8 @@ RANDOM_SEED = 42      # Set to None for random results each run
 
 # Output
 OUTPUT_DIR = USER_DIR / 'demo' / 'optimization'
-TIMESTAMP = datetime.now().strftime('%Y%m%d_%H%M%S')
+# TIMESTAMP = datetime.now().strftime('%Y%m%d_%H%M%S')
+TIMESTAMP = ''
 
 
 def main():
@@ -86,12 +88,46 @@ def main():
     # -------------------------------------------------------------------------
     print_section('Step 1: Load Mechanism')
 
-    pylink_data, target_joint, description = load_mechanism(MECHANISM)
-    dim_spec = get_dimension_spec(pylink_data, MECHANISM, BOUNDS_FACTOR, MIN_LENGTH)
+    mechanism, target_joint, description = load_mechanism(MECHANISM)
+    dim_spec = mechanism.get_dimension_bounds_spec()
     initial_dims = dict(zip(dim_spec.names, dim_spec.initial_values))
 
-    print_mechanism_info(pylink_data, target_joint, description)
-    print_dimensions(dim_spec)
+    print_mechanism_info(mechanism, target_joint, description)
+    # print_dimensions(dim_spec)
+
+    # Save initial mechanism state for comparison (create a copy)
+    initial_mechanism = mechanism.copy()
+
+    # -------------------------------------------------------------------------
+    # Define optimization bounds configuration
+    # -------------------------------------------------------------------------
+    # This MechVariationConfig defines how the optimizer can vary dimensions
+    # BOUNDS_FACTOR=2.0 means dimensions can vary from value/2 to value*2
+    optimization_config = MechVariationConfig(
+        dimension_variation=DimensionVariationConfig(
+            default_variation_range=BOUNDS_FACTOR,  # ±200% variation (value*2 to value/2)
+        ),
+    )
+
+    # Convert MechVariationConfig to DimensionBoundsSpec for the optimizer
+    from pylink_tools.optimization_types import DimensionBoundsSpec
+    optimization_bounds_spec = DimensionBoundsSpec.from_mechanism(
+        mechanism,
+        optimization_config,
+    )
+
+    print(f'\nOptimization bounds: ±{BOUNDS_FACTOR*100:.0f}% variation allowed')
+
+    # Print actual DimensionBoundsSpec values
+    print('\nDimensionBoundsSpec details:')
+    print(f'  {"Dimension Name":<35} {"Initial":>10} {"Min Bound":>12} {"Max Bound":>12} {"Range":>12}')
+    print(f'  {"-"*35} {"-"*10} {"-"*12} {"-"*12} {"-"*12}')
+    for i, name in enumerate(optimization_bounds_spec.names):
+        initial = optimization_bounds_spec.initial_values[i]
+        min_bound, max_bound = optimization_bounds_spec.bounds[i]
+        range_val = max_bound - min_bound
+        print(f'  {name:<35} {initial:>10.4f} {min_bound:>12.4f} {max_bound:>12.4f} {range_val:>12.4f}')
+    print(f'  {"-"*35} {"-"*10} {"-"*12} {"-"*12} {"-"*12}')
 
     # -------------------------------------------------------------------------
     # Step 2: Create target by randomizing dimensions
@@ -100,7 +136,7 @@ def main():
 
     print(f'\nRandomizing dimensions by ±{VARIATION_RANGE*100:.0f}%...')
 
-    target_config = AchievableTargetConfig(
+    target_config = MechVariationConfig(
         dimension_variation=DimensionVariationConfig(
             default_variation_range=VARIATION_RANGE,
         ),
@@ -108,13 +144,13 @@ def main():
     )
 
     target_result = create_achievable_target(
-        pylink_data, target_joint, dim_spec, config=target_config,
+        mechanism, target_joint, dim_spec=dim_spec, config=target_config,
     )
 
-    target = target_result.target
+    target_trajectory = target_result.target
     target_dims = target_result.target_dimensions
 
-    print(f'Target trajectory: {target.n_steps} points')
+    print(f'Target trajectory: target_trajectory.n_steps points')
     print('\nTarget dimensions (what optimizer should find):')
     for name in dim_spec.names:
         initial = initial_dims[name]
@@ -122,26 +158,28 @@ def main():
         change = ((target_val - initial) / initial * 100)
         print(f'  {name}: {initial:.2f} → {target_val:.2f} ({change:+.1f}%)')
 
-    # Compute initial trajectory for comparison
-    initial_traj = compute_trajectory(pylink_data, verbose=False).trajectories[target_joint]
-
     # -------------------------------------------------------------------------
     # Step 3: Run optimization
     # -------------------------------------------------------------------------
-    print_section('Step 3: Run PSO Optimization')
+    print_section('Step 3: Run MLSL Optimization')
 
-    print('\nPSO Settings:')
-    print(f'  Particles: {N_PARTICLES}')
-    print(f'  Iterations: {N_ITERATIONS}')
-    print(f'  Bounds factor: {BOUNDS_FACTOR}')
+    print('\nMLSL Settings:')
+    print(f'  Max evaluations: {MAX_EVAL}')
+    print(f'  Local max evaluations: {LOCAL_MAX_EVAL}')
+    print(f'  Tolerance: {FTOL_REL}')
     print('\nOptimizing...\n')
 
-    result = run_pso_optimization(
-        pylink_data=pylink_data,
-        target=target,
-        dimension_spec=dim_spec,
-        n_particles=N_PARTICLES,
-        iterations=N_ITERATIONS,
+    config = NLoptMLSLConfig(
+        max_eval=MAX_EVAL,
+        local_max_eval=LOCAL_MAX_EVAL,
+        ftol_rel=FTOL_REL,
+    )
+
+    result = run_nlopt_mlsl(
+        mechanism=mechanism,
+        target=target_trajectory,
+        dimension_bounds_spec=optimization_bounds_spec,  # Use bounds derived from MechVariationConfig
+        config=config,
         metric='mse',
         verbose=True,
     )
@@ -174,35 +212,35 @@ def main():
     print(f'  {"-"*30} {"-"*10} {"-"*10} {"-"*10}')
     print(f'  {"TOTAL ERROR":<30} {"":>10} {"":>10} {total_error:>10.4f}')
 
-    # -------------------------------------------------------------------------
-    # Step 5: Visualize
-    # -------------------------------------------------------------------------
     print_section('Step 5: Save Visualizations')
+    # Get optimized trajectory (mechanism was updated in place)
+    optimized_traj = mechanism.get_trajectory(target_joint) if result.success else None
 
-    # Get optimized trajectory
-    opt_result = compute_trajectory(result.optimized_pylink_data, verbose=False, skip_sync=True)
-    optimized_traj = opt_result.trajectories[target_joint] if opt_result.success else None
-
-    # Plot trajectory comparison
-    import numpy as np
     variation_plot(
         target_joint=target_joint,
         out_path=OUTPUT_DIR / f'trajectory_{TIMESTAMP}.png',
-        base_trajectory=np.array(initial_traj),
-        target_trajectory=np.array(target.positions),
-        variation_trajectories=[np.array(optimized_traj)] if optimized_traj else None,
+        base_mechanism=initial_mechanism,
+        target_trajectory=target_trajectory,
+        target_mechanism=target_result.target_mechanism,
+        variation_trajectories=[np.array(optimized_traj)] if (optimized_traj is not None and len(optimized_traj) > 0) else None,
+        variation_mechanisms=[target_result.target_mechanism],
         title='Optimization Result',
         subtitle='Initial (black) vs Target (red) vs Optimized (blue)',
+        show_linkages=True,
     )
 
-    # Plot convergence
+    # Plot convergence (if available)
     if result.convergence_history:
-        plot_convergence_comparison(
-            {'PSO': result.convergence_history},
-            out_path=OUTPUT_DIR / f'convergence_{TIMESTAMP}.png',
-            title='Convergence History',
-            layout='overlay',
-        )
+        try:
+            from viz_tools.opt_viz import plot_convergence_history
+            plot_convergence_history(
+                result.convergence_history,
+                title='MLSL Convergence History',
+                out_path=OUTPUT_DIR / f'convergence_{TIMESTAMP}.png',
+            )
+        except ImportError:
+            # Fallback: just log that convergence history is available
+            print(f'\nConvergence history available ({len(result.convergence_history)} points)')
 
     # Plot dimension bounds
     plot_dimension_bounds(

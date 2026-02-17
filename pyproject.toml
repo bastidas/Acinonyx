@@ -23,6 +23,7 @@ dependencies = [
     "types-python-dateutil",
     "seaborn >= 0.12.2",
     "networkx",
+    "opencv-python>=4.8.0",
     "pillow",
     "uvicorn",
     "fastapi",

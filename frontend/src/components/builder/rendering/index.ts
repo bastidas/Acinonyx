@@ -30,7 +30,7 @@ export { SVGFilters } from './SVGFilters'
 
 // Canvas (SVG structure and layer order)
 export { CanvasRenderer } from './CanvasRenderer'
-export type { CanvasRendererProps, CanvasLayerRender } from './CanvasRenderer'
+export type { CanvasRendererProps, CanvasLayerRender, ViewportTransform } from './CanvasRenderer'
 
 // Renderers
 export { GridRenderer, renderGrid } from './GridRenderer'
@@ -50,6 +50,7 @@ export {
 } from './PreviewsRenderer'
 
 export { DrawnObjectsRenderer, renderDrawnObjects } from './DrawnObjectsRenderer'
+export { CanvasImagesRenderer, renderCanvasImages } from './CanvasImagesRenderer'
 export { TargetPathsRenderer, renderTargetPaths } from './TargetPathsRenderer'
 
 export {
@@ -58,3 +59,12 @@ export {
   MeasurementLineRenderer,
   renderMeasurementLine
 } from './MeasurementsRenderer'
+
+export {
+  ExplorationDotsRenderer,
+  renderExplorationDots
+} from './ExplorationDotsRenderer'
+export {
+  ExplorationTrajectoriesRenderer,
+  renderExplorationTrajectories
+} from './ExplorationTrajectoriesRenderer'

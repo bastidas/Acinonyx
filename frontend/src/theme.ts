@@ -12,6 +12,7 @@
    ============================================================================= */
 
 import * as d3 from 'd3'
+import { Hsluv } from 'hsluv'
 
 // Primary Palette
 export const colors = {
@@ -189,7 +190,7 @@ export const muiThemeConfigDark = {
    - 'glow': Orange/red → light/white → orange/red (bright, ethereal)
    ============================================================================= */
 
-export type ColorCycleType = 'rainbow' | 'fire' | 'glow'
+export type ColorCycleType = 'rainbow' | 'fire' | 'glow' | 'twilight' | 'husl'
 
 /**
  * Get a color from a cyclic gradient that returns to its starting color.
@@ -218,6 +219,10 @@ export function getCyclicColor(
       return getFireCycleColor(t)
     case 'glow':
       return getGlowCycleColor(t)
+    case 'twilight':
+      return getTwilightCycleColor(t)
+    case 'husl':
+      return getHuslCycleColor(t)
     default:
       return getRainbowCycleColor(t)
   }
@@ -292,6 +297,35 @@ function getGlowCycleColor(t: number): string {
   // Interpolate in HSL space
   const interpolator = d3.interpolateHsl(startColor.formatHsl(), lightColor.formatHsl())
   return interpolator(bounce)
+}
+
+/** Twilight cyclic key colors (blue → purple → pink → orange → blue) */
+const TWILIGHT_CYCLE_COLORS = ['#2d5a8b', '#6b2d7b', '#b82d5a', '#d46b2d', '#2d5a8b']
+
+/**
+ * TWILIGHT CYCLE: Blue → purple → pink → orange → blue
+ *
+ * Cyclic colormap similar to matplotlib's twilight.
+ */
+function getTwilightCycleColor(t: number): string {
+  const i = t * (TWILIGHT_CYCLE_COLORS.length - 1)
+  const idx = Math.floor(i)
+  const frac = i - idx
+  return d3.interpolateRgb(TWILIGHT_CYCLE_COLORS[idx], TWILIGHT_CYCLE_COLORS[idx + 1])(frac)
+}
+
+/**
+ * HUSL CYCLE: Perceptually uniform hue rotation (HUSL color space)
+ *
+ * Hue 0°→360° at fixed saturation and lightness.
+ */
+function getHuslCycleColor(t: number): string {
+  const conv = new Hsluv()
+  conv.hsluv_h = t * 360
+  conv.hsluv_s = 80
+  conv.hsluv_l = 70
+  conv.hsluvToHex()
+  return conv.hex
 }
 
 /**

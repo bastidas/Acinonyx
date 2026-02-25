@@ -21,6 +21,9 @@ export interface TrajectoryData {
   jointTypes: Record<string, string>
 }
 
+/** Playback direction: 1 = forward, -1 = reverse */
+export type PlaybackDirection = 1 | -1
+
 /** Animation state */
 export interface AnimationState {
   isAnimating: boolean
@@ -28,6 +31,7 @@ export interface AnimationState {
   totalFrames: number
   playbackSpeed: number  // 1 = normal, 0.5 = half speed, 2 = double speed
   loop: boolean
+  playbackDirection: PlaybackDirection  // 1 = forward, -1 = reverse
 }
 
 /** Initial animation state */
@@ -36,7 +40,8 @@ export const initialAnimationState: AnimationState = {
   currentFrame: 0,
   totalFrames: 0,
   playbackSpeed: 1,
-  loop: true
+  loop: true,
+  playbackDirection: 1
 }
 
 /** Simulation state */
@@ -65,6 +70,7 @@ interface UseAnimationReturn {
   setFrame: (frame: number) => void
   setPlaybackSpeed: (speed: number) => void
   setLoop: (loop: boolean) => void
+  setPlaybackDirection: (direction: PlaybackDirection) => void
   /** Get interpolated joint positions for the current frame */
   getAnimatedPositions: () => Record<string, [number, number]> | null
 }
@@ -90,6 +96,7 @@ export function useAnimation({
   const isAnimatingRef = useRef(animationState.isAnimating)
   const playbackSpeedRef = useRef(animationState.playbackSpeed)
   const loopRef = useRef(animationState.loop)
+  const playbackDirectionRef = useRef(animationState.playbackDirection)
   const currentFrameRef = useRef(animationState.currentFrame)
   const totalFramesRef = useRef(animationState.totalFrames)
   const onFrameChangeRef = useRef(onFrameChange)
@@ -99,6 +106,7 @@ export function useAnimation({
     isAnimatingRef.current = animationState.isAnimating
     playbackSpeedRef.current = animationState.playbackSpeed
     loopRef.current = animationState.loop
+    playbackDirectionRef.current = animationState.playbackDirection
     currentFrameRef.current = animationState.currentFrame
     totalFramesRef.current = animationState.totalFrames
   }, [animationState])
@@ -154,19 +162,35 @@ export function useAnimation({
       if (elapsed >= adjustedInterval) {
         lastFrameTimeRef.current = timestamp
 
-        let nextFrame = currentFrameRef.current + 1
+        const direction = playbackDirectionRef.current
+        let nextFrame = currentFrameRef.current + direction
 
-        // Handle loop or stop at end
+        // Forward: handle end of timeline
         if (nextFrame >= totalFramesRef.current) {
           if (loopRef.current) {
             nextFrame = 0
           } else {
-            // Stop animation at the end
             isAnimatingRef.current = false
             setAnimationState(prev => ({
               ...prev,
               isAnimating: false,
               currentFrame: prev.totalFrames - 1
+            }))
+            animationFrameRef.current = null
+            return
+          }
+        }
+
+        // Reverse: handle start of timeline
+        if (nextFrame < 0) {
+          if (loopRef.current) {
+            nextFrame = totalFramesRef.current - 1
+          } else {
+            isAnimatingRef.current = false
+            setAnimationState(prev => ({
+              ...prev,
+              isAnimating: false,
+              currentFrame: 0
             }))
             animationFrameRef.current = null
             return
@@ -255,6 +279,11 @@ export function useAnimation({
     setAnimationState(prev => ({ ...prev, loop }))
   }, [])
 
+  const setPlaybackDirection = useCallback((direction: PlaybackDirection) => {
+    playbackDirectionRef.current = direction
+    setAnimationState(prev => ({ ...prev, playbackDirection: direction }))
+  }, [])
+
   /** Get joint positions for the current animation frame */
   const getAnimatedPositions = useCallback((): Record<string, [number, number]> | null => {
     if (!trajectoryData) return null
@@ -280,6 +309,7 @@ export function useAnimation({
     setFrame,
     setPlaybackSpeed,
     setLoop,
+    setPlaybackDirection,
     getAnimatedPositions
   }
 }

@@ -241,6 +241,12 @@ export {
   useDocumentState,
   useCanvasLayerRenders
 } from './hooks'
+export {
+  useViewportState,
+  VIEWPORT_ZOOM_MIN,
+  VIEWPORT_ZOOM_MAX,
+  VIEWPORT_ZOOM_DEFAULT
+} from './hooks/useViewportState'
 
 // Hook type exports
 export type {
@@ -272,6 +278,11 @@ export type {
   UseCanvasLayerRendersParams,
   UseCanvasLayerRendersReturn
 } from './hooks'
+export type {
+  ViewportState,
+  UseViewportStateConfig,
+  UseViewportStateReturn
+} from './hooks/useViewportState'
 
 // Optimization Controller
 export {
@@ -390,10 +401,15 @@ export {
   applyLoadedDocument,
 
   // Optimizer sync status (pure comparison)
-  computeOptimizerSyncStatus
+  computeOptimizerSyncStatus,
+
+  // Explore region (circle sampling for trajectory exploration)
+  exploreRegion,
+  getExploreRegionOptionsForMaxPoints,
+  getCombinatorialSecondOptions
 } from './helpers'
 
-export type { CreateLinkResult, ApplyLoadedDocumentParams, OptimizerSyncResult } from './helpers'
+export type { CreateLinkResult, ApplyLoadedDocumentParams, OptimizerSyncResult, ExploreRegionPoint, ExploreRegionOptions, ExploreRegionOptionsForMaxPoints } from './helpers'
 
 // Re-export new hypergraph operations
 export {

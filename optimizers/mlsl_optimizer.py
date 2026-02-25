@@ -327,6 +327,7 @@ def run_nlopt_mlsl(
 
     # Update mechanism with optimized dimensions and return copy
     mechanism.set_dimensions(xopt)
+    mechanism.sync_positions_to_dimensions()
     optimized_mechanism = mechanism.copy()
 
     if verbose:

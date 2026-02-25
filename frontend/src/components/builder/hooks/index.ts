@@ -74,3 +74,5 @@ export type { UseDocumentStateReturn } from './useDocumentState'
 // Canvas layer renders (data prep + render wiring for BuilderCanvasArea)
 export { useCanvasLayerRenders } from './useCanvasLayerRenders'
 export type { UseCanvasLayerRendersParams, UseCanvasLayerRendersReturn } from './useCanvasLayerRenders'
+
+// Viewport: not re-exported here to avoid barrel load-order issues. Import from './hooks/useViewportState' or from builder index.

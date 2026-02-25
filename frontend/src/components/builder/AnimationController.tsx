@@ -42,6 +42,7 @@ export interface UseAnimationControllerReturn {
   setAnimationFrame: (frame: number) => void
   setPlaybackSpeed: (speed: number) => void
   setLoop: (loop: boolean) => void
+  setPlaybackDirection: (direction: 1 | -1) => void
   getAnimatedPositions: () => Record<string, [number, number]> | null
 
   // Simulation functions (from useSimulation hook)
@@ -97,6 +98,7 @@ export function useAnimationController(
     setFrame: setAnimationFrame,
     setPlaybackSpeed,
     setLoop,
+    setPlaybackDirection,
     getAnimatedPositions
   } = useAnimation({
     trajectoryData,
@@ -133,6 +135,7 @@ export function useAnimationController(
     setAnimationFrame,
     setPlaybackSpeed,
     setLoop,
+    setPlaybackDirection,
     getAnimatedPositions,
 
     // Simulation functions

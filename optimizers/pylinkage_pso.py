@@ -25,11 +25,65 @@ if TYPE_CHECKING:
     from pylink_tools.optimization_types import DimensionBoundsSpec, OptimizationResult, TargetTrajectory
 
 import pylinkage as pl
+from pylinkage.joints import Crank
+from pylinkage.joints import Fixed
+from pylinkage.joints import Revolute
+from pylinkage.joints import Static
 from pylink_tools.mechanism import create_mechanism_fitness
 from pylink_tools.optimization_types import OptimizationResult
 
 
 logger = logging.getLogger(__name__)
+
+
+def _constraint_order_and_linkage_dims(mechanism: Mechanism, dimension_bounds_spec: DimensionBoundsSpec):
+    """
+    Align DimensionBoundsSpec indices to linkage constraint order.
+
+    Pylinkage's get_num_constraints() returns values in joint order: Static 0,
+    Crank 1, Revolute 2 (r0, r1), Fixed 2 (r, angle). We return the spec indices
+    that correspond to each linkage constraint in that order, and the linkage
+    dimension count. When the spec has more dimensions than the linkage (e.g.
+    28 vs 27), use the returned subset for bounds/init and expand results back.
+
+    Returns:
+        constraint_order: list of spec indices, length linkage_n_dims.
+        linkage_n_dims: len(linkage.get_num_constraints()).
+    """
+    linkage = mechanism.linkage
+    linkage_n_dims = len(tuple(linkage.get_num_constraints()))
+    spec_len = len(dimension_bounds_spec)
+
+    if linkage_n_dims == spec_len:
+        return list(range(spec_len)), linkage_n_dims
+
+    # Build (id(joint), attr_name) -> spec_index from mechanism's dimension mapping
+    joint_attr_to_spec: dict[tuple[int, str], int] = {}
+    for spec_idx, ja in enumerate(mechanism._dimension_mapping.joint_attrs):
+        if ja is not None:
+            joint_obj, attr_name = ja
+            joint_attr_to_spec[(id(joint_obj), attr_name)] = spec_idx
+
+    constraint_order: list[int] = []
+    for joint in linkage.joints:
+        if isinstance(joint, Static):
+            continue
+        if isinstance(joint, Crank):
+            key = (id(joint), 'r')
+            if key in joint_attr_to_spec:
+                constraint_order.append(joint_attr_to_spec[key])
+        elif isinstance(joint, Revolute):
+            for attr in ('r0', 'r1'):
+                key = (id(joint), attr)
+                if key in joint_attr_to_spec:
+                    constraint_order.append(joint_attr_to_spec[key])
+        elif isinstance(joint, Fixed):
+            for attr in ('r', 'angle'):
+                key = (id(joint), attr)
+                if key in joint_attr_to_spec:
+                    constraint_order.append(joint_attr_to_spec[key])
+
+    return constraint_order, linkage_n_dims
 
 
 @dataclass
@@ -127,18 +181,31 @@ def run_pylinkage_pso(
         phase_align_method=phase_align_method,
     )
 
+    # Align to linkage constraint count when spec has more dimensions (e.g. 28 vs 27)
+    constraint_order, linkage_n_dims = _constraint_order_and_linkage_dims(mechanism, dimension_bounds_spec)
+    spec_len = len(dimension_bounds_spec)
+    use_subset = spec_len > linkage_n_dims and len(constraint_order) == linkage_n_dims
+    if use_subset and verbose:
+        logger.info(f'  Aligning to linkage constraints: spec dims={spec_len}, linkage dims={linkage_n_dims}')
+
     # Wrapper for pylinkage PSO interface (expects linkage, params, init_pos)
-    # We'll track history by wrapping the fitness function
+    # When use_subset, params have length linkage_n_dims; expand to full for mechanism.set_dimensions
+    initial_values_arr = np.array(dimension_bounds_spec.initial_values)
+
     def fitness_func(linkage_obj, params, init_pos_arg=None):
         """Wrapper for pylinkage PSO - delegates to Mechanism fitness."""
-        error = fitness(tuple(params))
-        # Track best error (pylinkage PSO doesn't provide per-iteration history directly)
-        # We'll update history after each iteration via callback if available
-        return error
+        if use_subset:
+            full_dims = initial_values_arr.copy()
+            for i, spec_idx in enumerate(constraint_order):
+                full_dims[spec_idx] = params[i]
+            return fitness(tuple(full_dims))
+        return fitness(tuple(params))
 
     # Compute initial error
-    init_dims = np.array(dimension_bounds_spec.initial_values)
-    initial_error = fitness(tuple(init_dims))
+    init_dims = initial_values_arr.copy()
+    if use_subset:
+        init_dims = init_dims[constraint_order]
+    initial_error = fitness_func(None, init_dims, None)
     if verbose:
         logger.info(f'  Initial error: {initial_error:.4f}')
 
@@ -146,14 +213,19 @@ def run_pylinkage_pso(
     convergence_history = [initial_error]
     best_error_so_far = initial_error
 
-    # Initialize particles
+    # Initialize particles: use subset bounds/init when aligned to linkage
     bounds = dimension_bounds_spec.get_bounds_tuple()
     lower, upper = np.array(bounds[0]), np.array(bounds[1])
-    n_dims = len(dimension_bounds_spec)
+    if use_subset:
+        lower = lower[constraint_order]
+        upper = upper[constraint_order]
+        init_dims = np.array(dimension_bounds_spec.initial_values)[constraint_order]
+    n_dims = linkage_n_dims if use_subset else spec_len
     init_pos = np.zeros((n_particles, n_dims))
 
     if init_mode in ('sobol', 'behnken'):
         try:
+            from target_gen.sampling import presample_valid_positions
             # presample_valid_positions still expects pylink_data, so convert mechanism
             # TODO: Refactor presample_valid_positions to take Mechanism directly
             pylink_data_for_presample = mechanism.to_dict()
@@ -163,9 +235,15 @@ def run_pylinkage_pso(
             )
             if len(presampled) > 0:
                 n_pre = min(len(presampled), n_particles)
-                init_pos[:n_pre] = presampled[:n_pre]
+                if use_subset:
+                    # Presampled has spec_len columns; take subset at constraint_order
+                    init_pos[:n_pre] = np.asarray(presampled)[:n_pre, constraint_order]
+                    base = np.asarray(presampled[0])[constraint_order]
+                else:
+                    init_pos[:n_pre] = presampled[:n_pre]
+                    base = np.asarray(presampled[0])
                 for i in range(n_pre, n_particles):
-                    init_pos[i] = np.clip(presampled[0] + (np.random.random(n_dims)-0.5)*0.3*(upper-lower), lower, upper)
+                    init_pos[i] = np.clip(base + (np.random.random(n_dims)-0.5)*0.3*(upper-lower), lower, upper)
                 if verbose:
                     logger.info(f'  Pre-sampled {n_pre} positions (best: {scores[0]:.4f})')
             else:
@@ -205,16 +283,32 @@ def run_pylinkage_pso(
 
             return error
 
+        bounds_tuple = (tuple(lower), tuple(upper))
         results = pl.particle_swarm_optimization(
-            eval_func=tracked_fitness_func, linkage=mechanism.linkage, bounds=bounds,
-            n_particles=n_particles, iters=iterations, order_relation=min,
-            leader=c1, follower=c2, inertia=w,
-            verbose=verbose, init_pos=init_pos,
+            eval_func=tracked_fitness_func,
+            linkage=mechanism.linkage,
+            bounds=bounds_tuple,
+            dimensions=n_dims,
+            n_particles=n_particles,
+            iters=iterations,
+            order_relation=min,
+            leader=c1,
+            follower=c2,
+            inertia=w,
+            verbose=verbose,
+            init_pos=init_pos,
         )
 
         if results:
             best_score, best_dims, _ = results[0]
             best_dims = tuple(best_dims)
+
+            # Expand back to full dimension list when we used subset
+            if use_subset:
+                full_dims = initial_values_arr.copy()
+                for i, spec_idx in enumerate(constraint_order):
+                    full_dims[spec_idx] = best_dims[i]
+                best_dims = tuple(full_dims)
 
             # Ensure final error is recorded
             if len(convergence_history) == 1 or convergence_history[-1] != best_score:
@@ -235,6 +329,7 @@ def run_pylinkage_pso(
 
             # Update mechanism with optimized dimensions and return copy
             mechanism.set_dimensions(best_dims)
+            mechanism.sync_positions_to_dimensions()
             optimized_mechanism = mechanism.copy()
 
             # Create dimension dict: {name: value} mapping

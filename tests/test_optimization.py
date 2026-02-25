@@ -18,6 +18,7 @@ from pathlib import Path
 import pytest
 
 from demo.helpers import create_mechanism_from_dict
+from optimizers.pylinkage_pso import _constraint_order_and_linkage_dims
 from optimizers.scipy_optimizer import run_scipy_optimization
 from pylink_tools.mechanism import create_mechanism_fitness
 from pylink_tools.optimization_types import OptimizationResult
@@ -348,6 +349,82 @@ class TestConvergenceHistory:
         assert len(opt_result.convergence_history) >= 1
         # Should have at least initial + final (iterations + 1)
         assert len(opt_result.convergence_history) <= 16  # iterations + 1
+
+
+# =============================================================================
+# Test: PSO dimension alignment (spec len != linkage.get_num_constraints())
+# =============================================================================
+
+class TestPylinkagePSODimensionAlignment:
+    """
+    Test pylinkage PSO when DimensionBoundsSpec has more dimensions than
+    linkage.get_num_constraints() (e.g. 28 vs 27). Ensures no "Bounds dimensions
+    must match" error and result has valid optimized_dimensions.
+    """
+
+    @pytest.fixture
+    def leg_data(self):
+        """Load leg mechanism from demo/test_graphs/leg.json."""
+        test_file = Path(__file__).parent.parent / 'demo' / 'test_graphs' / 'leg.json'
+        if not test_file.exists():
+            pytest.skip('leg.json not found')
+        with open(test_file) as f:
+            data = json.load(f)
+        data['n_steps'] = 32
+        return data
+
+    @pytest.fixture
+    def leg_mechanism(self, leg_data):
+        """Create Mechanism from leg data."""
+        return create_mechanism_from_dict(leg_data)
+
+    def test_constraint_order_helper_matches_linkage(self, leg_mechanism):
+        """_constraint_order_and_linkage_dims returns constraint_order length == linkage_n_dims."""
+        spec = leg_mechanism.get_dimension_bounds_spec()
+        constraint_order, linkage_n_dims = _constraint_order_and_linkage_dims(
+            leg_mechanism, spec,
+        )
+        actual_linkage_dims = len(tuple(leg_mechanism.linkage.get_num_constraints()))
+        assert linkage_n_dims == actual_linkage_dims
+        # When spec has more dims than linkage, constraint_order length should equal linkage_n_dims
+        if len(spec) > linkage_n_dims:
+            assert len(constraint_order) == linkage_n_dims
+            assert len(constraint_order) <= len(spec)
+
+    def test_pylinkage_pso_no_bounds_dimension_error(self, leg_mechanism):
+        """Run pylinkage PSO on leg mechanism; must not raise Bounds dimensions must match."""
+        target_joint = 'toe'
+        trajectory = leg_mechanism.get_trajectory(target_joint)
+        if trajectory is None or len(trajectory) == 0:
+            pytest.skip('Could not compute trajectory from leg mechanism')
+
+        target = TargetTrajectory(
+            joint_name=target_joint,
+            positions=[[float(x), float(y)] for x, y in trajectory],
+        )
+
+        mechanism_copy = leg_mechanism.copy()
+        spec = mechanism_copy.get_dimension_bounds_spec()
+        opt_result = optimize_trajectory(
+            mechanism_copy,
+            target,
+            method='pylinkage',
+            n_particles=8,
+            iterations=3,
+            verbose=False,
+        )
+
+        # Must not fail with bounds dimension mismatch
+        if not opt_result.success and opt_result.error:
+            assert 'Bounds dimensions' not in opt_result.error, (
+                f'PSO must not fail with bounds dimension mismatch: {opt_result.error}'
+            )
+
+        if opt_result.success:
+            assert len(opt_result.optimized_dimensions) == len(spec)
+            for name in spec.names:
+                assert name in opt_result.optimized_dimensions
+                assert isinstance(opt_result.optimized_dimensions[name], (int, float))
 
 
 # =============================================================================

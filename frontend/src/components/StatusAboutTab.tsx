@@ -154,6 +154,7 @@ const StatusAboutTab: React.FC = () => {
             <kbd>P</kbd> <Typography variant="body2" sx={{ color: 'var(--color-text-secondary)' }}>Draw Polygon — click to add vertices, double-click to close</Typography>
             <kbd>E</kbd> <Typography variant="body2" sx={{ color: 'var(--color-text-secondary)' }}>Merge — merge a polygon with a link, or unmerge</Typography>
             <kbd>T</kbd> <Typography variant="body2" sx={{ color: 'var(--color-text-secondary)' }}>Draw Path — draw a target trajectory for optimization</Typography>
+            <kbd>Y</kbd> <Typography variant="body2" sx={{ color: 'var(--color-text-secondary)' }}>Explore Trajectories — click a joint to see valid/invalid positions in a circle; click a valid (green) dot to apply that position</Typography>
           </Box>
 
           <Typography
@@ -221,6 +222,7 @@ const StatusAboutTab: React.FC = () => {
             <kbd>Delete</kbd> <Typography variant="body2" sx={{ color: 'var(--color-text-secondary)' }}>Delete selected elements</Typography>
             <kbd>Enter</kbd> <Typography variant="body2" sx={{ color: 'var(--color-text-secondary)' }}>Complete path drawing</Typography>
             <kbd>~</kbd> <Typography variant="body2" sx={{ color: 'var(--color-text-secondary)' }}>Toggle log viewer</Typography>
+            <Typography variant="body2" sx={{ color: 'var(--color-text-secondary)', gridColumn: '1 / -1', mt: 1 }}><strong>Tip:</strong> Middle-click drag or <kbd>Shift</kbd> + drag to pan the canvas.</Typography>
           </Box>
         </CardContent>
       </Card>

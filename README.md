@@ -20,6 +20,7 @@ This is an inverse problem in mechanism synthesis—and Acinonyx provides the si
 
 - **Mechanism Builder**: Interactive graph-based editor for designing multi-link planar mechanisms
 - **Trajectory Simulation**: Compute and visualize joint paths using [pylinkage](https://github.com/HugoFara/pylinkage)
+- **Trajectory Exploration**: Press **Y** and click a joint to see which positions in a circle yield valid vs invalid motion; click a valid (green) dot to apply that position. Works for crank/revolute and moving static joints.
 - **Path Optimization**: Fit mechanisms to target curves with global optimization
 - **Modern Stack**: React frontend + FastAPI backend with real-time updates
 

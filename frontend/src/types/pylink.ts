@@ -390,6 +390,26 @@ export interface DrawnObjectData {
 }
 
 /**
+ * Canvas image overlay (JPEG/PNG) with position, scale, and transparency.
+ * Used as a background or reference layer on the builder canvas.
+ */
+export interface CanvasImageData {
+  id: string
+  /** Data URL (base64) for jpeg, png, or jpg */
+  dataUrl: string
+  /** Position in mechanism units [x, y] */
+  position: [number, number]
+  /** Scale multiplier (1 = natural size in units) */
+  scale: number
+  /** Opacity 0–1 */
+  alpha: number
+  /** Native image width in pixels (for rendering) */
+  naturalWidth: number
+  /** Native image height in pixels (for rendering) */
+  naturalHeight: number
+}
+
+/**
  * Complete document format for saving/loading.
  *
  * Combines the kinematic model (HypergraphLinkage) with UI metadata.
@@ -410,6 +430,9 @@ export interface LinkageDocument {
 
   /** Optional: Drawn objects (polygons, shapes) for visualization */
   drawnObjects?: DrawnObjectData[]
+
+  /** Optional: Canvas image overlays (reference images) */
+  canvases?: CanvasImageData[]
 
   /** Optional: Component library used by this document */
   components?: Record<string, Component>

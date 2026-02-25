@@ -18,6 +18,7 @@ import pytest
 
 from backend.acinonyx_api import analyze_trajectory_endpoint
 from backend.acinonyx_api import compute_pylink_trajectory
+from backend.acinonyx_api import compute_pylink_trajectories_batch
 from backend.acinonyx_api import get_optimizable_dimensions
 from backend.acinonyx_api import get_status
 from backend.acinonyx_api import list_pylink_graphs
@@ -229,6 +230,56 @@ class TestTrajectoryComputation:
         """Test trajectory computation with missing linkage."""
         result = compute_pylink_trajectory({'name': 'test'})
         assert result['status'] == 'error'
+
+
+class TestTrajectoryBatch:
+    """Test batch trajectory computation endpoint."""
+
+    def test_batch_success(self, fourbar_data):
+        """Batch with two valid requests returns two success results."""
+        req1 = {**fourbar_data, 'n_steps': 12}
+        req2 = {**fourbar_data, 'n_steps': 16}
+        result = compute_pylink_trajectories_batch({'requests': [req1, req2]})
+
+        assert 'results' in result
+        assert len(result['results']) == 2
+
+        r1, r2 = result['results']
+        assert r1['status'] == 'success'
+        assert r2['status'] == 'success'
+        assert r1['n_steps'] == 12
+        assert r2['n_steps'] == 16
+        assert 'trajectories' in r1 and 'trajectories' in r2
+        assert 'joint_types' in r1 and 'joint_types' in r2
+        assert len(r1['trajectories']) > 0
+        for joint_name, positions in r1['trajectories'].items():
+            assert len(positions) == 12
+            assert all(isinstance(p, list) and len(p) == 2 for p in positions)
+        for joint_name, positions in r2['trajectories'].items():
+            assert len(positions) == 16
+
+    def test_batch_mixed_valid_invalid(self, fourbar_data):
+        """Batch with one valid and one invalid request returns correct statuses."""
+        valid_req = {**fourbar_data, 'n_steps': 12}
+        invalid_req = {'invalid': 'data', 'n_steps': 12}
+        result = compute_pylink_trajectories_batch({'requests': [valid_req, invalid_req]})
+
+        assert 'results' in result
+        assert len(result['results']) == 2
+        assert result['results'][0]['status'] == 'success'
+        assert result['results'][1]['status'] == 'error'
+        assert 'message' in result['results'][1]
+
+    def test_batch_invalid_requests_type(self):
+        """Non-array 'requests' returns error."""
+        result = compute_pylink_trajectories_batch({'requests': 'not-a-list'})
+        assert result.get('status') == 'error'
+        assert 'message' in result
+
+    def test_batch_empty_requests(self):
+        """Empty requests list returns empty results."""
+        result = compute_pylink_trajectories_batch({'requests': []})
+        assert result.get('results') == []
 
 
 class TestMechanismValidation:

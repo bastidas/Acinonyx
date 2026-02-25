@@ -17,8 +17,10 @@ import type {
   GroupSelectionState,
   PolygonDrawState,
   MergePolygonState,
-  PathDrawState
+  PathDrawState,
+  ExploreTrajectoriesState
 } from '../../BuilderTools'
+import type { LinkageDocument } from '../types'
 
 /** Point in canvas units [x, y] */
 export type CanvasPoint = [number, number]
@@ -115,6 +117,13 @@ export interface ToolContext {
 
   /** Move a joint to a position (updates document) */
   moveJoint: (jointName: string, position: CanvasPoint) => void
+  /** Move two joints in one document update (e.g. combinatorial explore apply). */
+  moveTwoJoints: (
+    jointName1: string,
+    position1: CanvasPoint,
+    jointName2: string,
+    position2: CanvasPoint
+  ) => void
   /** Merge source joint into target joint */
   mergeJoints: (sourceJoint: string, targetJoint: string) => void
   /** Show status message */
@@ -220,6 +229,35 @@ export interface ToolContext {
   createTargetPath: (points: CanvasPoint[], existingPaths: unknown[]) => { id: string; name: string; points: CanvasPoint[]; targetJoint: string | null; color: string; isComplete: boolean }
   /** Set selected target path id */
   setSelectedPathId: (id: string | null) => void
+
+  // ─── Extended for Explore Node Trajectories tool ───────────────────────────
+  /** Current linkage document (hypergraph) for building variant docs */
+  linkageDoc: LinkageDocument
+  /** Explore trajectories state (samples, hovered index, loading) */
+  exploreTrajectoriesState: ExploreTrajectoriesState
+  /** Set explore trajectories state */
+  setExploreTrajectoriesState: React.Dispatch<React.SetStateAction<ExploreTrajectoriesState>>
+  /** Run exploration: batch-simulate circle of positions, store results */
+  runExploreTrajectories: (nodeId: string, center: [number, number]) => Promise<void>
+  /** Run path exploration: first node fixed at pinnedPosition, second node explored around center2. */
+  runExploreTrajectoriesSecond: (
+    fixedNodeId: string,
+    pinnedPosition: [number, number],
+    nodeId2: string,
+    center2: [number, number]
+  ) => Promise<void>
+  /** Run combinatorial exploration: N1×N2 combinations capped at NMAX, no colormap. */
+  runExploreTrajectoriesCombinatorial: (
+    nodeId1: string,
+    center1: [number, number],
+    samples1: Array<{ position: [number, number]; valid: boolean }>,
+    nodeId2: string,
+    center2: [number, number]
+  ) => Promise<void>
+  /** True if node has "show trajectory path" enabled. */
+  getNodeShowPath: (nodeId: string) => boolean
+  /** Joint type from mechanism (Static/Crank/Revolute) for explore mode; allows moving static joints. */
+  getJointType: (jointName: string) => 'Static' | 'Crank' | 'Revolute' | null
 }
 
 /**
@@ -249,4 +287,5 @@ export interface ToolHandler {
     point: CanvasPoint,
     context: ToolContext
   ) => boolean | void
+  onMouseLeave?: (event: React.MouseEvent<SVGSVGElement>, context: ToolContext) => boolean | void
 }

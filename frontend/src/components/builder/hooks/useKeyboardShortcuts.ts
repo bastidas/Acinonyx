@@ -28,6 +28,7 @@ export interface KeyboardShortcutsConfig {
     hasSelectedItems: boolean
     hasTrajectory: boolean
     canSimulate: boolean
+    isExploreTrajectories: boolean
   }
 
   /** Callbacks for actions */
@@ -50,6 +51,7 @@ export interface KeyboardShortcutsConfig {
     resetMeasureState: () => void
     resetMergeState: () => void
     resetPathDrawing: () => void
+    resetExploreTrajectories: () => void
   }
 }
 
@@ -73,6 +75,10 @@ export function useKeyboardShortcuts(config: KeyboardShortcutsConfig) {
   const handleKeyDown = useCallback((event: KeyboardEvent) => {
     // Ignore keyboard events when typing in input fields
     if (event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement) {
+      return
+    }
+    // Don't trigger tool shortcuts when focus is inside a draggable toolbar (e.g. Optimize panel)
+    if (event.target instanceof Node && (event.target as HTMLElement).closest?.('[data-draggable-toolbar-content]')) {
       return
     }
 
@@ -135,8 +141,10 @@ export function useKeyboardShortcuts(config: KeyboardShortcutsConfig) {
     }
 
     // ─────────────────────────────────────────────────────────────────────────
-    // TOOL SHORTCUTS
+    // TOOL SHORTCUTS (skip when modifier held so Cmd+C / Ctrl+V etc. work)
     // ─────────────────────────────────────────────────────────────────────────
+    if (event.metaKey || event.ctrlKey) return
+
     const key = event.key.toUpperCase()
     const tool = tools.find(t => t.shortcut === key)
 
@@ -165,6 +173,9 @@ export function useKeyboardShortcuts(config: KeyboardShortcutsConfig) {
       if (state.isPathDrawing && tool.id !== 'draw_path') {
         resetters.resetPathDrawing()
       }
+      if (state.isExploreTrajectories && tool.id !== 'explore_node_trajectories') {
+        resetters.resetExploreTrajectories()
+      }
 
       actions.setToolMode(tool.id)
 
@@ -173,6 +184,8 @@ export function useKeyboardShortcuts(config: KeyboardShortcutsConfig) {
         actions.showStatus('Select a link or a polygon to begin merge', 'action')
       } else if (tool.id === 'draw_path') {
         actions.showStatus('Click to start drawing target path', 'action')
+      } else if (tool.id === 'explore_node_trajectories') {
+        actions.showStatus('Click a node to explore trajectories', 'action')
       } else {
         actions.showStatus(`${tool.label} mode`, 'info', 1500)
       }

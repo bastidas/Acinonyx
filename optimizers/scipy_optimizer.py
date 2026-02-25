@@ -198,6 +198,7 @@ def run_scipy_optimization(
 
         # Update mechanism with best dimensions and return copy
         mechanism.set_dimensions(optimized_values)
+        mechanism.sync_positions_to_dimensions()
         optimized_mechanism = mechanism.copy()
 
         # Create dimension dict: {name: value} mapping

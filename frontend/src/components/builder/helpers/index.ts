@@ -106,5 +106,21 @@ export type { ApplyLoadedDocumentParams } from './applyLoadedDocument'
 export { computeOptimizerSyncStatus } from './optimizerSyncStatus'
 export type { OptimizerSyncResult } from './optimizerSyncStatus'
 
+// Explore region (circle sampling for trajectory exploration)
+export { exploreRegion, getExploreRegionOptionsForMaxPoints, getCombinatorialSecondOptions } from './exploreRegion'
+export type { ExploreRegionPoint, ExploreRegionOptions, ExploreRegionOptionsForMaxPoints } from './exploreRegion'
+
+// Exploration colormap (angle/radius color for explore node trajectories)
+export {
+  getExplorationColormapColor,
+  positionToAngleAndRadialT,
+  EXPLORE_INVALID_GREY,
+  DEFAULT_EXPLORATION_RADIAL_MAPPING,
+  EXPLORATION_RADIAL_MAPPINGS,
+  CENTER_SATURATION,
+  EDGE_SATURATION_SCALE
+} from './explorationColormap'
+export type { ExplorationColormapType, ExplorationRadialMapping } from './explorationColormap'
+
 // Type exports
 export type { CreateLinkResult } from './linkageMutations'

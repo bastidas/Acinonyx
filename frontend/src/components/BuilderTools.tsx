@@ -94,6 +94,7 @@ export const DraggableToolbar: React.FC<DraggableToolbarProps> = ({
     <Paper
       ref={toolbarRef}
       elevation={6}
+      data-no-canvas-zoom
       onMouseDownCapture={() => onInteract?.()}
       sx={{
         position: 'absolute',
@@ -154,8 +155,8 @@ export const DraggableToolbar: React.FC<DraggableToolbarProps> = ({
         </IconButton>
       </Box>
 
-      {/* Content area - userSelect unset so range/inputs work; sliders stop propagation in their own wrappers */}
-      <Box sx={{ overflow: 'auto', flex: 1, userSelect: 'unset' }}>
+      {/* Content area - allow text selection and copy (e.g. Optimize toolbar logs/results) */}
+      <Box sx={{ overflow: 'auto', flex: 1, userSelect: 'text' }} data-draggable-toolbar-content>
         {children}
       </Box>
     </Paper>
@@ -180,11 +181,11 @@ export interface ToolbarConfig {
 // Optimize: dedicated optimization panel
 export const TOOLBAR_CONFIGS: ToolbarConfig[] = [
   { id: 'tools', title: 'Tools', icon: '⚒', defaultPosition: { x: 8, y: 60 } },        // Full left, below toggle buttons
-  { id: 'more', title: 'More', icon: '≡', defaultPosition: { x: 8, y: 370 } },         // Full left, well below Tools
+  { id: 'more', title: 'More', icon: '≡', defaultPosition: { x: 8, y: 410 } },         // Full left, 40px below Tools so it doesn't block
   { id: 'optimize', title: 'Optimize', icon: '✦', defaultPosition: { x: 8, y: -630 } }, // Bottom left (negative y = from bottom)
   { id: 'links', title: 'Links', icon: '—', defaultPosition: { x: -220, y: 8 } },      // Far right edge (negative = from right)
   { id: 'nodes', title: 'Nodes', icon: '○', defaultPosition: { x: -220, y: 500 } },    // Below Links on far right
-  { id: 'settings', title: 'Settings', icon: '⚙', defaultPosition: { x: -280, y: 12 } } // Upper right, near top of canvas
+  { id: 'settings', title: 'Settings', icon: '⚙', defaultPosition: { x: -280, y: 12 } } // Upper right, flush so panel stays on-screen (x = canvasWidth - panelWidth)
 ]
 
 export interface ToolbarToggleButtonsProps {
@@ -210,6 +211,7 @@ export const ToolbarToggleButtons: React.FC<ToolbarToggleButtonsProps> = ({
     <Box
       id="toolbar-toggle-buttons-container"
       className="toolbar-toggle-buttons-container"
+      data-no-canvas-zoom
       onMouseDownCapture={() => onInteract?.()}
       sx={{
         position: 'absolute',
@@ -284,6 +286,7 @@ export type ToolMode =
   | 'measure'
   | 'delete'
   | 'draw_path'
+  | 'explore_node_trajectories'
 
 export interface ToolInfo {
   id: ToolMode
@@ -359,6 +362,13 @@ export const TOOLS: ToolInfo[] = [
     icon: '⌇',
     description: 'Draw a target trajectory for optimization. Click to add points, double-click or press Enter to finish.',
     shortcut: 'T'
+  },
+  {
+    id: 'explore_node_trajectories',
+    label: 'Explore Trajectories',
+    icon: '⊙',
+    description: 'Click a non-fixed joint to preview valid trajectories in a circle around it. Green = valid, red = invalid.',
+    shortcut: 'Y'
   }
   // TODO: Re-enable Add Joint feature later
   // {
@@ -369,6 +379,43 @@ export const TOOLS: ToolInfo[] = [
   //   shortcut: 'J'
   // },
 ]
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// EXPLORE TRAJECTORIES STATE (explore_node_trajectories tool)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/** Trajectory result for one explored sample (matches TrajectoryData shape from simulation). */
+export interface ExploreTrajectorySampleTrajectory {
+  trajectories: Record<string, [number, number][]>
+  nSteps: number
+  jointTypes?: Record<string, string>
+}
+
+export interface ExploreTrajectorySample {
+  position: [number, number]
+  valid: boolean
+  trajectory: ExploreTrajectorySampleTrajectory | null
+  /** Combinatorial mode: first node position for this combination (so we can apply both nodes on click). */
+  positionFirst?: [number, number]
+}
+
+export type ExploreTrajectoriesMode = 'single' | 'path' | 'combinatorial'
+
+export interface ExploreTrajectoriesState {
+  exploreNodeId: string | null
+  exploreCenter: [number, number] | null
+  exploreSamples: ExploreTrajectorySample[]
+  exploreHoveredIndex: number | null
+  /** True when hover came from a trajectory path (combinatorial: highlight single trajectory only). False when from dot (highlight all at that position). */
+  exploreHoveredFromTrajectoryPath: boolean
+  exploreLoading: boolean
+  /** 'single' = one node explored; 'combinatorial' = N1×N2 after clicking a second node. 'path' is legacy/unused. */
+  exploreMode: ExploreTrajectoriesMode
+  exploreSecondNodeId: string | null
+  exploreSecondCenter: [number, number] | null
+  /** Legacy path mode (unused). Kept for state shape compatibility. */
+  explorePinnedFirstPosition: [number, number] | null
+}
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // STATUS MESSAGE TYPES
@@ -1277,6 +1324,7 @@ export const FooterToolbar: React.FC<FooterToolbarProps> = ({
   return (
     <Box
       className="footer-toolbar"
+      data-no-canvas-zoom
       sx={{
         position: 'absolute',
         bottom: 0,

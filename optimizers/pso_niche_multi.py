@@ -1147,6 +1147,7 @@ def run_pso_niching_multi(
 
         # Update mechanism with optimized dimensions and return copy
         mechanism.set_dimensions(species_pos)
+        mechanism.sync_positions_to_dimensions()
         optimized_mechanism = mechanism.copy()
 
         sol = Solution(

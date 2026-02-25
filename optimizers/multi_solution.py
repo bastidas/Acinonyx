@@ -463,6 +463,7 @@ def run_basin_hopping_multi(
         optimized_dims = dict(zip(dimension_bounds_spec.names, all_x[i]))
         # Update mechanism with optimized dimensions and return copy
         mechanism.set_dimensions(tuple(optimized_dims.values()))
+        mechanism.sync_positions_to_dimensions()
         optimized_mechanism = mechanism.copy()
 
         sol = Solution(

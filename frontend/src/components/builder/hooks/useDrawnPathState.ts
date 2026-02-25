@@ -1,8 +1,9 @@
 /**
  * useDrawnPathState
  *
- * Consolidates drawn objects, target paths, path drawing, and merge state for BuilderTab
- * (Phase 6.3 — group 5: drawn/path/merge). Replaces five separate useState calls with one hook.
+ * Consolidates drawn objects, target paths, path drawing, merge state, and canvas images
+ * for BuilderTab (Phase 6.3 — group 5: drawn/path/merge). Replaces five separate useState
+ * calls with one hook.
  */
 
 import { useState } from 'react'
@@ -12,6 +13,7 @@ import type {
   PathDrawState,
   MergePolygonState
 } from '../../BuilderTools'
+import type { CanvasImageData } from '../types'
 import {
   initialDrawnObjectsState,
   initialPathDrawState,
@@ -29,6 +31,8 @@ export interface UseDrawnPathStateReturn {
   setPathDrawState: React.Dispatch<React.SetStateAction<PathDrawState>>
   mergePolygonState: MergePolygonState
   setMergePolygonState: React.Dispatch<React.SetStateAction<MergePolygonState>>
+  canvases: CanvasImageData[]
+  setCanvases: React.Dispatch<React.SetStateAction<CanvasImageData[]>>
 }
 
 export function useDrawnPathState(): UseDrawnPathStateReturn {
@@ -37,6 +41,7 @@ export function useDrawnPathState(): UseDrawnPathStateReturn {
   const [selectedPathId, setSelectedPathId] = useState<string | null>(null)
   const [pathDrawState, setPathDrawState] = useState<PathDrawState>(initialPathDrawState)
   const [mergePolygonState, setMergePolygonState] = useState<MergePolygonState>(initialMergePolygonState)
+  const [canvases, setCanvases] = useState<CanvasImageData[]>([])
 
   return {
     drawnObjects,
@@ -48,6 +53,8 @@ export function useDrawnPathState(): UseDrawnPathStateReturn {
     pathDrawState,
     setPathDrawState,
     mergePolygonState,
-    setMergePolygonState
+    setMergePolygonState,
+    canvases,
+    setCanvases
   }
 }

@@ -60,6 +60,18 @@ export interface UseCanvasSettingsStateReturn {
   setTrajectoryStyle: React.Dispatch<React.SetStateAction<TrajectoryStyleOption>>
   canvasDimensions: CanvasDimensions
   setCanvasDimensions: React.Dispatch<React.SetStateAction<CanvasDimensions>>
+  exploreRadius: number
+  setExploreRadius: React.Dispatch<React.SetStateAction<number>>
+  exploreRadialSamples: number
+  setExploreRadialSamples: React.Dispatch<React.SetStateAction<number>>
+  exploreAzimuthalSamples: number
+  setExploreAzimuthalSamples: React.Dispatch<React.SetStateAction<number>>
+  exploreNMaxCombinatorial: number
+  setExploreNMaxCombinatorial: React.Dispatch<React.SetStateAction<number>>
+  exploreColormapEnabled: boolean
+  setExploreColormapEnabled: React.Dispatch<React.SetStateAction<boolean>>
+  exploreColormapType: 'rainbow' | 'twilight' | 'husl'
+  setExploreColormapType: React.Dispatch<React.SetStateAction<'rainbow' | 'twilight' | 'husl'>>
 }
 
 function getInitialSettings() {
@@ -91,6 +103,12 @@ export function useCanvasSettingsState(): UseCanvasSettingsStateReturn {
   const [selectionHighlightColor, setSelectionHighlightColor] = useState<SelectionHighlightColorOption>(initial.selectionHighlightColor)
   const [trajectoryStyle, setTrajectoryStyle] = useState<TrajectoryStyleOption>(initial.trajectoryStyle)
   const [canvasDimensions, setCanvasDimensions] = useState<CanvasDimensions>({ width: 1200, height: 700 })
+  const [exploreRadius, setExploreRadius] = useState(initial.exploreRadius)
+  const [exploreRadialSamples, setExploreRadialSamples] = useState(initial.exploreRadialSamples)
+  const [exploreAzimuthalSamples, setExploreAzimuthalSamples] = useState(initial.exploreAzimuthalSamples)
+  const [exploreNMaxCombinatorial, setExploreNMaxCombinatorial] = useState(initial.exploreNMaxCombinatorial)
+  const [exploreColormapEnabled, setExploreColormapEnabled] = useState(initial.exploreColormapEnabled)
+  const [exploreColormapType, setExploreColormapType] = useState(initial.exploreColormapType)
 
   // Persist settings to cookie when any persisted value changes
   useEffect(() => {
@@ -109,7 +127,13 @@ export function useCanvasSettingsState(): UseCanvasSettingsStateReturn {
       trajectoryDotOutline,
       trajectoryDotOpacity,
       selectionHighlightColor,
-      trajectoryStyle
+      trajectoryStyle,
+      exploreRadius,
+      exploreRadialSamples,
+      exploreAzimuthalSamples,
+      exploreNMaxCombinatorial,
+      exploreColormapEnabled,
+      exploreColormapType
     })
   }, [
     showGrid,
@@ -126,7 +150,13 @@ export function useCanvasSettingsState(): UseCanvasSettingsStateReturn {
     trajectoryDotOutline,
     trajectoryDotOpacity,
     selectionHighlightColor,
-    trajectoryStyle
+    trajectoryStyle,
+    exploreRadius,
+    exploreRadialSamples,
+    exploreAzimuthalSamples,
+    exploreNMaxCombinatorial,
+    exploreColormapEnabled,
+    exploreColormapType
   ])
 
   return {
@@ -169,6 +199,18 @@ export function useCanvasSettingsState(): UseCanvasSettingsStateReturn {
     trajectoryStyle,
     setTrajectoryStyle,
     canvasDimensions,
-    setCanvasDimensions
+    setCanvasDimensions,
+    exploreRadius,
+    setExploreRadius,
+    exploreRadialSamples,
+    setExploreRadialSamples,
+    exploreAzimuthalSamples,
+    setExploreAzimuthalSamples,
+    exploreNMaxCombinatorial,
+    setExploreNMaxCombinatorial,
+    exploreColormapEnabled,
+    setExploreColormapEnabled,
+    exploreColormapType,
+    setExploreColormapType
   }
 }

@@ -10,6 +10,7 @@
 import React from 'react'
 import {
   renderGrid as doRenderGrid,
+  renderCanvasImages as doRenderCanvasImages,
   renderPreviewLine as doRenderPreviewLine,
   renderSelectionBox as doRenderSelectionBox,
   renderPolygonPreview as doRenderPolygonPreview,
@@ -20,14 +21,32 @@ import {
   renderTrajectories as doRenderTrajectories,
   renderTargetPaths as doRenderTargetPaths,
   renderDrawnObjects as doRenderDrawnObjects,
-  renderLinks as doRenderLinks
+  renderLinks as doRenderLinks,
+  renderExplorationDots as doRenderExplorationDots,
+  renderExplorationTrajectories as doRenderExplorationTrajectories
 } from '../rendering'
 import type { PylinkDocument } from '../types'
 import type { ToolContext } from '../toolHandlers/types'
 import type { HandleMergePolygonClickParams } from '../toolHandlers/mergeToolHandler'
 import type { CanvasLayerRender } from '../rendering'
 import type { TrajectoryStyle, ColorCycleType } from '../rendering/types'
-import type { DrawnObjectsState } from '../../BuilderTools'
+import type { DrawnObjectsState, ExploreTrajectoriesState } from '../../BuilderTools'
+import type { CanvasImageData } from '../types'
+
+/** One entry per unique position; valid if any sample at that position is valid. */
+function deduplicateBySecondPosition(
+  samples: Array<{ position: [number, number]; valid: boolean }>
+): Array<{ position: [number, number]; valid: boolean }> {
+  const key = (p: [number, number]) => `${p[0].toFixed(6)},${p[1].toFixed(6)}`
+  const map = new Map<string, { position: [number, number]; valid: boolean }>()
+  for (const s of samples) {
+    const k = key(s.position)
+    const existing = map.get(k)
+    if (!existing) map.set(k, { position: s.position, valid: s.valid })
+    else if (s.valid) map.set(k, { position: s.position, valid: true })
+  }
+  return Array.from(map.values())
+}
 
 // Minimal state shapes used by the layer renders (structural typing)
 interface MoveGroupState {
@@ -122,6 +141,9 @@ export interface UseCanvasLayerRendersParams {
   targetPaths: TargetPath[]
   selectedPathId: string | null
   drawnObjects: DrawnObjectsState
+  canvases: CanvasImageData[]
+  setCanvases: React.Dispatch<React.SetStateAction<CanvasImageData[]>>
+  openCanvasEdit: (id: string) => void
   jointColors: { static: string; crank: string; pivot: string; moveGroup: string; mergeHighlight: string }
   getCyclicColor: (stepIndex: number, totalSteps: number, cycleType?: string) => string
   setHoveredJoint: (id: string | null) => void
@@ -135,17 +157,24 @@ export interface UseCanvasLayerRendersParams {
   handleMergePolygonClick: (context: ToolContext, params: HandleMergePolygonClickParams) => void | boolean
   toolContext: ToolContext
   transformPolygonPoints: (points: [number, number][], origStart: [number, number], origEnd: [number, number], currentStart: [number, number], currentEnd: [number, number]) => [number, number][]
+  exploreTrajectoriesState: ExploreTrajectoriesState
+  exploreColormapEnabled?: boolean
+  exploreColormapType?: 'rainbow' | 'twilight' | 'husl'
+  exploreRadius?: number
 }
 
 export interface UseCanvasLayerRendersReturn {
   renderGrid: CanvasLayerRender
+  renderCanvases: CanvasLayerRender
   renderDrawnObjects: CanvasLayerRender
   renderLinks: CanvasLayerRender
   renderPreviewLine: CanvasLayerRender
   renderPolygonPreview: CanvasLayerRender
   renderTargetPaths: CanvasLayerRender
   renderPathPreview: CanvasLayerRender
+  renderExplorationTrajectories: CanvasLayerRender
   renderTrajectories: CanvasLayerRender
+  renderExplorationDots: CanvasLayerRender
   renderJoints: CanvasLayerRender
   renderSelectionBox: CanvasLayerRender
   renderMeasurementMarkers: CanvasLayerRender
@@ -193,6 +222,9 @@ export function useCanvasLayerRenders(params: UseCanvasLayerRendersParams): UseC
     targetPaths,
     selectedPathId,
     drawnObjects,
+    canvases,
+    setCanvases,
+    openCanvasEdit,
     jointColors,
     getCyclicColor,
     setHoveredJoint,
@@ -203,13 +235,32 @@ export function useCanvasLayerRenders(params: UseCanvasLayerRendersParams): UseC
     openJointEditModal,
     openLinkEditModal,
     handleMergeLinkClick,
-    handleMergePolygonClick,
-    toolContext,
-    transformPolygonPoints
-  } = params
+  handleMergePolygonClick,
+  toolContext,
+  transformPolygonPoints,
+  exploreTrajectoriesState,
+  exploreColormapEnabled = false,
+  exploreColormapType = 'rainbow',
+  exploreRadius = 20
+} = params
 
   const renderGrid = (): React.ReactNode =>
     doRenderGrid({ canvasDimensions, darkMode, unitsToPixels, pixelsToUnits })
+
+  const renderCanvases = (): React.ReactNode =>
+    canvases.length === 0 ? null : (
+      <g data-layer="canvas-images">
+        {doRenderCanvasImages({
+          canvases,
+          unitsToPixels,
+          pixelsToUnits,
+          onRequestEdit: openCanvasEdit,
+          onPositionChange: (id, position) => {
+            setCanvases(prev => prev.map(c => (c.id === id ? { ...c, position } : c)))
+          }
+        })}
+      </g>
+    )
 
   const renderPreviewLine = (): React.ReactNode =>
     doRenderPreviewLine({ previewLine, unitsToPixels })
@@ -237,6 +288,62 @@ export function useCanvasLayerRenders(params: UseCanvasLayerRendersParams): UseC
       jointMergeRadius,
       unitsToPixels
     })
+
+  const renderExplorationTrajectories = (): React.ReactNode => {
+    if (toolMode !== 'explore_node_trajectories' || !exploreTrajectoriesState.exploreSamples.length) return null
+    const jointNamesToShow = Object.entries(pylinkDoc.meta.joints)
+      .filter(([, m]) => m?.show_path === true)
+      .map(([name]) => name)
+    const exploreCenter =
+      exploreTrajectoriesState.exploreMode === 'combinatorial'
+        ? exploreTrajectoriesState.exploreSecondCenter
+        : exploreTrajectoriesState.exploreCenter
+    const hoveredPosition =
+      exploreTrajectoriesState.exploreHoveredIndex != null && exploreTrajectoriesState.exploreSamples[exploreTrajectoriesState.exploreHoveredIndex]
+        ? exploreTrajectoriesState.exploreSamples[exploreTrajectoriesState.exploreHoveredIndex].position
+        : undefined
+    return doRenderExplorationTrajectories({
+      samples: exploreTrajectoriesState.exploreSamples,
+      hoveredIndex: exploreTrajectoriesState.exploreHoveredIndex,
+      hoveredPosition: exploreTrajectoriesState.exploreMode === 'combinatorial' ? hoveredPosition : undefined,
+      hoveredFromTrajectoryPath: exploreTrajectoriesState.exploreMode === 'combinatorial' ? exploreTrajectoriesState.exploreHoveredFromTrajectoryPath : undefined,
+      exploreNodeId: exploreTrajectoriesState.exploreMode === 'combinatorial' ? exploreTrajectoriesState.exploreNodeId : undefined,
+      unitsToPixels,
+      jointNamesToShow: jointNamesToShow.length > 0 ? jointNamesToShow : undefined,
+      exploreColormapEnabled,
+      exploreColormapType,
+      exploreCenter,
+      exploreRadius,
+      exploreMode: exploreTrajectoriesState.exploreMode
+    })
+  }
+
+  const renderExplorationDots = (): React.ReactNode => {
+    if (toolMode !== 'explore_node_trajectories' || !exploreTrajectoriesState.exploreSamples.length) return null
+    const exploreCenter =
+      exploreTrajectoriesState.exploreMode === 'combinatorial'
+        ? exploreTrajectoriesState.exploreSecondCenter
+        : exploreTrajectoriesState.exploreCenter
+    const isCombinatorial = exploreTrajectoriesState.exploreMode === 'combinatorial'
+    const samples = isCombinatorial
+      ? deduplicateBySecondPosition(exploreTrajectoriesState.exploreSamples)
+      : exploreTrajectoriesState.exploreSamples.map((s) => ({ position: s.position, valid: s.valid }))
+    const hoveredPosition =
+      exploreTrajectoriesState.exploreHoveredIndex != null && exploreTrajectoriesState.exploreSamples[exploreTrajectoriesState.exploreHoveredIndex]
+        ? exploreTrajectoriesState.exploreSamples[exploreTrajectoriesState.exploreHoveredIndex].position
+        : undefined
+    return doRenderExplorationDots({
+      samples,
+      hoveredIndex: exploreTrajectoriesState.exploreHoveredIndex,
+      hoveredPosition: isCombinatorial ? hoveredPosition : undefined,
+      unitsToPixels,
+      exploreColormapEnabled,
+      exploreColormapType,
+      exploreCenter,
+      exploreRadius,
+      exploreMode: exploreTrajectoriesState.exploreMode
+    })
+  }
 
   const renderMeasurementMarkers = (): React.ReactNode =>
     doRenderMeasurementMarkers({
@@ -496,13 +603,16 @@ export function useCanvasLayerRenders(params: UseCanvasLayerRendersParams): UseC
 
   return {
     renderGrid,
+    renderCanvases,
     renderDrawnObjects,
     renderLinks,
     renderPreviewLine,
     renderPolygonPreview,
     renderTargetPaths,
     renderPathPreview,
+    renderExplorationTrajectories,
     renderTrajectories,
+    renderExplorationDots,
     renderJoints,
     renderSelectionBox,
     renderMeasurementMarkers,

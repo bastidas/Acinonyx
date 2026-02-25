@@ -1,11 +1,12 @@
 // Application Configuration
 // Centralized configuration for all ports and endpoints in JavaScript format
 // This can be imported by both frontend and backend (when needed)
+// IMPORTANT: Keep BACKEND_PORT in sync with configs/appconfig.py (backend uses that; Vite proxy uses this).
 
 export const AppConfig = {
-  // Port Configuration
+  // Port Configuration (must match configs/appconfig.py if you change ports)
   FRONTEND_PORT: 5173,
-  BACKEND_PORT: 8021,
+  BACKEND_PORT: 8022,
 
   // URLs (derived from ports)
   get FRONTEND_URL() {

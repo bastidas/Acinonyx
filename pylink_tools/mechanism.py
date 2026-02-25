@@ -344,6 +344,21 @@ class Mechanism:
         # Track current values
         self._current_dimensions = values.copy()
 
+    def sync_positions_to_dimensions(self) -> None:
+        """
+        Update stored positions to a valid configuration for current dimensions.
+
+        After set_dimensions() the linkage has new link lengths but positions are
+        still the previous initial state, which may not satisfy the new geometry.
+        Run one simulation cycle so the solver computes positions consistent with
+        the current dimensions, then set _initial_positions to those coords.
+        Call this before to_dict() or copy() when returning an optimized mechanism
+        so that node positions match edge distances in serialized output.
+        """
+        self.simulate()
+        self._initial_positions = self._linkage.get_coords()
+        update_solver_positions(self._linkage._solver_data, self._linkage)
+
     def simulate(self) -> np.ndarray:
         """
         Run simulation using step_fast().

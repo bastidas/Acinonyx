@@ -21,7 +21,7 @@ import {
   type PathDrawState
 } from '../BuilderTools'
 import { CanvasRenderer, SVGFilters } from './rendering'
-import type { CanvasLayerRender } from './rendering'
+import type { CanvasLayerRender, ViewportTransform } from './rendering'
 
 export interface BuilderCanvasAreaOptimization {
   isOptimizedMechanism: boolean
@@ -35,6 +35,10 @@ export interface BuilderCanvasAreaProps {
   cursor: string
   optimization: BuilderCanvasAreaOptimization
   showGrid: boolean
+  /** Viewport for zoom/pan (optional; when omitted no transform is applied) */
+  viewport?: ViewportTransform
+  /** Wheel handler for zoom (e.g. from useViewportState) */
+  onWheel?: (event: React.WheelEvent<SVGSVGElement>) => void
   onMouseDown?: (event: React.MouseEvent<SVGSVGElement>) => void
   onMouseMove?: (event: React.MouseEvent<SVGSVGElement>) => void
   onMouseUp?: (event: React.MouseEvent<SVGSVGElement>) => void
@@ -42,17 +46,22 @@ export interface BuilderCanvasAreaProps {
   onClick?: (event: React.MouseEvent<SVGSVGElement>) => void
   onDoubleClick?: (event: React.MouseEvent<SVGSVGElement>) => void
   renderGrid?: CanvasLayerRender
+  renderCanvases?: CanvasLayerRender
   renderDrawnObjects?: CanvasLayerRender
   renderLinks?: CanvasLayerRender
   renderPreviewLine?: CanvasLayerRender
   renderPolygonPreview?: CanvasLayerRender
   renderTargetPaths?: CanvasLayerRender
   renderPathPreview?: CanvasLayerRender
+  renderExplorationTrajectories?: CanvasLayerRender
   renderTrajectories?: CanvasLayerRender
+  renderExplorationDots?: CanvasLayerRender
   renderJoints?: CanvasLayerRender
   renderSelectionBox?: CanvasLayerRender
   renderMeasurementMarkers?: CanvasLayerRender
   renderMeasurementLine?: CanvasLayerRender
+  /** When true, exploration trajectories and dots are rendered above joints (explore tool with samples) */
+  exploreModeActive?: boolean
   toolMode: ToolMode
   jointCount: number
   linkCount: number
@@ -80,6 +89,8 @@ export function BuilderCanvasArea({
   cursor,
   optimization,
   showGrid,
+  viewport,
+  onWheel,
   onMouseDown,
   onMouseMove,
   onMouseUp,
@@ -87,17 +98,21 @@ export function BuilderCanvasArea({
   onClick,
   onDoubleClick,
   renderGrid,
+  renderCanvases,
   renderDrawnObjects,
   renderLinks,
   renderPreviewLine,
   renderPolygonPreview,
   renderTargetPaths,
   renderPathPreview,
+  renderExplorationTrajectories,
   renderTrajectories,
+  renderExplorationDots,
   renderJoints,
   renderSelectionBox,
   renderMeasurementMarkers,
   renderMeasurementLine,
+  exploreModeActive = false,
   toolMode,
   jointCount,
   linkCount,
@@ -184,6 +199,8 @@ export function BuilderCanvasArea({
 
       <CanvasRenderer
         cursor={cursor}
+        viewport={viewport}
+        onWheel={onWheel}
         onMouseDown={onMouseDown}
         onMouseMove={onMouseMove}
         onMouseUp={onMouseUp}
@@ -193,17 +210,21 @@ export function BuilderCanvasArea({
         filters={<SVGFilters />}
         showGrid={showGrid}
         renderGrid={renderGrid}
+        renderCanvases={renderCanvases}
         renderDrawnObjects={renderDrawnObjects}
         renderLinks={renderLinks}
         renderPreviewLine={renderPreviewLine}
         renderPolygonPreview={renderPolygonPreview}
         renderTargetPaths={renderTargetPaths}
         renderPathPreview={renderPathPreview}
+        renderExplorationTrajectories={renderExplorationTrajectories}
         renderTrajectories={renderTrajectories}
+        renderExplorationDots={renderExplorationDots}
         renderJoints={renderJoints}
         renderSelectionBox={renderSelectionBox}
         renderMeasurementMarkers={renderMeasurementMarkers}
         renderMeasurementLine={renderMeasurementLine}
+        exploreModeActive={exploreModeActive}
       />
 
       <FooterToolbar

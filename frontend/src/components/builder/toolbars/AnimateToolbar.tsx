@@ -13,6 +13,7 @@ export interface AnimationState {
   totalFrames: number
   playbackSpeed: number
   loop: boolean
+  playbackDirection: 1 | -1
 }
 
 export interface AnimateToolbarProps {
@@ -25,6 +26,7 @@ export interface AnimateToolbarProps {
   pauseAnimation: () => void
   stopAnimation: () => void
   setPlaybackSpeed: (speed: number) => void
+  setPlaybackDirection: (direction: 1 | -1) => void
   setAnimatedPositions: (positions: null) => void
   setFrame: (frame: number) => void
 
@@ -57,6 +59,7 @@ export const AnimateToolbar: React.FC<AnimateToolbarProps> = ({
   pauseAnimation,
   stopAnimation,
   setPlaybackSpeed,
+  setPlaybackDirection,
   setAnimatedPositions,
   setFrame,
   isSimulating,
@@ -409,22 +412,48 @@ export const AnimateToolbar: React.FC<AnimateToolbarProps> = ({
           </span>
         </Tooltip>
 
-        {/* Frame Counter */}
-        <Typography
-          variant="caption"
-          sx={{
-            color: colors.textMuted,
-            mt: 0.3,
-            fontFamily: 'monospace',
-            fontSize: '0.75rem',  // Slightly bigger
-            letterSpacing: '0.05em',
-          }}
-        >
-          {canAnimate
-            ? `${String(animationState.currentFrame + 1).padStart(2, '0')}/${animationState.totalFrames}`
-            : '--/--'
-          }
-        </Typography>
+        {/* Frame Counter + Reverse direction */}
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.25, mt: 0.3 }}>
+          <Typography
+            variant="caption"
+            sx={{
+              color: colors.textMuted,
+              fontFamily: 'monospace',
+              fontSize: '0.75rem',
+              letterSpacing: '0.05em',
+            }}
+          >
+            {canAnimate
+              ? `${String(animationState.currentFrame + 1).padStart(2, '0')}/${animationState.totalFrames}`
+              : '--/--'
+            }
+          </Typography>
+          <Tooltip title="Reverse playback direction" placement="top" arrow>
+            <span>
+              <IconButton
+                size="small"
+                onClick={() => setPlaybackDirection(animationState.playbackDirection === 1 ? -1 : 1)}
+                disabled={!canAnimate}
+                sx={{
+                  width: 28,
+                  height: 28,
+                  padding: 0,
+                  color: animationState.playbackDirection === -1 ? colors.sliderColor : colors.textMuted,
+                  backgroundColor: 'transparent',
+                  '&:hover': {
+                    backgroundColor: colors.buttonHover,
+                    color: colors.text,
+                  },
+                  '&.Mui-disabled': {
+                    color: colors.disabled,
+                  },
+                }}
+              >
+                <Typography sx={{ fontSize: '0.95rem' }}>⇄</Typography>
+              </IconButton>
+            </span>
+          </Tooltip>
+        </Box>
       </Box>
 
       {/* ═══════════════════════════════════════════════════════════════════════

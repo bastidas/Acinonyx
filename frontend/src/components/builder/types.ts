@@ -16,7 +16,8 @@ export type {
   NodeRole,
   NodeMeta,
   EdgeMeta,
-  HypergraphLinkage
+  HypergraphLinkage,
+  CanvasImageData
 } from '../../types'
 
 // ═══════════════════════════════════════════════════════════════════════════════

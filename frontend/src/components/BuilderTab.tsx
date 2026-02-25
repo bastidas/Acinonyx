@@ -9,6 +9,7 @@ import {
   initialMeasureState,
   DrawnObjectsState,
   createDrawnObject,
+  initialDrawnObjectsState,
   initialMoveGroupState,
   initialMergePolygonState,
   initialPathDrawState,
@@ -29,7 +30,9 @@ import {
   TOOLBAR_CONFIGS,
   ToolbarPosition,
   JointData,
-  LinkData
+  LinkData,
+  type ExploreTrajectoriesState,
+  type ExploreTrajectorySample
 } from './BuilderTools'
 import {
   jointColors,
@@ -75,10 +78,14 @@ import {
   BuilderToolbars,
   // Hypergraph helpers (new API)
   getNode,
+  getNodeMeta,
   getConnectedNodes,
   // Hypergraph mutations (new API)
   moveNode as moveNodeMutation,
   syncAllEdgeDistances,
+  exploreRegion,
+  getExploreRegionOptionsForMaxPoints,
+  getCombinatorialSecondOptions,
   updateEdgeMeta,
   updateNodeMeta,
   // Hypergraph operations (new API)
@@ -113,7 +120,9 @@ import {
   applyLoadedDocument,
   computeOptimizerSyncStatus,
   useCanvasLayerRenders,
-  type UseCanvasLayerRendersParams
+  type UseCanvasLayerRendersParams,
+  createEmptyLinkageDocument,
+  useViewportState
 } from './builder'
 import { getStoredGraphFilename, setStoredGraphFilename } from '../prefs'
 
@@ -134,9 +143,20 @@ import { getStoredGraphFilename, setStoredGraphFilename } from '../prefs'
 // ═══════════════════════════════════════════════════════════════════════════════
 
 const BuilderTab: React.FC = () => {
-  // Canvas scaling helpers
+  // Canvas scaling helpers (world space: used by rendering and distances)
   const pixelsToUnits = (pixels: number) => pixels / PIXELS_PER_UNIT
   const unitsToPixels = (units: number) => units * PIXELS_PER_UNIT
+
+  const canvasRef = useRef<HTMLDivElement>(null)
+  const viewport = useViewportState({ canvasRef })
+
+  /** Convert screen pixel position (relative to canvas) to world units; used for mouse events when zoom/pan is active */
+  const screenToUnit = useCallback((screenPx: number, screenPy: number): [number, number] => {
+    const { zoom, panX, panY } = viewport.viewport
+    const worldPx = (screenPx - panX) / zoom
+    const worldPy = (screenPy - panY) / zoom
+    return [worldPx / PIXELS_PER_UNIT, worldPy / PIXELS_PER_UNIT]
+  }, [viewport.viewport])
 
   // Tool + selection state (consolidated: tool mode, toolbars, selection, hover)
   const {
@@ -206,7 +226,7 @@ const BuilderTab: React.FC = () => {
     setMoveGroupState
   } = useToolFlowsState()
 
-  // Drawn / path / merge state (consolidated: polygons, target paths, path drawing, merge tool)
+  // Drawn / path / merge state (consolidated: polygons, target paths, path drawing, merge tool, canvas images)
   const {
     drawnObjects,
     setDrawnObjects,
@@ -217,8 +237,45 @@ const BuilderTab: React.FC = () => {
     pathDrawState,
     setPathDrawState,
     mergePolygonState,
-    setMergePolygonState
+    setMergePolygonState,
+    canvases,
+    setCanvases
   } = useDrawnPathState()
+
+  const [editingCanvasId, setEditingCanvasId] = React.useState<string | null>(null)
+
+  // Explore node trajectories mode: state cleared when switching tools
+  const [exploreTrajectoriesState, setExploreTrajectoriesState] = React.useState<ExploreTrajectoriesState>({
+    exploreNodeId: null,
+    exploreCenter: null,
+    exploreSamples: [],
+    exploreHoveredIndex: null,
+    exploreHoveredFromTrajectoryPath: false,
+    exploreLoading: false,
+    exploreMode: 'single',
+    exploreSecondNodeId: null,
+    exploreSecondCenter: null,
+    explorePinnedFirstPosition: null
+  })
+  const resetExploreTrajectories = useCallback(() => {
+    setExploreTrajectoriesState({
+      exploreNodeId: null,
+      exploreCenter: null,
+      exploreSamples: [],
+      exploreHoveredIndex: null,
+      exploreHoveredFromTrajectoryPath: false,
+      exploreLoading: false,
+      exploreMode: 'single',
+      exploreSecondNodeId: null,
+      exploreSecondCenter: null,
+      explorePinnedFirstPosition: null
+    })
+  }, [])
+
+  const getNodeShowPath = useCallback((nodeId: string): boolean => {
+    const meta = getNodeMeta(linkageDoc, nodeId)
+    return meta?.showPath === true
+  }, [linkageDoc])
 
   // Canvas/settings state (consolidated: display, simulation, dimensions)
   const settings = useCanvasSettingsState()
@@ -261,8 +318,238 @@ const BuilderTab: React.FC = () => {
     trajectoryStyle,
     setTrajectoryStyle,
     canvasDimensions,
-    setCanvasDimensions
+    setCanvasDimensions,
+    exploreRadius,
+    exploreRadialSamples,
+    exploreAzimuthalSamples,
+    exploreNMaxCombinatorial,
+    exploreColormapEnabled,
+    exploreColormapType
   } = settings
+
+  const runExploreTrajectories = useCallback(async (nodeId: string, center: [number, number]) => {
+    setExploreTrajectoriesState(prev => ({
+      ...prev,
+      exploreLoading: true,
+      exploreNodeId: nodeId,
+      exploreCenter: center,
+      exploreSamples: [],
+      exploreMode: 'single',
+      exploreSecondNodeId: null,
+      exploreSecondCenter: null,
+      explorePinnedFirstPosition: null
+    }))
+    showStatus(`Exploring trajectories for ${nodeId}...`, 'action')
+    try {
+      const points = exploreRegion(center, { deltaDegrees: 360 / exploreAzimuthalSamples, R: exploreRadius, nRadialSamples: exploreRadialSamples })
+      const requests = points.map(({ position }) => {
+        let doc = moveNodeMutation(linkageDoc, nodeId, position)
+        doc = syncAllEdgeDistances(doc)
+        return { ...doc, n_steps: simulationSteps }
+      })
+      const response = await fetch('/api/compute-pylink-trajectories-batch', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ requests })
+      })
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`)
+      }
+      const data = await response.json()
+      const results = data.results as Array<{ status: string; trajectories?: Record<string, [number, number][]>; n_steps?: number; joint_types?: Record<string, string>; message?: string }>
+      if (!Array.isArray(results) || results.length !== points.length) {
+        throw new Error('Invalid batch response')
+      }
+      const exploreSamples: ExploreTrajectorySample[] = points.map((p, i) => {
+        const r = results[i]
+        const valid = r?.status === 'success' && r?.trajectories != null
+        return {
+          position: p.position,
+          valid,
+          trajectory: valid && r.trajectories && r.n_steps != null
+            ? { trajectories: r.trajectories, nSteps: r.n_steps, jointTypes: r.joint_types ?? {} }
+            : null
+        }
+      })
+      const validCount = exploreSamples.filter(s => s.valid).length
+      setExploreTrajectoriesState(prev => ({
+        ...prev,
+        exploreSamples,
+        exploreLoading: false
+      }))
+      showStatus(`Exploration complete: ${validCount} valid, ${exploreSamples.length - validCount} invalid`, 'success', 2500)
+      showStatus('Click a trajectory to apply, or click another node to explore combinations.', 'action', 4000)
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : 'Exploration failed'
+      showStatus(msg, 'error', 3000)
+      setExploreTrajectoriesState(prev => ({ ...prev, exploreSamples: [], exploreLoading: false }))
+    }
+  }, [linkageDoc, simulationSteps, showStatus, exploreRadius, exploreRadialSamples, exploreAzimuthalSamples])
+
+  const runExploreTrajectoriesCombinatorial = useCallback(
+    async (
+      nodeId1: string,
+      _center1: [number, number],
+      samples1: Array<{ position: [number, number]; valid: boolean }>,
+      nodeId2: string,
+      center2: [number, number]
+    ) => {
+      const N1 = Math.max(1, samples1.length)
+      const N2_max = Math.floor(exploreNMaxCombinatorial / N1)
+      if (N2_max < 1) {
+        showStatus(`Too many first samples for combinatorial exploration (max ${exploreNMaxCombinatorial} total).`, 'warning', 3000)
+        return
+      }
+      // First run uses exploreAzimuthalSamples angles and exploreRadialSamples radial; use same desired shape and reduce until under cap
+      const options = getCombinatorialSecondOptions(N2_max, exploreRadialSamples, exploreAzimuthalSamples)
+      const points2 = exploreRegion(center2, {
+        R: exploreRadius,
+        deltaDegrees: options.deltaDegrees,
+        nRadialSamples: options.nRadialSamples
+      })
+      const N2 = points2.length
+      const total = N1 * N2
+      setExploreTrajectoriesState(prev => ({
+        ...prev,
+        exploreLoading: true,
+        exploreMode: 'combinatorial',
+        exploreSecondNodeId: nodeId2,
+        exploreSecondCenter: center2,
+        exploreSamples: []
+      }))
+      showStatus(`Exploring combinations: ${N1}×${N2} = ${total}...`, 'action')
+      try {
+        const requests: unknown[] = []
+        for (let i = 0; i < N1; i++) {
+          for (let j = 0; j < N2; j++) {
+            let doc = moveNodeMutation(linkageDoc, nodeId1, samples1[i].position)
+            doc = moveNodeMutation(doc, nodeId2, points2[j].position)
+            doc = syncAllEdgeDistances(doc)
+            requests.push({ ...doc, n_steps: simulationSteps })
+          }
+        }
+        const response = await fetch('/api/compute-pylink-trajectories-batch', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ requests })
+        })
+        if (!response.ok) throw new Error(`HTTP ${response.status}`)
+        const data = await response.json()
+        const results = data.results as Array<{
+          status: string
+          trajectories?: Record<string, [number, number][]>
+          n_steps?: number
+          joint_types?: Record<string, string>
+        }>
+        if (!Array.isArray(results) || results.length !== total) {
+          throw new Error('Invalid batch response')
+        }
+        const flatSamples: ExploreTrajectorySample[] = []
+        for (let idx = 0; idx < results.length; idx++) {
+          const i = Math.floor(idx / N2)
+          const j = idx % N2
+          const r = results[idx]
+          const valid = r?.status === 'success' && r?.trajectories != null
+          flatSamples.push({
+            position: points2[j].position,
+            positionFirst: samples1[i].position,
+            valid,
+            trajectory:
+              valid && r.trajectories && r.n_steps != null
+                ? { trajectories: r.trajectories, nSteps: r.n_steps, jointTypes: r.joint_types ?? {} }
+                : null
+          })
+        }
+        const validCount = flatSamples.filter((s) => s.valid).length
+        setExploreTrajectoriesState((prev) => ({
+          ...prev,
+          exploreSamples: flatSamples,
+          exploreCenter: null,
+          exploreLoading: false
+        }))
+        showStatus(`Combinatorial complete: ${validCount} valid of ${total}`, 'success', 2500)
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : 'Combinatorial exploration failed'
+        showStatus(msg, 'error', 3000)
+        setExploreTrajectoriesState(prev => ({ ...prev, exploreSamples: [], exploreLoading: false }))
+      }
+    },
+    [linkageDoc, simulationSteps, showStatus, exploreRadius, exploreRadialSamples, exploreAzimuthalSamples, exploreNMaxCombinatorial]
+  )
+
+  const runExploreTrajectoriesSecond = useCallback(
+    async (
+      fixedNodeId: string,
+      pinnedPosition: [number, number],
+      nodeId2: string,
+      center2: [number, number]
+    ) => {
+      setExploreTrajectoriesState(prev => ({
+        ...prev,
+        exploreLoading: true,
+        explorePinnedFirstPosition: pinnedPosition,
+        exploreSecondNodeId: nodeId2,
+        exploreSecondCenter: center2,
+        exploreMode: 'path',
+        exploreSamples: []
+      }))
+      showStatus(`Exploring path: ${nodeId2} with ${fixedNodeId} fixed...`, 'action')
+      try {
+        const points = exploreRegion(center2, {
+          deltaDegrees: 360 / exploreAzimuthalSamples,
+          R: exploreRadius,
+          nRadialSamples: exploreRadialSamples
+        })
+        const requests = points.map(({ position }) => {
+          let doc = moveNodeMutation(linkageDoc, fixedNodeId, pinnedPosition)
+          doc = moveNodeMutation(doc, nodeId2, position)
+          doc = syncAllEdgeDistances(doc)
+          return { ...doc, n_steps: simulationSteps }
+        })
+        const response = await fetch('/api/compute-pylink-trajectories-batch', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ requests })
+        })
+        if (!response.ok) throw new Error(`HTTP ${response.status}`)
+        const data = await response.json()
+        const results = data.results as Array<{
+          status: string
+          trajectories?: Record<string, [number, number][]>
+          n_steps?: number
+          joint_types?: Record<string, string>
+        }>
+        if (!Array.isArray(results) || results.length !== points.length) {
+          throw new Error('Invalid batch response')
+        }
+        const exploreSamples: ExploreTrajectorySample[] = points.map((p, i) => {
+          const r = results[i]
+          const valid = r?.status === 'success' && r?.trajectories != null
+          return {
+            position: p.position,
+            valid,
+            trajectory:
+              valid && r.trajectories && r.n_steps != null
+                ? { trajectories: r.trajectories, nSteps: r.n_steps, jointTypes: r.joint_types ?? {} }
+                : null
+          }
+        })
+        const validCount = exploreSamples.filter(s => s.valid).length
+        setExploreTrajectoriesState(prev => ({
+          ...prev,
+          exploreSamples,
+          exploreCenter: center2,
+          exploreLoading: false
+        }))
+        showStatus(`Path exploration complete: ${validCount} valid`, 'success', 2500)
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : 'Path exploration failed'
+        showStatus(msg, 'error', 3000)
+        setExploreTrajectoriesState(prev => ({ ...prev, exploreSamples: [], exploreLoading: false }))
+      }
+    },
+    [linkageDoc, simulationSteps, showStatus, exploreRadius, exploreRadialSamples]
+  )
 
   // Derived selection color
   const selectionColorMap = { blue: '#1976d2', orange: '#FA8112', green: '#2e7d32', purple: '#9c27b0' }
@@ -275,7 +562,6 @@ const BuilderTab: React.FC = () => {
     [jointColors]
   )
 
-  const canvasRef = useRef<HTMLDivElement>(null)
   const containerRef = useRef<HTMLDivElement>(null)
 
   // Animation: positions override during playback - now managed by AnimationController
@@ -458,6 +744,7 @@ const BuilderTab: React.FC = () => {
             doc: result.data,
             setLinkageDoc,
             setDrawnObjects: (s) => setDrawnObjects(s as DrawnObjectsState),
+            setCanvases: (c) => setCanvases(Array.isArray(c) ? c : []),
             setSelectedJoints,
             setSelectedLinks,
             clearTrajectory: animation.clearTrajectory,
@@ -551,8 +838,11 @@ const BuilderTab: React.FC = () => {
       setPathDrawState(initialPathDrawState)
       showStatus('Path drawing cancelled', 'info', 2000)
     }
+    if (toolMode === 'explore_node_trajectories') {
+      resetExploreTrajectories()
+    }
     setToolMode('select')
-  }, [linkCreationState.isDrawing, dragState.isDragging, groupSelectionState.isSelecting, polygonDrawState.isDrawing, measureState.isMeasuring, mergePolygonState.step, pathDrawState.isDrawing, showStatus])
+  }, [linkCreationState.isDrawing, dragState.isDragging, groupSelectionState.isSelecting, polygonDrawState.isDrawing, measureState.isMeasuring, mergePolygonState.step, pathDrawState.isDrawing, showStatus, toolMode, resetExploreTrajectories])
 
   // Get visual position for any joint
   // SINGLE SOURCE OF TRUTH:
@@ -885,6 +1175,36 @@ const BuilderTab: React.FC = () => {
     // setIsSyncedToOptimizer will be updated by the useEffect
   }, [linkageDoc, showStatus, optimization.isOptimizedMechanism])
 
+  /** Move two joints in one document update (used when applying combinatorial explore result). */
+  const moveTwoJoints = useCallback(
+    (
+      jointName1: string,
+      position1: [number, number],
+      jointName2: string,
+      position2: [number, number]
+    ) => {
+      if (optimization.optimizationJustCompletedRef.current) {
+        const timeSinceOpt = Date.now() - (optimization.optimizationCompleteTimeRef.current || 0)
+        if (timeSinceOpt < 2000) {
+          showStatus('CRITICAL: Blocked mechanism modification immediately after optimization', 'error', 5000)
+          return
+        }
+      }
+      const node1 = getNode(linkageDoc, jointName1)
+      const node2 = getNode(linkageDoc, jointName2)
+      if (!node1 || !node2) return
+      let newDoc = moveNodeMutation(linkageDoc, jointName1, position1)
+      newDoc = moveNodeMutation(newDoc, jointName2, position2)
+      if (!optimization.isOptimizedMechanism) {
+        newDoc = syncAllEdgeDistances(newDoc)
+      }
+      animation.clearTrajectory()
+      triggerMechanismChange()
+      setLinkageDoc(newDoc)
+    },
+    [linkageDoc, showStatus, optimization.isOptimizedMechanism]
+  )
+
   // ═══════════════════════════════════════════════════════════════════════════════
   // RIGID BODY TRANSLATION
   // ═══════════════════════════════════════════════════════════════════════════════
@@ -1067,7 +1387,7 @@ const BuilderTab: React.FC = () => {
     }
   }, [selectedJoints, selectedLinks, drawnObjects.selectedIds, batchDelete, showStatus])
 
-  function buildToolContext(params: Omit<
+  type BuildToolContextParams = Omit<
     ToolContext,
     'getPointFromEvent' | 'snapThreshold' | 'mergeThreshold' | 'getLinkMeta' | 'mergeLinkThreshold' | 'setDrawnObjects' | 'setTargetPaths' | 'createDrawnObject' | 'createTargetPath'
   > & {
@@ -1076,10 +1396,13 @@ const BuilderTab: React.FC = () => {
     setTargetPaths: React.Dispatch<React.SetStateAction<TargetPath[]>>
     createDrawnObject: (type: 'polygon', points: [number, number][], existingIds: string[]) => { id: string; type: string; points: [number, number][]; name: string }
     createTargetPath: (points: [number, number][], existingPaths: TargetPath[]) => TargetPath
-  }): ToolContext {
+    viewport: { zoom: number; panX: number; panY: number }
+  }
+  function buildToolContext(params: BuildToolContextParams): ToolContext {
     const {
       canvasRef: cr,
       pixelsToUnits: pu,
+      viewport: vp,
       linkMeta,
       setDrawnObjects: setDrawn,
       setTargetPaths: setPaths,
@@ -1094,8 +1417,10 @@ const BuilderTab: React.FC = () => {
       getPointFromEvent: (event: React.MouseEvent<SVGSVGElement>) => {
         if (!cr.current) return null
         const rect = cr.current.getBoundingClientRect()
-        const x = pu(event.clientX - rect.left)
-        const y = pu(event.clientY - rect.top)
+        const screenPx = event.clientX - rect.left
+        const screenPy = event.clientY - rect.top
+        const x = (screenPx - vp.panX) / vp.zoom / PIXELS_PER_UNIT
+        const y = (screenPy - vp.panY) / vp.zoom / PIXELS_PER_UNIT
         return [x, y] as [number, number]
       },
       snapThreshold: JOINT_SNAP_THRESHOLD,
@@ -1118,6 +1443,7 @@ const BuilderTab: React.FC = () => {
       buildToolContext({
         canvasRef,
         pixelsToUnits,
+        viewport: viewport.viewport,
         toolMode,
         setToolMode,
         getJointsWithPositions,
@@ -1134,6 +1460,7 @@ const BuilderTab: React.FC = () => {
         selectedLinks,
         setSelectedLinks,
         moveJoint,
+        moveTwoJoints,
         mergeJoints,
         showStatus,
         clearStatus,
@@ -1169,7 +1496,15 @@ const BuilderTab: React.FC = () => {
         targetPaths,
         setTargetPaths,
         createTargetPath,
-        setSelectedPathId
+        setSelectedPathId,
+        linkageDoc,
+        exploreTrajectoriesState,
+        setExploreTrajectoriesState,
+        runExploreTrajectories,
+        runExploreTrajectoriesSecond,
+        runExploreTrajectoriesCombinatorial,
+        getNodeShowPath,
+        getJointType: (name: string) => pylinkDoc.pylinkage.joints.find(j => j.name === name)?.type ?? null
       }),
     [
       toolMode,
@@ -1190,12 +1525,21 @@ const BuilderTab: React.FC = () => {
       getLinksWithPositions,
       getJointPosition,
       moveJoint,
+      moveTwoJoints,
       mergeJoints,
       showStatus,
       clearStatus,
       createLinkWithRevoluteDefault,
       handleDeleteSelected,
-      transformPolygonPoints
+      transformPolygonPoints,
+      linkageDoc,
+      exploreTrajectoriesState,
+      runExploreTrajectories,
+      runExploreTrajectoriesSecond,
+      runExploreTrajectoriesCombinatorial,
+      getNodeShowPath,
+      pylinkDoc.pylinkage.joints,
+      viewport.viewport
     ]
   )
 
@@ -1240,6 +1584,9 @@ const BuilderTab: React.FC = () => {
     targetPaths,
     selectedPathId,
     drawnObjects,
+    canvases,
+    setCanvases,
+    openCanvasEdit: (id: string) => setEditingCanvasId(id),
     jointColors,
     getCyclicColor: getCyclicColor as UseCanvasLayerRendersParams['getCyclicColor'],
     setHoveredJoint,
@@ -1252,12 +1599,18 @@ const BuilderTab: React.FC = () => {
     handleMergeLinkClick,
     handleMergePolygonClick,
     toolContext,
-    transformPolygonPoints
+    transformPolygonPoints,
+    exploreTrajectoriesState,
+    exploreColormapEnabled,
+    exploreColormapType,
+    exploreRadius
   })
 
   // Handle mouse down on canvas (for drag start)
   const handleCanvasMouseDown = useCallback((event: React.MouseEvent<SVGSVGElement>) => {
     if (!canvasRef.current) return
+
+    if (viewport.handlePanStart(event)) return
 
     // Auto-pause animation on any canvas interaction
     if (animation.animationState.isAnimating) {
@@ -1268,9 +1621,7 @@ const BuilderTab: React.FC = () => {
     const rect = canvasRef.current.getBoundingClientRect()
     const pixelX = event.clientX - rect.left
     const pixelY = event.clientY - rect.top
-    const x = pixelsToUnits(pixelX)
-    const y = pixelsToUnits(pixelY)
-    const clickPoint: [number, number] = [x, y]
+    const clickPoint = screenToUnit(pixelX, pixelY)
 
     if (moveGroup.handleMouseDown(event, clickPoint)) return
 
@@ -1279,32 +1630,43 @@ const BuilderTab: React.FC = () => {
       const handler = getToolHandler(toolMode)
       if (handler.onMouseDown?.(event, point, toolContext)) return
     }
-  }, [toolMode, toolContext, moveGroup, animation.animationState.isAnimating, animation.pauseAnimation])
+  }, [toolMode, toolContext, moveGroup, viewport, screenToUnit, animation.animationState.isAnimating, animation.pauseAnimation])
 
   // Handle mouse move on canvas
   const handleCanvasMouseMove = useCallback((event: React.MouseEvent<SVGSVGElement>) => {
     if (!canvasRef.current) return
 
+    if (viewport.isPanningRef.current) {
+      viewport.handlePanMove(event)
+      return
+    }
+
     const rect = canvasRef.current.getBoundingClientRect()
     const pixelX = event.clientX - rect.left
     const pixelY = event.clientY - rect.top
-    const x = pixelsToUnits(pixelX)
-    const y = pixelsToUnits(pixelY)
-    const currentPoint: [number, number] = [x, y]
+    const currentPoint = screenToUnit(pixelX, pixelY)
 
     if (moveGroup.handleMouseMove(event, currentPoint)) return
 
     const handler = getToolHandler(toolMode)
     if (handler.onMouseMove?.(event, currentPoint, toolContext)) return
-  }, [toolMode, toolContext, moveGroup, linkCreationState.isDrawing, linkCreationState.startPoint, dragState.isDragging, dragState.draggedJoint, groupSelectionState.isSelecting, groupSelectionState.startPoint])
+  }, [toolMode, toolContext, moveGroup, viewport, screenToUnit, linkCreationState.isDrawing, linkCreationState.startPoint, dragState.isDragging, dragState.draggedJoint, groupSelectionState.isSelecting, groupSelectionState.startPoint])
 
   // Handle mouse up on canvas (for drag end)
   const handleCanvasMouseUp = useCallback((event: React.MouseEvent<SVGSVGElement>) => {
+    viewport.handlePanEnd()
     if (moveGroup.handleMouseUp(event)) return
 
     const handler = getToolHandler(toolMode)
     if (handler.onMouseUp?.(event, toolContext)) return
-  }, [toolMode, toolContext, moveGroup])
+  }, [toolMode, toolContext, moveGroup, viewport])
+
+  // Handle mouse leave (e.g. clear explore trajectory hover)
+  const handleCanvasMouseLeave = useCallback((event: React.MouseEvent<SVGSVGElement>) => {
+    viewport.handlePanEnd()
+    const handler = getToolHandler(toolMode)
+    if (handler.onMouseLeave?.(event, toolContext)) return
+  }, [toolMode, toolContext, viewport])
 
   // Confirm delete multiple items
   const confirmDelete = useCallback(() => {
@@ -1334,6 +1696,10 @@ const BuilderTab: React.FC = () => {
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement) {
+        return
+      }
+      // Let toolbar content (Optimize, etc.) handle selection and copy; don't trigger tool shortcuts
+      if (event.target instanceof Node && (event.target as HTMLElement).closest?.('[data-draggable-toolbar-content]')) {
         return
       }
 
@@ -1397,6 +1763,9 @@ const BuilderTab: React.FC = () => {
         }
       }
 
+      // Skip tool shortcuts when modifier held so Cmd+C / Ctrl+V etc. work in logs and about
+      if (event.metaKey || event.ctrlKey) return
+
       const key = event.key.toUpperCase()
       const tool = TOOLS.find(t => t.shortcut === key)
       if (tool) {
@@ -1427,6 +1796,10 @@ const BuilderTab: React.FC = () => {
         if (pathDrawState.isDrawing && tool.id !== 'draw_path') {
           setPathDrawState(initialPathDrawState)
         }
+        // Clear explore trajectories when switching away
+        if (toolMode === 'explore_node_trajectories' && tool.id !== 'explore_node_trajectories') {
+          resetExploreTrajectories()
+        }
         setToolMode(tool.id)
 
         // Show appropriate message for merge mode
@@ -1435,6 +1808,8 @@ const BuilderTab: React.FC = () => {
           showStatus('Select a link or a polygon to begin merge', 'action')
         } else if (tool.id === 'draw_path') {
           showStatus('Click to start drawing target path', 'action')
+        } else if (tool.id === 'explore_node_trajectories') {
+          showStatus('Click a node to explore trajectories', 'action')
         } else {
           showStatus(`${tool.label} mode`, 'info', 1500)
         }
@@ -1444,7 +1819,7 @@ const BuilderTab: React.FC = () => {
 
     document.addEventListener('keydown', handleKeyDown)
     return () => document.removeEventListener('keydown', handleKeyDown)
-  }, [moveGroupState.isActive, exitMoveGroupMode, linkCreationState.isDrawing, groupSelectionState.isSelecting, polygonDrawState.isDrawing, measureState.isMeasuring, pathDrawState.isDrawing, cancelAction, showStatus, selectedJoints, selectedLinks, handleDeleteSelected, animation.animationState.isAnimating, animation.playAnimation, animation.pauseAnimation, animation.trajectoryData, animation.runSimulation, pylinkDoc.pylinkage.joints, completePathDrawing])
+  }, [toolMode, moveGroupState.isActive, exitMoveGroupMode, linkCreationState.isDrawing, groupSelectionState.isSelecting, polygonDrawState.isDrawing, measureState.isMeasuring, pathDrawState.isDrawing, cancelAction, showStatus, selectedJoints, selectedLinks, handleDeleteSelected, animation.animationState.isAnimating, animation.playAnimation, animation.pauseAnimation, animation.trajectoryData, animation.runSimulation, pylinkDoc.pylinkage.joints, completePathDrawing, resetExploreTrajectories])
 
   // Handle canvas click
   const handleCanvasClick = useCallback((event: React.MouseEvent<SVGSVGElement>) => {
@@ -1456,9 +1831,7 @@ const BuilderTab: React.FC = () => {
     const rect = canvasRef.current.getBoundingClientRect()
     const pixelX = event.clientX - rect.left
     const pixelY = event.clientY - rect.top
-    const x = pixelsToUnits(pixelX)
-    const y = pixelsToUnits(pixelY)
-    const clickPoint: [number, number] = [x, y]
+    const clickPoint = screenToUnit(pixelX, pixelY)
 
     const jointsWithPositions = getJointsWithPositions()
     const linksWithPositions = getLinksWithPositions()
@@ -1586,8 +1959,8 @@ const BuilderTab: React.FC = () => {
   const getToolbarDimensions = (id: string): { minWidth: number; maxHeight: number } => {
     switch (id) {
       case 'tools':
-        // Tools should NEVER scroll - large maxHeight to fit all content
-        return { minWidth: 220, maxHeight: 600 }
+        // Tools should NEVER scroll - 20px narrower so it doesn't crowd the canvas
+        return { minWidth: 200, maxHeight: 600 }
       case 'more':
         return { minWidth: 180, maxHeight: 500 }  // Tall enough to fit all tools without scrolling
       case 'optimize':
@@ -1597,7 +1970,7 @@ const BuilderTab: React.FC = () => {
       case 'nodes':
         return { minWidth: 200, maxHeight: 320 }  // Taller for nodes list
       case 'settings':
-        return { minWidth: 320, maxHeight: 900 }  // Wide for label+control rows
+        return { minWidth: 280, maxHeight: 900 }  // 40px narrower; x=-280 keeps it on-screen
       default:
         return { minWidth: 200, maxHeight: 400 }
     }
@@ -1806,7 +2179,7 @@ const BuilderTab: React.FC = () => {
     />
   )
 
-  // More toolbar content (Demos, File Operations, Validation)
+  // More toolbar content (Demos, File Operations, Canvas, Validation)
   // Note: Animation controls are now in AnimateToolbar
   const MoreContent = () => (
     <MoreToolbar
@@ -1815,9 +2188,16 @@ const BuilderTab: React.FC = () => {
       loadDemoWalker={loadDemoWalker}
       loadDemoComplex={loadDemoComplex}
       loadPylinkGraphLast={loadPylinkGraphLast}
-      loadFromFile={loadFromFile}
+      onLoadFileSelected={handleLoadFileSelected}
       savePylinkGraph={savePylinkGraph}
-      savePylinkGraphAs={savePylinkGraphAs}
+      suggestedSaveAsName={suggestedSaveAsName}
+      onSaveAs={handleSaveAs}
+      onClearAll={handleClearAll}
+      canvases={canvases}
+      setCanvases={setCanvases}
+      editingCanvasId={editingCanvasId}
+      setEditingCanvasId={setEditingCanvasId}
+      showStatus={showStatus}
     />
   )
 
@@ -1889,6 +2269,18 @@ const BuilderTab: React.FC = () => {
       setTrajectoryDotOpacity={setTrajectoryDotOpacity}
       trajectoryStyle={trajectoryStyle as TrajectoryStyle}
       setTrajectoryStyle={setTrajectoryStyle}
+      exploreRadius={exploreRadius}
+      setExploreRadius={settings.setExploreRadius}
+      exploreRadialSamples={exploreRadialSamples}
+      setExploreRadialSamples={settings.setExploreRadialSamples}
+      exploreAzimuthalSamples={exploreAzimuthalSamples}
+      setExploreAzimuthalSamples={settings.setExploreAzimuthalSamples}
+      exploreNMaxCombinatorial={exploreNMaxCombinatorial}
+      setExploreNMaxCombinatorial={settings.setExploreNMaxCombinatorial}
+      exploreColormapEnabled={exploreColormapEnabled}
+      setExploreColormapEnabled={settings.setExploreColormapEnabled}
+      exploreColormapType={exploreColormapType}
+      setExploreColormapType={settings.setExploreColormapType}
     />
   )
 
@@ -1988,6 +2380,7 @@ const BuilderTab: React.FC = () => {
             doc: docWithTargetJoint,
             setLinkageDoc,
             setDrawnObjects: (s) => setDrawnObjects(s as DrawnObjectsState),
+            setCanvases: (c) => setCanvases(Array.isArray(c) ? c : []),
             setSelectedJoints,
             setSelectedLinks,
             clearTrajectory: animation.clearTrajectory,
@@ -2001,7 +2394,8 @@ const BuilderTab: React.FC = () => {
         showStatus(result.message || `Failed to load ${demoName} demo`, 'error', 3000)
       }
     } catch (error) {
-      showStatus(`Load error: ${error}`, 'error', 3000)
+      const msg = error instanceof Error ? error.message : String(error)
+      showStatus(`Load failed: ${msg}`, 'error', 5000)
     }
   }
 
@@ -2015,10 +2409,11 @@ const BuilderTab: React.FC = () => {
   const savePylinkGraph = async () => {
     try {
       showStatus('Saving...', 'action')
-      // Include drawnObjects in the document for persistence
+      // Include drawnObjects and canvases in the document for persistence
       const docToSave = {
         ...linkageDoc,
-        drawnObjects: drawnObjects.objects.length > 0 ? drawnObjects.objects : undefined
+        drawnObjects: drawnObjects.objects.length > 0 ? drawnObjects.objects : undefined,
+        canvases: canvases.length > 0 ? canvases : undefined
       }
       const response = await fetch('/api/save-pylink-graph', {
         method: 'POST',
@@ -2056,6 +2451,7 @@ const BuilderTab: React.FC = () => {
             doc: result.data,
             setLinkageDoc,
             setDrawnObjects: (s) => setDrawnObjects(s as DrawnObjectsState),
+            setCanvases: (c) => setCanvases(Array.isArray(c) ? c : []),
             setSelectedJoints,
             setSelectedLinks,
             clearTrajectory: animation.clearTrajectory,
@@ -2072,110 +2468,116 @@ const BuilderTab: React.FC = () => {
         showStatus(result.message || 'No graphs to load', 'warning', 3000)
       }
     } catch (error) {
-      showStatus(`Load error: ${error}`, 'error', 3000)
+      const msg = error instanceof Error ? error.message : String(error)
+      showStatus(`Load failed: ${msg}`, 'error', 5000)
     }
   }
 
-  // Load pylink graph from server - show file picker dialog
-  const loadFromFile = async () => {
-    try {
-      showStatus('Fetching file list...', 'action')
-      const listResponse = await fetch('/api/list-pylink-graphs')
-
-      if (!listResponse.ok) throw new Error(`HTTP error! status: ${listResponse.status}`)
-      const listResult = await listResponse.json()
-
-      if (listResult.status !== 'success' || !listResult.files || listResult.files.length === 0) {
-        showStatus('No saved graphs found', 'warning', 3000)
-        return
-      }
-
-      // Create a simple file selection dialog using browser prompt
-      const files = listResult.files as Array<{ filename: string; name: string; saved_at: string }>
-      const fileOptions = files.slice(0, 20).map((f, i) => `${i + 1}. ${f.name} (${f.saved_at})`).join('\n')
-      const selection = prompt(`Select a file to load:\n\n${fileOptions}\n\nEnter number (1-${Math.min(files.length, 20)}):`)
-
-      if (!selection) {
-        showStatus('Load cancelled', 'info', 2000)
-        return
-      }
-
-      const idx = parseInt(selection, 10) - 1
-      if (isNaN(idx) || idx < 0 || idx >= files.length) {
-        showStatus('Invalid selection', 'error', 3000)
-        return
-      }
-
-      const selectedFile = files[idx]
-      showStatus(`Loading ${selectedFile.name}...`, 'action')
-
-      const response = await fetch(`/api/load-pylink-graph?filename=${encodeURIComponent(selectedFile.filename)}`)
-      if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`)
-      const result = await response.json()
-
-      if (result.status === 'success' && result.data) {
-        if (isHypergraphFormat(result.data)) {
+  // Load pylink graph from a .json file (native file picker; read in browser)
+  const handleLoadFileSelected = useCallback(
+    (file: File) => {
+      const reader = new FileReader()
+      reader.onload = () => {
+        try {
+          const text = reader.result as string
+          const data = JSON.parse(text) as unknown
+          if (!isHypergraphFormat(data)) {
+            showStatus('Load failed: file is not a valid mechanism document (legacy format not supported)', 'error', 5000)
+            return
+          }
           applyLoadedDocument({
-            doc: result.data,
+            doc: data,
             setLinkageDoc,
             setDrawnObjects: (s) => setDrawnObjects(s as DrawnObjectsState),
+            setCanvases: (c) => setCanvases(Array.isArray(c) ? c : []),
             setSelectedJoints,
             setSelectedLinks,
             clearTrajectory: animation.clearTrajectory,
             triggerMechanismChange
           })
-          setStoredGraphFilename(result.filename)
-          showStatus(`Loaded ${result.filename}`, 'success', 3000)
-        } else {
-          showStatus(`Cannot load ${result.filename} - legacy format not supported`, 'error', 5000)
+          setStoredGraphFilename(file.name)
+          showStatus(`Loaded ${file.name}`, 'success', 3000)
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err)
+          showStatus(`Load failed: ${msg}`, 'error', 5000)
         }
-      } else {
-        showStatus(result.message || 'Load failed', 'error', 3000)
       }
-    } catch (error) {
-      showStatus(`Load error: ${error}`, 'error', 3000)
-    }
-  }
+      reader.onerror = () => showStatus('Load failed: could not read file', 'error', 5000)
+      reader.readAsText(file)
+    },
+    [
+      isHypergraphFormat,
+      applyLoadedDocument,
+      setLinkageDoc,
+      setDrawnObjects,
+      setCanvases,
+      setSelectedJoints,
+      setSelectedLinks,
+      animation.clearTrajectory,
+      triggerMechanismChange,
+      showStatus
+    ]
+  )
 
-  // Save pylink graph with custom filename
-  const savePylinkGraphAs = async () => {
-    const suggestedName = linkageDoc.name || 'untitled'
-    const filename = prompt('Enter filename to save as:', suggestedName)
+  // Suggested default for Save As: doc name or acinonyx-YYYYMMDD
+  const suggestedSaveAsName =
+    linkageDoc.name && linkageDoc.name !== 'untitled'
+      ? linkageDoc.name
+      : `acinonyx-${new Date().toISOString().slice(0, 10).replace(/-/g, '')}`
 
-    if (!filename) {
-      showStatus('Save cancelled', 'info', 2000)
-      return
-    }
-
-    try {
-      showStatus('Saving...', 'action')
-      // Include drawnObjects in the document for persistence
-      const docToSave = {
-        ...linkageDoc,
-        drawnObjects: drawnObjects.objects.length > 0 ? drawnObjects.objects : undefined
-      }
-      const response = await fetch('/api/save-pylink-graph-as', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          data: docToSave,
-          filename: filename
+  const handleSaveAs = useCallback(
+    async (filename: string) => {
+      if (!filename.trim()) return
+      try {
+        showStatus('Saving...', 'action')
+        const docToSave = {
+          ...linkageDoc,
+          drawnObjects: drawnObjects.objects.length > 0 ? drawnObjects.objects : undefined,
+          canvases: canvases.length > 0 ? canvases : undefined
+        }
+        const response = await fetch('/api/save-pylink-graph-as', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            data: docToSave,
+            filename: filename.trim()
+          })
         })
-      })
 
-      if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`)
-      const result = await response.json()
+        if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`)
+        const result = await response.json()
 
-      if (result.status === 'success') {
-        setStoredGraphFilename(result.filename)
-        showStatus(`Saved as ${result.filename}`, 'success', 3000)
-      } else {
-        showStatus(result.message || 'Save failed', 'error', 3000)
+        if (result.status === 'success') {
+          setStoredGraphFilename(result.filename)
+          showStatus(`Saved as ${result.filename}`, 'success', 3000)
+        } else {
+          showStatus(result.message || 'Save failed', 'error', 3000)
+        }
+      } catch (error) {
+        showStatus(`Save error: ${error}`, 'error', 3000)
       }
-    } catch (error) {
-      showStatus(`Save error: ${error}`, 'error', 3000)
-    }
-  }
+    },
+    [linkageDoc, drawnObjects.objects, canvases, showStatus]
+  )
+
+  const handleClearAll = useCallback(() => {
+    setLinkageDoc(createEmptyLinkageDocument('untitled'))
+    setDrawnObjects(initialDrawnObjectsState)
+    setCanvases([])
+    setSelectedJoints([])
+    setSelectedLinks([])
+    animation.clearTrajectory()
+    setStoredGraphFilename(null)
+    showStatus('Cleared. Starting with an empty mechanism.', 'info', 3000)
+  }, [
+    setLinkageDoc,
+    setDrawnObjects,
+    setCanvases,
+    setSelectedJoints,
+    setSelectedLinks,
+    animation.clearTrajectory,
+    showStatus
+  ])
 
   // Compose: container → canvas area (with toolbars) → animate toolbar → modals
   return (
@@ -2201,24 +2603,29 @@ const BuilderTab: React.FC = () => {
           syncToOptimizerResult: optimization.syncToOptimizerResult
         }}
         showGrid={showGrid}
+        viewport={viewport.viewport}
         onMouseDown={handleCanvasMouseDown}
         onMouseMove={handleCanvasMouseMove}
         onMouseUp={handleCanvasMouseUp}
-        onMouseLeave={handleCanvasMouseUp}
+        onMouseLeave={handleCanvasMouseLeave}
         onClick={handleCanvasClick}
         onDoubleClick={handleCanvasDoubleClick}
         renderGrid={layerRenders.renderGrid}
+        renderCanvases={layerRenders.renderCanvases}
         renderDrawnObjects={layerRenders.renderDrawnObjects}
         renderLinks={layerRenders.renderLinks}
         renderPreviewLine={layerRenders.renderPreviewLine}
         renderPolygonPreview={layerRenders.renderPolygonPreview}
         renderTargetPaths={layerRenders.renderTargetPaths}
         renderPathPreview={layerRenders.renderPathPreview}
+        renderExplorationTrajectories={layerRenders.renderExplorationTrajectories}
         renderTrajectories={layerRenders.renderTrajectories}
+        renderExplorationDots={layerRenders.renderExplorationDots}
         renderJoints={layerRenders.renderJoints}
         renderSelectionBox={layerRenders.renderSelectionBox}
         renderMeasurementMarkers={layerRenders.renderMeasurementMarkers}
         renderMeasurementLine={layerRenders.renderMeasurementLine}
+        exploreModeActive={toolMode === 'explore_node_trajectories' && exploreTrajectoriesState.exploreSamples.length > 0}
         toolMode={toolMode}
         jointCount={pylinkDoc.pylinkage.joints.length}
         linkCount={Object.keys(pylinkDoc.meta.links).length}
@@ -2258,6 +2665,7 @@ const BuilderTab: React.FC = () => {
         pauseAnimation={animation.pauseAnimation}
         stopAnimation={animation.stopAnimation}
         setPlaybackSpeed={animation.setPlaybackSpeed}
+        setPlaybackDirection={animation.setPlaybackDirection}
         setAnimatedPositions={animation.setAnimatedPositions}
         setFrame={animation.setAnimationFrame}
         isSimulating={animation.isSimulating}

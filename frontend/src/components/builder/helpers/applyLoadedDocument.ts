@@ -11,6 +11,7 @@ export interface ApplyLoadedDocumentParams {
   doc: LinkageDocument
   setLinkageDoc: (doc: LinkageDocument) => void
   setDrawnObjects: (state: { objects: unknown[]; selectedIds: string[] }) => void
+  setCanvases?: (canvases: LinkageDocument['canvases']) => void
   setSelectedJoints: (ids: string[]) => void
   setSelectedLinks: (ids: string[]) => void
   clearTrajectory: () => void
@@ -27,6 +28,7 @@ export function applyLoadedDocument(params: ApplyLoadedDocumentParams): void {
     doc,
     setLinkageDoc,
     setDrawnObjects,
+    setCanvases,
     setSelectedJoints,
     setSelectedLinks,
     clearTrajectory,
@@ -38,6 +40,9 @@ export function applyLoadedDocument(params: ApplyLoadedDocumentParams): void {
     objects: Array.isArray(doc.drawnObjects) ? doc.drawnObjects : [],
     selectedIds: []
   })
+  if (setCanvases) {
+    setCanvases(Array.isArray(doc.canvases) ? doc.canvases : [])
+  }
   setSelectedJoints([])
   setSelectedLinks([])
   clearTrajectory()

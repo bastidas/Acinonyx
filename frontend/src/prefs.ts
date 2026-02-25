@@ -17,7 +17,7 @@ const COOKIE_EXPIRES_DAYS = 365
 export type StoredCanvasBgColor = 'default' | 'white' | 'cream' | 'dark'
 export type StoredTrajectoryStyle = 'dots' | 'line' | 'both'
 export type StoredSelectionHighlightColor = 'blue' | 'orange' | 'green' | 'purple'
-export type StoredColorCycleType = 'rainbow' | 'fire' | 'glow'
+export type StoredColorCycleType = 'rainbow' | 'fire' | 'glow' | 'twilight' | 'husl'
 
 export interface StoredSettings {
   showGrid: boolean
@@ -35,6 +35,16 @@ export interface StoredSettings {
   trajectoryDotOpacity: number
   selectionHighlightColor: StoredSelectionHighlightColor
   trajectoryStyle: StoredTrajectoryStyle
+  /** Trajectory exploration: max radius in units (5–50). */
+  exploreRadius: number
+  /** Trajectory exploration: number of radial sample points (8–360). */
+  exploreRadialSamples: number
+  /** Trajectory exploration: max N1×N2 for combinatorial run (64–5128). */
+  exploreNMaxCombinatorial: number
+  /** Trajectory exploration: color-map dots and trajectories by angle/radius (default on). */
+  exploreColormapEnabled: boolean
+  /** Trajectory exploration: colormap type when exploreColormapEnabled is true. */
+  exploreColormapType: 'rainbow' | 'twilight' | 'husl'
 }
 
 const MIN_SIMULATION_STEPS = 4
@@ -55,13 +65,21 @@ export const DEFAULT_STORED_SETTINGS: StoredSettings = {
   trajectoryDotOutline: false,
   trajectoryDotOpacity: 0.85,
   selectionHighlightColor: 'blue',
-  trajectoryStyle: 'both'
+  trajectoryStyle: 'both',
+  exploreRadius: 20,
+  exploreRadialSamples: 10,
+  exploreAzimuthalSamples: 16,
+  exploreNMaxCombinatorial: 2048,
+  exploreColormapEnabled: true,
+  exploreColormapType: 'rainbow'
 }
 
 const VALID_CANVAS_BG: StoredCanvasBgColor[] = ['default', 'white', 'cream', 'dark']
 const VALID_TRAJECTORY_STYLE: StoredTrajectoryStyle[] = ['dots', 'line', 'both']
 const VALID_SELECTION_COLOR: StoredSelectionHighlightColor[] = ['blue', 'orange', 'green', 'purple']
-const VALID_COLOR_CYCLE: StoredColorCycleType[] = ['rainbow', 'fire', 'glow']
+const VALID_COLOR_CYCLE: StoredColorCycleType[] = ['rainbow', 'fire', 'glow', 'twilight', 'husl']
+export type StoredExploreColormapType = 'rainbow' | 'twilight' | 'husl'
+const VALID_EXPLORE_COLORMAP_TYPE: StoredExploreColormapType[] = ['rainbow', 'twilight', 'husl']
 
 function clampNum(value: unknown, min: number, max: number, fallback: number): number {
   const n = typeof value === 'number' && !Number.isNaN(value) ? value : fallback
@@ -92,7 +110,13 @@ export function getStoredSettings(): StoredSettings {
       trajectoryDotOutline: typeof parsed.trajectoryDotOutline === 'boolean' ? parsed.trajectoryDotOutline : DEFAULT_STORED_SETTINGS.trajectoryDotOutline,
       trajectoryDotOpacity: clampNum(parsed.trajectoryDotOpacity, 0, 1, DEFAULT_STORED_SETTINGS.trajectoryDotOpacity),
       selectionHighlightColor: oneOf(parsed.selectionHighlightColor, VALID_SELECTION_COLOR, DEFAULT_STORED_SETTINGS.selectionHighlightColor),
-      trajectoryStyle: oneOf(parsed.trajectoryStyle, VALID_TRAJECTORY_STYLE, DEFAULT_STORED_SETTINGS.trajectoryStyle)
+      trajectoryStyle: oneOf(parsed.trajectoryStyle, VALID_TRAJECTORY_STYLE, DEFAULT_STORED_SETTINGS.trajectoryStyle),
+      exploreRadius: clampNum(parsed.exploreRadius, 5, 50, DEFAULT_STORED_SETTINGS.exploreRadius),
+      exploreRadialSamples: clampNum(parsed.exploreRadialSamples, 8, 360, DEFAULT_STORED_SETTINGS.exploreRadialSamples),
+      exploreAzimuthalSamples: clampNum(parsed.exploreAzimuthalSamples, 8, 45, DEFAULT_STORED_SETTINGS.exploreAzimuthalSamples),
+      exploreNMaxCombinatorial: clampNum(parsed.exploreNMaxCombinatorial, 64, 5128, DEFAULT_STORED_SETTINGS.exploreNMaxCombinatorial),
+      exploreColormapEnabled: typeof parsed.exploreColormapEnabled === 'boolean' ? parsed.exploreColormapEnabled : DEFAULT_STORED_SETTINGS.exploreColormapEnabled,
+      exploreColormapType: oneOf(parsed.exploreColormapType, VALID_EXPLORE_COLORMAP_TYPE, DEFAULT_STORED_SETTINGS.exploreColormapType)
     }
   } catch {
     return { ...DEFAULT_STORED_SETTINGS }

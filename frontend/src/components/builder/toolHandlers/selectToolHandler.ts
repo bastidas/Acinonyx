@@ -12,7 +12,7 @@ export const selectToolHandler: ToolHandler = {
   onMouseDown(event, point, context) {
     if (context.toolMode !== 'select') return false
     const jointsWithPositions = context.getJointsWithPositions()
-    const nearestJoint = context.findNearestJoint(point, jointsWithPositions)
+    const nearestJoint = context.findNearestJoint(point, jointsWithPositions, context.snapThreshold)
     if (!nearestJoint) return false
 
     context.setDragState({

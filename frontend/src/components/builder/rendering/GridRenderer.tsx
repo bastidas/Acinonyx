@@ -2,10 +2,18 @@
  * Grid Renderer
  *
  * Pure function to render the background grid on the canvas.
+ * Grid extent is fixed from -CANVAS_GRID_EXTENT to +CANVAS_GRID_EXTENT in units
+ * so zooming out shows a larger coordinate space.
  */
 
 import React from 'react'
+import { CANVAS_GRID_EXTENT } from '../constants'
 import { GridRendererProps } from './types'
+
+const GRID_MIN = -CANVAS_GRID_EXTENT
+const GRID_MAX = CANVAS_GRID_EXTENT
+const MAJOR_STEP = 20
+const MINOR_OFFSET = 10
 
 /**
  * Renders a grid with major and minor lines
@@ -14,60 +22,61 @@ import { GridRendererProps } from './types'
  * - Major grid every 20 units (solid lines)
  * - Minor grid every 10 units (dashed lines)
  * - Labels on major grid lines
+ * - Extent: -500 to +500 units on both axes (for zoom-out)
  */
 export function renderGrid({
-  canvasDimensions,
+  canvasDimensions: _canvasDimensions,
   darkMode,
   unitsToPixels,
-  pixelsToUnits
+  pixelsToUnits: _pixelsToUnits
 }: GridRendererProps): JSX.Element[] {
   const lines: JSX.Element[] = []
-  const maxUnitsX = pixelsToUnits(canvasDimensions.width)
-  const maxUnitsY = pixelsToUnits(canvasDimensions.height)
+  const yOriginPx = unitsToPixels(0)
+  const gridMinPx = unitsToPixels(GRID_MIN)
+  const gridMaxPx = unitsToPixels(GRID_MAX)
 
-  // Get colors based on dark mode
   const gridMajorColor = darkMode ? '#444444' : '#dddddd'
   const gridMinorColor = darkMode ? '#333333' : '#eeeeee'
   const gridTextColor = darkMode ? '#666666' : '#999999'
 
   // Major grid every 20 units - vertical lines
-  for (let i = 0; i <= Math.ceil(maxUnitsX); i += 20) {
+  for (let i = Math.floor(GRID_MIN / MAJOR_STEP) * MAJOR_STEP; i <= GRID_MAX; i += MAJOR_STEP) {
+    const x = unitsToPixels(i)
     lines.push(
       <line
         key={`v-major-${i}`}
-        x1={unitsToPixels(i)}
-        y1={0}
-        x2={unitsToPixels(i)}
-        y2={canvasDimensions.height + 1}
+        x1={x}
+        y1={gridMinPx}
+        x2={x}
+        y2={gridMaxPx}
         stroke={gridMajorColor}
         strokeWidth={1}
       />
     )
-    if (i > 0) {
-      lines.push(
-        <text key={`vl-${i}`} x={unitsToPixels(i) + 2} y={12} fontSize="10" fill={gridTextColor}>
-          {i}
-        </text>
-      )
-    }
+    lines.push(
+      <text key={`vl-${i}`} x={x + 2} y={yOriginPx - 2} fontSize="10" fill={gridTextColor}>
+        {i}
+      </text>
+    )
   }
 
   // Major grid every 20 units - horizontal lines
-  for (let i = 0; i <= Math.ceil(maxUnitsY); i += 20) {
+  for (let i = Math.floor(GRID_MIN / MAJOR_STEP) * MAJOR_STEP; i <= GRID_MAX; i += MAJOR_STEP) {
+    const y = unitsToPixels(i)
     lines.push(
       <line
         key={`h-major-${i}`}
-        x1={0}
-        y1={unitsToPixels(i)}
-        x2={canvasDimensions.width + 1}
-        y2={unitsToPixels(i)}
+        x1={gridMinPx}
+        y1={y}
+        x2={gridMaxPx}
+        y2={y}
         stroke={gridMajorColor}
         strokeWidth={1}
       />
     )
-    if (i > 0) {
+    if (i !== 0) {
       lines.push(
-        <text key={`hl-${i}`} x={2} y={unitsToPixels(i) - 2} fontSize="10" fill={gridTextColor}>
+        <text key={`hl-${i}`} x={unitsToPixels(1)} y={y - 2} fontSize="10" fill={gridTextColor}>
           {i}
         </text>
       )
@@ -75,14 +84,15 @@ export function renderGrid({
   }
 
   // Minor grid every 10 units (offset from major) - vertical lines
-  for (let i = 10; i <= Math.ceil(maxUnitsX); i += 20) {
+  for (let i = Math.floor(GRID_MIN / MAJOR_STEP) * MAJOR_STEP + MINOR_OFFSET; i <= GRID_MAX; i += MAJOR_STEP) {
+    const x = unitsToPixels(i)
     lines.push(
       <line
         key={`v-minor-${i}`}
-        x1={unitsToPixels(i)}
-        y1={0}
-        x2={unitsToPixels(i)}
-        y2={canvasDimensions.height + 1}
+        x1={x}
+        y1={gridMinPx}
+        x2={x}
+        y2={gridMaxPx}
         stroke={gridMinorColor}
         strokeWidth={0.5}
         strokeDasharray="2,4"
@@ -91,14 +101,15 @@ export function renderGrid({
   }
 
   // Minor grid every 10 units (offset from major) - horizontal lines
-  for (let i = 10; i <= Math.ceil(maxUnitsY); i += 20) {
+  for (let i = Math.floor(GRID_MIN / MAJOR_STEP) * MAJOR_STEP + MINOR_OFFSET; i <= GRID_MAX; i += MAJOR_STEP) {
+    const y = unitsToPixels(i)
     lines.push(
       <line
         key={`h-minor-${i}`}
-        x1={0}
-        y1={unitsToPixels(i)}
-        x2={canvasDimensions.width + 1}
-        y2={unitsToPixels(i)}
+        x1={gridMinPx}
+        y1={y}
+        x2={gridMaxPx}
+        y2={y}
         stroke={gridMinorColor}
         strokeWidth={0.5}
         strokeDasharray="2,4"

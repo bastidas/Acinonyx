@@ -14,7 +14,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pylinkage.joints import Crank
 from pylinkage.joints import Static
 
-from configs.appconfig import USER_DIR
+from configs.appconfig import GRAPHS_DIR
 from demo.helpers import create_mechanism_from_dict
 from multi.dim_tools import reduce_dimensions
 from pylink_tools.hypergraph_adapter import sync_hypergraph_distances
@@ -167,24 +167,27 @@ def create_mechanism_from_request(request: dict, n_steps: int | None = None):
 
 @app.post('/save-pylink-graph')
 def save_pylink_graph(pylink_data: dict):
-    """Save a pylink graph to the graphs directory"""
+    """Save a pylink graph to the graphs directory.
+    Request body may include optional 'filename'; if omitted, uses acinonyx-YYYYMMDD.json.
+    """
     try:
-        # Ensure USER_DIR exists first
-        USER_DIR.mkdir(parents=True, exist_ok=True)
-        graphs_dir = USER_DIR / 'graphs'
-        graphs_dir.mkdir(parents=True, exist_ok=True)
+        GRAPHS_DIR.mkdir(parents=True, exist_ok=True)
 
-        # Use provided name or generate timestamp
-        name = pylink_data.get('name', 'pylink')
+        custom_filename = pylink_data.get('filename')
+        if custom_filename and isinstance(custom_filename, str) and custom_filename.strip():
+            filename = custom_filename.strip()
+            if not filename.endswith('.json'):
+                filename += '.json'
+        else:
+            date_str = datetime.now().strftime('%Y%m%d')
+            filename = f'acinonyx-{date_str}.json'
+
+        save_path = GRAPHS_DIR / filename
         time_mark = datetime.now().strftime('%Y%m%d_%H%M%S')
-        filename = f'{name}_{time_mark}.json'
-        save_path = graphs_dir / filename
 
-        # Add metadata
-        save_data = {
-            **pylink_data,
-            'saved_at': time_mark,
-        }
+        # Add metadata (exclude 'filename' from saved document)
+        save_data = {k: v for k, v in pylink_data.items() if k != 'filename'}
+        save_data['saved_at'] = time_mark
 
         with open(save_path, 'w') as f:
             json.dump(save_data, f, indent=2)
@@ -212,10 +215,7 @@ def save_pylink_graph_as(request: dict):
         pylink_data = request.get('data', {})
         custom_filename = request.get('filename', '')
 
-        # Ensure USER_DIR exists first
-        USER_DIR.mkdir(parents=True, exist_ok=True)
-        graphs_dir = USER_DIR / 'graphs'
-        graphs_dir.mkdir(parents=True, exist_ok=True)
+        GRAPHS_DIR.mkdir(parents=True, exist_ok=True)
 
         # Use custom filename or generate from name
         if custom_filename:
@@ -228,7 +228,7 @@ def save_pylink_graph_as(request: dict):
             time_mark = datetime.now().strftime('%Y%m%d_%H%M%S')
             filename = f'{name}_{time_mark}.json'
 
-        save_path = graphs_dir / filename
+        save_path = GRAPHS_DIR / filename
 
         # Add metadata
         time_mark = datetime.now().strftime('%Y%m%d_%H%M%S')
@@ -260,18 +260,14 @@ def save_pylink_graph_as(request: dict):
 def list_pylink_graphs():
     """List all saved pylink graphs"""
     try:
-        # Ensure USER_DIR exists first
-        USER_DIR.mkdir(parents=True, exist_ok=True)
-        graphs_dir = USER_DIR / 'graphs'
-
-        if not graphs_dir.exists():
+        if not GRAPHS_DIR.exists():
             return {
                 'status': 'success',
                 'files': [],
             }
 
         files = []
-        for f in sorted(graphs_dir.glob('*.json'), key=lambda x: x.stat().st_mtime, reverse=True):
+        for f in sorted(GRAPHS_DIR.glob('*.json'), key=lambda x: x.stat().st_mtime, reverse=True):
             try:
                 with open(f) as fp:
                     data = json.load(fp)
@@ -307,11 +303,7 @@ def list_pylink_graphs():
 def load_pylink_graph(filename: str | None = None):
     """Load a pylink graph from the graphs directory"""
     try:
-        # Ensure USER_DIR exists first
-        USER_DIR.mkdir(parents=True, exist_ok=True)
-        graphs_dir = USER_DIR / 'graphs'
-
-        if not graphs_dir.exists():
+        if not GRAPHS_DIR.exists():
             return {
                 'status': 'error',
                 'message': 'No graphs directory found',
@@ -319,7 +311,7 @@ def load_pylink_graph(filename: str | None = None):
 
         if filename:
             # Load specific file
-            file_path = graphs_dir / filename
+            file_path = GRAPHS_DIR / filename
             if not file_path.exists():
                 return {
                     'status': 'error',
@@ -327,7 +319,7 @@ def load_pylink_graph(filename: str | None = None):
                 }
         else:
             # Load most recent file
-            files = list(graphs_dir.glob('*.json'))
+            files = list(GRAPHS_DIR.glob('*.json'))
             if not files:
                 return {
                     'status': 'error',
@@ -736,6 +728,84 @@ def compute_pylink_trajectory(request: dict):
             'message': f'Failed to compute trajectory: {str(e)}',
             'traceback': traceback.format_exc().split('\n'),
         }
+
+
+@app.post('/compute-pylink-trajectories-batch')
+def compute_pylink_trajectories_batch(request: dict):
+    """
+    Compute joint trajectories for multiple mechanism variants in one request.
+
+    Request body:
+        {
+            "requests": [
+                { ...doc (same as single endpoint), "n_steps": 12 },
+                ...
+            ]
+        }
+
+    Returns:
+        {
+            "results": [
+                { "status": "success"|"error", "trajectories": {...}?, "n_steps"?: int, "message"?: str },
+                ...
+            ]
+        }
+    """
+    try:
+        requests_list = request.get('requests', [])
+        if not isinstance(requests_list, list):
+            return {'status': 'error', 'message': 'Missing or invalid "requests" array'}
+        results = []
+        for i, req in enumerate(requests_list):
+            try:
+                n_steps = req.get('n_steps', 12)
+                mechanism = create_mechanism_from_request(req, n_steps=n_steps)
+                trajectory_array = mechanism.simulate()
+                has_nan = np.isnan(trajectory_array).any()
+                has_inf = np.isinf(trajectory_array).any()
+                if has_nan or has_inf:
+                    results.append({
+                        'status': 'error',
+                        'message': 'Unsolvable mechanism (NaN or infinite values)',
+                        'trajectories': None,
+                    })
+                    continue
+                trajectories = {}
+                for j, joint_name in enumerate(mechanism._joint_names):
+                    positions = []
+                    for step in range(mechanism._n_steps):
+                        x, y = trajectory_array[step, j, 0], trajectory_array[step, j, 1]
+                        positions.append([float(x), float(y)])
+                    trajectories[joint_name] = positions
+                joint_types = {}
+                for joint in mechanism.linkage.joints:
+                    if isinstance(joint, Static):
+                        joint_types[joint.name] = 'Static'
+                    elif isinstance(joint, Crank):
+                        joint_types[joint.name] = 'Crank'
+                    else:
+                        joint_types[joint.name] = 'Revolute'
+                results.append({
+                    'status': 'success',
+                    'trajectories': trajectories,
+                    'n_steps': n_steps,
+                    'joint_types': joint_types,
+                })
+            except Exception as e:
+                results.append({
+                    'status': 'error',
+                    'message': str(e),
+                    'trajectories': None,
+                })
+        return sanitize_for_json({'results': results})
+    except Exception as e:
+        print(f'Error in compute-pylink-trajectories-batch: {e}')
+        traceback.print_exc()
+        return sanitize_for_json({
+            'status': 'error',
+            'message': str(e),
+            'results': None,
+        })
 
 
 @app.post('/validate-mechanism')
@@ -1278,68 +1348,36 @@ def optimize_trajectory_endpoint(request: dict):
                     logger.info(f'✓ Validation passed: All {len(validation_details)} optimized dimensions match edge distances')
         # #endregion
 
-        # Update node positions from simulation (after to_dict() so the update is preserved)
-        # IMPORTANT: If optimization succeeded, we return the optimized mechanism even if simulation fails.
-        # The optimization result is valid - we just can't update positions from simulation.
-        # Only fail if the optimization itself failed.
-        if result.success and optimized_mechanism and result_dict.get('optimized_pylink_data'):
-            try:
-                # CRITICAL: Get FULL simulation trajectory (all joints, all steps)
-                # Shape: (n_steps, n_joints, 2) - we need ALL joint positions, not just target
-                full_trajectory = optimized_mechanism.simulate()
-
-                if full_trajectory is not None and len(full_trajectory) > 0:
-                    # Check for NaN or Inf values in trajectory (indicates unsolvable mechanism)
-                    has_nan = np.isnan(full_trajectory).any()
-                    has_inf = np.isinf(full_trajectory).any()
-
-                    if has_nan or has_inf:
-                        error_reasons = []
-                        if has_nan:
-                            error_reasons.append('NaN values in trajectory')
-                        if has_inf:
-                            error_reasons.append('infinite values in trajectory')
-
-                        error_msg = f'Cannot simulate optimized mechanism: {", ".join(error_reasons)}. '
-                        error_msg += 'Optimization succeeded, but mechanism cannot be simulated. Returning optimized dimensions anyway.'
-
-                        logger.warning(f'Optimized mechanism cannot be simulated: {error_msg}')
-                        # DO NOT mark as failed - optimization succeeded, we just can't simulate it
-                        # The optimized dimensions are still valid and should be returned
-
-                        # Don't update node positions if mechanism is unsolvable
-                    else:
-                        # Mechanism is solvable - update ALL node positions from simulation
-                        # CRITICAL: All node positions must match edge distances - no inconsistent data!
-                        optimized_pylink_data = result_dict.get('optimized_pylink_data')
-                        if optimized_pylink_data:
-                            nodes = optimized_pylink_data.get('linkage', {}).get('nodes', {})
-
-                            # Update ALL node positions from first frame of simulation
-                            # full_trajectory shape: (n_steps, n_joints, 2)
-                            # We use step 0 (first frame) to get initial positions
-                            first_frame = full_trajectory[0]  # Shape: (n_joints, 2)
-
-                            updated_count = 0
-                            for i, joint_name in enumerate(optimized_mechanism._joint_names):
-                                if joint_name in nodes and i < len(first_frame):
-                                    x, y = float(first_frame[i, 0]), float(first_frame[i, 1])
-                                    nodes[joint_name]['position'] = [x, y]
-                                    updated_count += 1
-
-                            logger.info(f'Updated {updated_count} node positions from simulation (ensuring consistency with edge distances)')
-            except Exception as e:
-                logger.warning(f'Could not update node positions from simulation: {e}')
-                # DO NOT mark as failed - optimization succeeded, we just can't simulate it
-                # The optimized dimensions are still valid and should be returned
-                # Log the warning but continue to return the successful optimization result
-
-        # Preserve metadata from original linkage (link colors, node colors, showPath, link names, etc.)
-        # Note: In the future, optimization may add or remove links/nodes, so we only preserve
-        # metadata for nodes/edges that still exist in the optimized linkage
+        # Reconcile edge distances to node positions so the payload is self-consistent.
+        # Some edges (e.g. rigid/dependent links) are determined by geometry; setting each
+        # edge's distance from the two node positions avoids position/distance mismatch
+        # on the frontend and lets dependent link lengths be "found" from positions.
         opt_data = result_dict.get('optimized_pylink_data')
         if result.success and opt_data is not None:
             optimized_pylink_data = opt_data
+            linkage_data = optimized_pylink_data.get('linkage', {})
+            nodes = linkage_data.get('nodes', {})
+            edges = linkage_data.get('edges', {})
+            reconciled = 0
+            for edge_id, edge in edges.items():
+                src_id = edge.get('source')
+                tgt_id = edge.get('target')
+                src_node = nodes.get(src_id) if src_id else None
+                tgt_node = nodes.get(tgt_id) if tgt_id else None
+                if not src_node or not tgt_node:
+                    continue
+                pos_src = src_node.get('position')
+                pos_tgt = tgt_node.get('position')
+                if not pos_src or not pos_tgt or len(pos_src) < 2 or len(pos_tgt) < 2:
+                    continue
+                dx = float(pos_tgt[0]) - float(pos_src[0])
+                dy = float(pos_tgt[1]) - float(pos_src[1])
+                dist = math.sqrt(dx * dx + dy * dy)
+                if dist > 0:
+                    edge['distance'] = dist
+                    reconciled += 1
+            if reconciled:
+                logger.info(f'Reconciled {reconciled} edge distances to node positions (consistent linkage)')
 
             # Ensure meta structure exists
             if 'meta' not in optimized_pylink_data:

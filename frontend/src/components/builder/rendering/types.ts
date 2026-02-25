@@ -107,7 +107,7 @@ export interface LinksRendererProps {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 export type TrajectoryStyle = 'dots' | 'line' | 'both'
-export type ColorCycleType = 'rainbow' | 'fire' | 'glow'
+export type ColorCycleType = 'rainbow' | 'fire' | 'glow' | 'twilight' | 'husl'
 
 export interface TrajectoryRenderData {
   jointName: string
@@ -138,6 +138,30 @@ export interface GridRendererProps {
   darkMode: boolean
   unitsToPixels: (units: number) => number
   pixelsToUnits: (pixels: number) => number
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// CANVAS IMAGES RENDERING (reference/overlay images)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+export interface CanvasImageRenderItem {
+  id: string
+  dataUrl: string
+  position: Position
+  scale: number
+  alpha: number
+  naturalWidth: number
+  naturalHeight: number
+}
+
+export interface CanvasImagesRendererProps {
+  canvases: CanvasImageRenderItem[]
+  unitsToPixels: (units: number) => number
+  pixelsToUnits: (pixels: number) => number
+  /** Double-click on handle opens edit dialog for this canvas */
+  onRequestEdit: (id: string) => void
+  /** Drag handle updates canvas position */
+  onPositionChange: (id: string, position: [number, number]) => void
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -254,4 +278,53 @@ export interface MeasurementLineRendererProps {
   startPoint: Position | null
   isMeasuring: boolean
   unitsToPixels: (units: number) => number
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// EXPLORATION (explore_node_trajectories tool)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+export type ExploreTrajectoriesMode = 'single' | 'path' | 'combinatorial'
+
+export interface ExplorationDotsRendererProps {
+  samples: Array<{ position: Position; valid: boolean }>
+  hoveredIndex: number | null
+  unitsToPixels: (units: number) => number
+  /** When set (e.g. combinatorial mode with deduplicated dots), highlight the dot at this position instead of by index. */
+  hoveredPosition?: [number, number] | null
+  /** When true, color valid dots by angle/radius and invalid dots grey. Combinatorial: color by second-node position (one dot per unique position, M trajectories per color). */
+  exploreColormapEnabled?: boolean
+  exploreColormapType?: 'rainbow' | 'twilight' | 'husl'
+  exploreCenter?: [number, number] | null
+  exploreRadius?: number
+  exploreMode?: ExploreTrajectoriesMode
+}
+
+export interface ExplorationTrajectoriesRendererProps {
+  /** Per-sample trajectory data; only items with valid && trajectory are drawn */
+  samples: Array<{
+    position: Position
+    valid: boolean
+    trajectory: { trajectories: Record<string, Position[]>; nSteps: number; jointTypes?: Record<string, string> } | null
+  }>
+  hoveredIndex: number | null
+  /** When set (combinatorial), highlight all trajectories at this second-node position when hover came from dot; also used to highlight associated dot. */
+  hoveredPosition?: [number, number] | null
+  /** When true (combinatorial), hover came from a trajectory path: highlight only that single trajectory; else from dot: highlight all at position. */
+  hoveredFromTrajectoryPath?: boolean
+  /** First exploration node id (combinatorial); when drawing hovered trajectory, always show this node's path even if show_path was false. */
+  exploreNodeId?: string | null
+  unitsToPixels: (units: number) => number
+  /** If set, only draw trajectories for these joint names (e.g. joints with showPath). Else draw all Crank/Revolute. */
+  jointNamesToShow?: string[]
+  /** Opacity for non-hovered trajectories (default 0.05) */
+  baseOpacity?: number
+  /** Opacity for hovered trajectory (default 0.8) */
+  hoveredOpacity?: number
+  /** When true, stroke each trajectory with the same color as its sample dot. Combinatorial: color by second-node position (M trajectories same color). */
+  exploreColormapEnabled?: boolean
+  exploreColormapType?: 'rainbow' | 'twilight' | 'husl'
+  exploreCenter?: [number, number] | null
+  exploreRadius?: number
+  exploreMode?: ExploreTrajectoriesMode
 }

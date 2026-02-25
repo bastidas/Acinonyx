@@ -11,7 +11,15 @@ import {
   MIN_SIMULATION_STEPS,
   MAX_SIMULATION_STEPS,
   DEFAULT_AUTO_SIMULATE_DELAY_MS,
-  DEFAULT_JOINT_MERGE_RADIUS
+  DEFAULT_JOINT_MERGE_RADIUS,
+  EXPLORE_RADIUS_MIN,
+  EXPLORE_RADIUS_MAX,
+  EXPLORE_RADIAL_SAMPLES_MIN,
+  EXPLORE_RADIAL_SAMPLES_MAX,
+  EXPLORE_AZIMUTHAL_SAMPLES_MIN,
+  EXPLORE_AZIMUTHAL_SAMPLES_MAX,
+  EXPLORE_NMAX_COMBINATORIAL_MIN,
+  EXPLORE_NMAX_COMBINATORIAL_MAX
 } from '../constants'
 
 export type CanvasBgColor = 'default' | 'white' | 'cream' | 'dark'
@@ -63,6 +71,20 @@ export interface SettingsToolbarProps {
   // Animation
   trajectoryStyle: TrajectoryStyle
   setTrajectoryStyle: (style: TrajectoryStyle) => void
+
+  // Trajectory exploration (explore node trajectories tool)
+  exploreRadius: number
+  setExploreRadius: (radius: number) => void
+  exploreRadialSamples: number
+  setExploreRadialSamples: (n: number) => void
+  exploreAzimuthalSamples: number
+  setExploreAzimuthalSamples: (n: number) => void
+  exploreNMaxCombinatorial: number
+  setExploreNMaxCombinatorial: (n: number) => void
+  exploreColormapEnabled: boolean
+  setExploreColormapEnabled: (enabled: boolean) => void
+  exploreColormapType: 'rainbow' | 'twilight' | 'husl'
+  setExploreColormapType: (type: 'rainbow' | 'twilight' | 'husl') => void
 }
 
 export const SettingsToolbar: React.FC<SettingsToolbarProps> = ({
@@ -81,7 +103,13 @@ export const SettingsToolbar: React.FC<SettingsToolbarProps> = ({
   trajectoryDotSize, setTrajectoryDotSize,
   trajectoryDotOutline, setTrajectoryDotOutline,
   trajectoryDotOpacity, setTrajectoryDotOpacity,
-  trajectoryStyle, setTrajectoryStyle
+  trajectoryStyle, setTrajectoryStyle,
+  exploreRadius, setExploreRadius,
+  exploreRadialSamples, setExploreRadialSamples,
+  exploreAzimuthalSamples, setExploreAzimuthalSamples,
+  exploreNMaxCombinatorial, setExploreNMaxCombinatorial,
+  exploreColormapEnabled, setExploreColormapEnabled,
+  exploreColormapType, setExploreColormapType
 }) => {
   const sectionTitle = { fontWeight: 600, color: 'text.secondary', fontSize: '0.7rem', mb: 0.35 }
   const row = { display: 'flex', alignItems: 'center', gap: 1, mb: 0.5 }
@@ -140,7 +168,7 @@ export const SettingsToolbar: React.FC<SettingsToolbarProps> = ({
   const inputSx = { '& .MuiInputBase-input': { fontSize: '0.8rem', py: 0.5 } }
 
   return (
-    <Box sx={{ p: 1, minWidth: 300 }}>
+    <Box sx={{ p: 1, minWidth: 260 }}>
       {/* APPEARANCE */}
       <Typography variant="caption" sx={sectionTitle}>Appearance</Typography>
       <Box sx={row}>
@@ -205,6 +233,8 @@ export const SettingsToolbar: React.FC<SettingsToolbarProps> = ({
             <MenuItem value="rainbow" sx={menuItemSx}><Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75 }}><Box sx={{ width: 12, height: 12, borderRadius: '50%', background: 'linear-gradient(90deg, red, orange, yellow, green, blue, violet)' }} /> Rainbow</Box></MenuItem>
             <MenuItem value="fire" sx={menuItemSx}><Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75 }}><Box sx={{ width: 12, height: 12, borderRadius: '50%', background: 'linear-gradient(90deg, #FA8112, #1A0A00, #FA8112)' }} /> Fire</Box></MenuItem>
             <MenuItem value="glow" sx={menuItemSx}><Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75 }}><Box sx={{ width: 12, height: 12, borderRadius: '50%', background: 'linear-gradient(90deg, #FA8112, #FFF8E8, #FA8112)' }} /> Glow</Box></MenuItem>
+            <MenuItem value="twilight" sx={menuItemSx}><Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75 }}><Box sx={{ width: 12, height: 12, borderRadius: '50%', background: 'linear-gradient(90deg, #2d5a8b, #6b2d7b, #b82d5a, #d46b2d, #2d5a8b)' }} /> Twilight</Box></MenuItem>
+            <MenuItem value="husl" sx={menuItemSx}><Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75 }}><Box sx={{ width: 12, height: 12, borderRadius: '50%', background: 'linear-gradient(90deg, #e6194b, #3cb44b, #ffe119, #4363d8, #f58231, #911eb4, #e6194b)' }} /> HUSL</Box></MenuItem>
           </Select>
         </FormControl>
       </Box>
@@ -282,6 +312,79 @@ export const SettingsToolbar: React.FC<SettingsToolbarProps> = ({
         <Typography sx={label}>Dot opacity {Math.round(trajectoryDotOpacity * 100)}%</Typography>
         <Slider size="small" value={trajectoryDotOpacity * 100} onChange={(_, v) => setTrajectoryDotOpacity((v as number) / 100)} min={50} max={100} step={1} valueLabelDisplay="auto" valueLabelFormat={(v) => `${v}%`} sx={{ ...control, color: '#FA8112' }}/>
       </Box>
+
+      <Divider sx={divider} />
+
+      {/* TRAJECTORY EXPLORATION */}
+      <Typography variant="caption" sx={sectionTitle}>Trajectory exploration</Typography>
+      <Box sx={row}>
+        <Typography sx={label}>Explore radius</Typography>
+        <Slider
+          size="small"
+          value={exploreRadius}
+          onChange={(_, v) => setExploreRadius(v as number)}
+          min={EXPLORE_RADIUS_MIN}
+          max={EXPLORE_RADIUS_MAX}
+          step={1}
+          valueLabelDisplay="auto"
+          sx={{ ...control, color: '#FA8112' }}
+        />
+      </Box>
+      <Box sx={row}>
+        <Typography sx={label}>Radial samples</Typography>
+        <Slider
+          size="small"
+          value={exploreRadialSamples}
+          onChange={(_, v) => setExploreRadialSamples(v as number)}
+          min={EXPLORE_RADIAL_SAMPLES_MIN}
+          max={EXPLORE_RADIAL_SAMPLES_MAX}
+          step={1}
+          valueLabelDisplay="auto"
+          sx={{ ...control, color: '#FA8112' }}
+        />
+      </Box>
+      <Box sx={row}>
+        <Typography sx={label}>Azimuthal samples</Typography>
+        <Slider
+          size="small"
+          value={exploreAzimuthalSamples}
+          onChange={(_, v) => setExploreAzimuthalSamples(v as number)}
+          min={EXPLORE_AZIMUTHAL_SAMPLES_MIN}
+          max={EXPLORE_AZIMUTHAL_SAMPLES_MAX}
+          step={1}
+          valueLabelDisplay="auto"
+          sx={{ ...control, color: '#FA8112' }}
+        />
+      </Box>
+      <Box sx={row}>
+        <Typography sx={label}>Max combinatorics (N₁×N₂)</Typography>
+        <Slider
+          size="small"
+          value={exploreNMaxCombinatorial}
+          onChange={(_, v) => setExploreNMaxCombinatorial(v as number)}
+          min={EXPLORE_NMAX_COMBINATORIAL_MIN}
+          max={EXPLORE_NMAX_COMBINATORIAL_MAX}
+          step={64}
+          valueLabelDisplay="auto"
+          sx={{ ...control, color: '#FA8112' }}
+        />
+      </Box>
+      <Box sx={row}>
+        <Typography sx={label}>Color-map exploration</Typography>
+        <Box sx={control}><Switch checked={exploreColormapEnabled} onChange={(e) => setExploreColormapEnabled(e.target.checked)} size="small" /></Box>
+      </Box>
+      {exploreColormapEnabled && (
+        <Box sx={row}>
+          <Typography sx={label}>Colormap</Typography>
+          <FormControl size="small" sx={control}>
+            <Select value={exploreColormapType} onChange={(e) => setExploreColormapType(e.target.value as 'rainbow' | 'twilight' | 'husl')} sx={selectTriggerSx} MenuProps={selectMenuProps}>
+              <MenuItem value="rainbow" sx={menuItemSx}>Rainbow</MenuItem>
+              <MenuItem value="twilight" sx={menuItemSx}>Twilight</MenuItem>
+              <MenuItem value="husl" sx={menuItemSx}>HUSL</MenuItem>
+            </Select>
+          </FormControl>
+        </Box>
+      )}
 
       <Divider sx={divider} />
 

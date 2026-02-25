@@ -106,8 +106,6 @@ env.bak/
 venv.bak/
 *.env
 */.env
-
-
 /site
 
 # mypy
@@ -123,19 +121,17 @@ dmypy.json
 
 # user generated
 user/
-automata/user
+ac/user
 
+.cursor
 
 # ds
 .DS_Store
 
 # Node.js
-automata/frontend/node_modules/
-automata/frontend/dist/
 frontend/node_modules/
 frontend/dist/
 .vite
-
 
 
 #this project
@@ -144,4 +140,4 @@ notebooks
 frontend.log
 backend.log
 report.log
-backend/report.log
+*log

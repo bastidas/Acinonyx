@@ -8,7 +8,7 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react'
 import {
   Box, Typography, Button, Tooltip, Divider, FormControl, Select, MenuItem,
-  TextField, FormControlLabel, Switch, IconButton, Chip, Dialog, DialogTitle,
+  TextField, FormControlLabel, Switch, IconButton, Dialog, DialogTitle,
   DialogContent, DialogActions, Accordion, AccordionSummary, AccordionDetails, Stack
 } from '@mui/material'
 import { Settings, Close, ExpandMore } from '@mui/icons-material'
@@ -91,6 +91,9 @@ export interface TargetTrajectoryPanelProps {
   setTargetPaths: React.Dispatch<React.SetStateAction<TargetPath[]>>
   selectedPathId: string | null
   setSelectedPathId: (id: string | null) => void
+  targetJoint: string | null
+  setTargetJoint: (joint: string | null) => void
+  allowAutoTargetJointSelection: boolean
 
   // Preprocessing
   preprocessResult: PreprocessResult | null
@@ -132,6 +135,9 @@ export const TargetTrajectoryPanel: React.FC<TargetTrajectoryPanelProps> = ({
   setTargetPaths,
   selectedPathId,
   setSelectedPathId,
+  targetJoint,
+  setTargetJoint,
+  allowAutoTargetJointSelection,
   preprocessResult,
   isPreprocessing,
   prepEnableSmooth,
@@ -156,9 +162,6 @@ export const TargetTrajectoryPanel: React.FC<TargetTrajectoryPanelProps> = ({
 }) => {
   const hasCrank = canSimulate(joints)
   const selectedPath = targetPaths.find(p => p.id === selectedPathId)
-
-  // Single source of truth for target joint
-  const [targetJoint, setTargetJoint] = useState<string | null>(null)
 
   // Achievable target config state
   const defaultAchievableTargetConfig: MechVariationConfig = {
@@ -219,6 +222,11 @@ export const TargetTrajectoryPanel: React.FC<TargetTrajectoryPanelProps> = ({
 
   // Track which mechanism we've already selected a target joint for
   const targetJointSelectedForRef = useRef<string | null>(null)
+  const selectedPathRef = useRef(selectedPath)
+  
+  useEffect(() => {
+    selectedPathRef.current = selectedPath
+  }, [selectedPath])
 
   // Deterministic hash function for consistent joint selection
   const hashString = (str: string): number => {
@@ -235,26 +243,27 @@ export const TargetTrajectoryPanel: React.FC<TargetTrajectoryPanelProps> = ({
   const selectTargetJoint = useCallback(() => {
     if (!linkageDoc || !joints.length || !mechanismKey) return
 
-    // Skip if we've already selected for this mechanism
-    if (targetJointSelectedForRef.current === mechanismKey) {
+    if (targetJointSelectedForRef.current === mechanismKey && targetJoint) {
       return
+    }
+
+    const applySelection = (jointName: string) => {
+      console.log('[TargetTrajPanel] Auto-selecting joint:', jointName)
+      targetJointSelectedForRef.current = mechanismKey
+      setTargetJoint(jointName)
     }
 
     // Priority 1: Check if target_joint is stored in linkageDoc metadata (from demo load)
     const doc = linkageDoc as { meta?: { target_joint?: string } }
     if (doc.meta?.target_joint && joints.some(j => j.name === doc.meta.target_joint)) {
-      setTargetJoint(doc.meta.target_joint)
-      setAchievableTargetConfig(prev => ({ ...prev, target_joint: doc.meta.target_joint || '' }))
-      targetJointSelectedForRef.current = mechanismKey
-      console.log('[TargetJointSelect] Using target_joint from demo metadata:', doc.meta.target_joint)
+      applySelection(doc.meta.target_joint)
       return
     }
 
     // Priority 2: Selected path target joint
-    if (selectedPath?.targetJoint && joints.some(j => j.name === selectedPath.targetJoint)) {
-      setTargetJoint(selectedPath.targetJoint)
-      setAchievableTargetConfig(prev => ({ ...prev, target_joint: selectedPath.targetJoint || '' }))
-      targetJointSelectedForRef.current = mechanismKey
+    const currentSelectedPath = selectedPathRef.current
+    if (currentSelectedPath?.targetJoint && joints.some(j => j.name === currentSelectedPath.targetJoint)) {
+      applySelection(currentSelectedPath.targetJoint)
       return
     }
 
@@ -262,7 +271,7 @@ export const TargetTrajectoryPanel: React.FC<TargetTrajectoryPanelProps> = ({
     // Exclude: "crank", "static", and default names like "joint_1", "joint_2", "joint1", "joint2"
     const defaultNamePattern = /^(joint[_]?\d+|crank|static)$/i
     const candidateJoints = joints.filter(j =>
-      (j.type === 'Crank' || j.type === 'Revolute') &&
+      j.type === 'Revolute' &&
       !defaultNamePattern.test(j.name)
     )
 
@@ -272,16 +281,13 @@ export const TargetTrajectoryPanel: React.FC<TargetTrajectoryPanelProps> = ({
       const hash = hashString(mechanismKey)
       const selectedIndex = hash % sortedJoints.length
       const selectedJoint = sortedJoints[selectedIndex]
-      setTargetJoint(selectedJoint.name)
-      setAchievableTargetConfig(prev => ({ ...prev, target_joint: selectedJoint.name }))
-      targetJointSelectedForRef.current = mechanismKey
-      console.log('[TargetJointSelect] Deterministically selected:', selectedJoint.name, 'from', sortedJoints.length, 'candidates')
+      applySelection(selectedJoint.name)
       return
     }
 
     // Fallback: any non-crank, non-static joint
     const fallbackJoints = joints.filter(j =>
-      (j.type === 'Crank' || j.type === 'Revolute') &&
+      (j.type === 'Revolute' || j.type === 'Crank') &&
       j.name.toLowerCase() !== 'crank' &&
       j.name.toLowerCase() !== 'static'
     )
@@ -291,33 +297,47 @@ export const TargetTrajectoryPanel: React.FC<TargetTrajectoryPanelProps> = ({
       const hash = hashString(mechanismKey)
       const selectedIndex = hash % sortedJoints.length
       const selectedJoint = sortedJoints[selectedIndex]
-      setTargetJoint(selectedJoint.name)
-      setAchievableTargetConfig(prev => ({ ...prev, target_joint: selectedJoint.name }))
-      targetJointSelectedForRef.current = mechanismKey
-      console.log('[TargetJointSelect] Fallback selection:', selectedJoint.name)
+      applySelection(selectedJoint.name)
     }
-  }, [linkageDoc, joints, mechanismKey, selectedPath?.targetJoint])
+  }, [linkageDoc, joints, mechanismKey, setTargetJoint])
+
+  useEffect(() => {
+    targetJointSelectedForRef.current = null
+  }, [mechanismKey])
 
   // Select target joint only when trajectory is computed (mechanism is ready)
+  // Only run when mechanism changes, not when targetJoint changes
   useEffect(() => {
-    // Only select when trajectory data exists (mechanism has been computed)
-    if (!trajectoryData || !mechanismKey || !joints.length) {
+    console.log('[TargetTrajPanel] Auto-select effect:', { allowAuto: allowAutoTargetJointSelection, mechanismKey, alreadySelected: targetJointSelectedForRef.current === mechanismKey })
+    
+    if (!allowAutoTargetJointSelection) {
+      console.log('[TargetTrajPanel] Skipping - auto-selection disabled')
       return
     }
 
-    // Reset selection tracking when mechanism changes
-    if (targetJointSelectedForRef.current !== mechanismKey) {
-      selectTargetJoint()
+    if (!mechanismKey || !joints.length) {
+      console.log('[TargetTrajPanel] Skipping - no mechanism or joints')
+      return
     }
-  }, [trajectoryData, mechanismKey, selectTargetJoint, joints.length])
 
-  // Handle selectedPath?.targetJoint changes (user manually selects joint for a path)
-  useEffect(() => {
-    if (selectedPath?.targetJoint && joints.some(j => j.name === selectedPath.targetJoint)) {
-      setTargetJoint(selectedPath.targetJoint)
-      setAchievableTargetConfig(prev => ({ ...prev, target_joint: selectedPath.targetJoint || '' }))
+    if (targetJointSelectedForRef.current === mechanismKey) {
+      console.log('[TargetTrajPanel] Skipping - already selected for this mechanism')
+      return
     }
-  }, [selectedPath?.targetJoint, joints])
+
+    console.log('[TargetTrajPanel] Running auto-selection...')
+    selectTargetJoint()
+  }, [allowAutoTargetJointSelection, mechanismKey, joints.length, selectTargetJoint])
+
+  useEffect(() => {
+    setAchievableTargetConfig(prev => {
+      const normalized = targetJoint || ''
+      if (prev.target_joint === normalized) {
+        return prev
+      }
+      return { ...prev, target_joint: normalized }
+    })
+  }, [targetJoint])
 
   // Generate achievable target
   const handleGetAchievableTarget = async () => {
@@ -373,52 +393,10 @@ export const TargetTrajectoryPanel: React.FC<TargetTrajectoryPanelProps> = ({
 
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-      {/* Target Joint Selector */}
-      <Box>
-        <Typography variant="subtitle2" sx={{ fontWeight: 700, color: '#1976d2', mb: 1, display: 'flex', alignItems: 'center', gap: 1, fontSize: '0.8rem' }}>
-          <span>🎯</span> Target Joint
-        </Typography>
-        <FormControl size="small" fullWidth>
-          <Select
-            value={targetJoint || ''}
-            onChange={(e) => {
-              const newTargetJoint = e.target.value as string
-              setTargetJoint(newTargetJoint)
-              setAchievableTargetConfig(prev => ({
-                ...prev,
-                target_joint: newTargetJoint
-              }))
-              if (selectedPath) {
-                setTargetPaths(prev => prev.map(p =>
-                  p.id === selectedPathId ? { ...p, targetJoint: newTargetJoint } : p
-                ))
-              }
-            }}
-            displayEmpty
-            sx={{ fontSize: '0.85rem' }}
-          >
-            <MenuItem value="" sx={{ fontSize: '0.85rem' }}>
-              <em>Select joint...</em>
-            </MenuItem>
-            {joints
-              .filter(j => j.type === 'Crank' || j.type === 'Revolute')
-              .map(j => (
-                <MenuItem key={j.name} value={j.name} sx={{ fontSize: '0.85rem' }}>
-                  {j.name} <Chip label={j.type} size="small" sx={{ ml: 1, height: 18, fontSize: '0.65rem' }} />
-                </MenuItem>
-              ))
-            }
-          </Select>
-        </FormControl>
-        <Typography variant="caption" sx={{ color: 'text.secondary', display: 'block', mt: 0.5 }}>
-          The joint whose trajectory will be optimized or used as target
-        </Typography>
-      </Box>
-
       {/* Target Paths List */}
       <Box>
-        <Typography variant="subtitle2" sx={{ fontWeight: 700, color: '#e91e63', mb: 1, display: 'flex', alignItems: 'center', gap: 1, fontSize: '0.8rem' }}>
-          <span>📍</span> Target Paths
+        <Typography variant="subtitle2" sx={{ fontWeight: 700, color: '#e91e63', mb: 1, display: 'flex', alignItems: 'center', fontSize: '0.8rem' }}>
+          Target Paths
         </Typography>
 
         {targetPaths.length > 0 ? (
@@ -450,7 +428,7 @@ export const TargetTrajectoryPanel: React.FC<TargetTrajectoryPanelProps> = ({
                     </Typography>
                     <Typography variant="caption" sx={{ color: 'text.secondary' }}>
                       {path.points.length} points
-                      {path.targetJoint && ` • ${path.targetJoint}`}
+                      {path.targetJoint && ` - ${path.targetJoint}`}
                     </Typography>
                   </Box>
                 </Box>
@@ -486,51 +464,6 @@ export const TargetTrajectoryPanel: React.FC<TargetTrajectoryPanelProps> = ({
           </Box>
         )}
 
-        {/* Joint selector for selected path */}
-        {selectedPathId && selectedPath && (
-          <Box sx={{ mb: 2 }}>
-            <Typography variant="caption" sx={{ color: 'text.secondary', display: 'block', mb: 0.5 }}>
-              Joint to Optimize
-            </Typography>
-            <FormControl size="small" fullWidth>
-              <Select
-                value={selectedPath.targetJoint || ''}
-                onChange={(e) => {
-                  setTargetPaths(prev => prev.map(p =>
-                    p.id === selectedPathId ? { ...p, targetJoint: e.target.value as string } : p
-                  ))
-                }}
-                displayEmpty
-                sx={{ fontSize: '0.85rem' }}
-              >
-                <MenuItem value="" sx={{ fontSize: '0.85rem' }}>
-                  <em>Select joint...</em>
-                </MenuItem>
-                {(() => {
-                  // Deduplicate joints by name (keep first occurrence)
-                  // This prevents showing duplicate joints if somehow multiple mechanisms are merged
-                  const seen = new Set<string>()
-                  const uniqueJoints = joints
-                    .filter(j => j.type === 'Crank' || j.type === 'Revolute')
-                    .filter(j => {
-                      if (seen.has(j.name)) {
-                        console.warn(`Duplicate joint name detected: ${j.name}`)
-                        return false
-                      }
-                      seen.add(j.name)
-                      return true
-                    })
-
-                  return uniqueJoints.map(j => (
-                    <MenuItem key={j.name} value={j.name} sx={{ fontSize: '0.85rem' }}>
-                      {j.name} <Chip label={j.type} size="small" sx={{ ml: 1, height: 18, fontSize: '0.65rem' }} />
-                    </MenuItem>
-                  ))
-                })()}
-              </Select>
-            </FormControl>
-          </Box>
-        )}
       </Box>
 
       <Divider />
@@ -538,8 +471,8 @@ export const TargetTrajectoryPanel: React.FC<TargetTrajectoryPanelProps> = ({
       {/* Achievable Target Generation */}
       {hasCrank && (
         <Box>
-          <Typography variant="subtitle2" sx={{ fontWeight: 700, color: '#4caf50', mb: 1, display: 'flex', alignItems: 'center', gap: 1, fontSize: '0.8rem' }}>
-            <span>🎯</span> Achievable Target
+          <Typography variant="subtitle2" sx={{ fontWeight: 700, color: '#4caf50', mb: 1, display: 'flex', alignItems: 'center', fontSize: '0.8rem' }}>
+            Achievable Target
           </Typography>
 
           <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
@@ -590,8 +523,8 @@ export const TargetTrajectoryPanel: React.FC<TargetTrajectoryPanelProps> = ({
       {/* Path Preprocessing */}
       {selectedPathId && selectedPath && (
         <Box>
-          <Typography variant="subtitle2" sx={{ fontWeight: 700, color: '#00897b', mb: 1, display: 'flex', alignItems: 'center', gap: 1, fontSize: '0.8rem' }}>
-            <span>🔄</span> Path Preprocessing
+          <Typography variant="subtitle2" sx={{ fontWeight: 700, color: '#00897b', mb: 1, display: 'flex', alignItems: 'center', fontSize: '0.8rem' }}>
+            Path Preprocessing
           </Typography>
 
           <Box sx={{
@@ -600,12 +533,12 @@ export const TargetTrajectoryPanel: React.FC<TargetTrajectoryPanelProps> = ({
             bgcolor: 'rgba(0, 137, 123, 0.05)',
             border: '1px solid rgba(0, 137, 123, 0.2)'
           }}>
-            <Typography variant="caption" sx={{ color: 'text.secondary', display: 'block', mb: 1 }}>
-              Current path: <strong>{selectedPath.points.length} points</strong>
-              {preprocessResult && (
-                <> • Processed from {preprocessResult.originalPoints} points</>
-              )}
-            </Typography>
+              <Typography variant="caption" sx={{ color: 'text.secondary', display: 'block', mb: 1 }}>
+                Current path: <strong>{selectedPath.points.length} points</strong>
+                {preprocessResult && (
+                  <> - Processed from {preprocessResult.originalPoints} points</>
+                )}
+              </Typography>
 
             {/* Smoothing Section */}
             <Box sx={{ mb: 1.5 }}>
@@ -627,7 +560,7 @@ export const TargetTrajectoryPanel: React.FC<TargetTrajectoryPanelProps> = ({
                     <Box sx={{ flex: 1 }}>
                       <Tooltip title="Smoothing filter type. Savgol preserves peaks, Moving Avg is aggressive, Gaussian is natural." placement="top">
                         <Typography variant="caption" sx={{ color: 'text.secondary', display: 'block', mb: 0.25, cursor: 'help', fontSize: '0.65rem' }}>
-                          Method ⓘ
+                          Method
                         </Typography>
                       </Tooltip>
                       <Select
@@ -648,7 +581,7 @@ export const TargetTrajectoryPanel: React.FC<TargetTrajectoryPanelProps> = ({
                     <Box sx={{ flex: 1 }}>
                       <Tooltip title="Window size. Larger = more smoothing. 2-4: light, 8-16: medium, 32+: heavy" placement="top">
                         <Typography variant="caption" sx={{ color: 'text.secondary', display: 'block', mb: 0.25, cursor: 'help', fontSize: '0.65rem' }}>
-                          Window ⓘ
+                          Window
                         </Typography>
                       </Tooltip>
                       <Select
@@ -670,7 +603,7 @@ export const TargetTrajectoryPanel: React.FC<TargetTrajectoryPanelProps> = ({
                     <Box sx={{ flex: 1 }}>
                       <Tooltip title="Polynomial order for Savgol. Must be < window. Higher = preserves peaks better." placement="top">
                         <Typography variant="caption" sx={{ color: 'text.secondary', display: 'block', mb: 0.25, cursor: 'help', fontSize: '0.65rem' }}>
-                          Polyorder ⓘ
+                          Polyorder
                         </Typography>
                       </Tooltip>
                       <Select
@@ -713,7 +646,7 @@ export const TargetTrajectoryPanel: React.FC<TargetTrajectoryPanelProps> = ({
                     <Box sx={{ flex: 1 }}>
                       <Tooltip title={`Target number of points. Uses current Simulation Steps (${simulationSteps}) for optimization consistency.`} placement="top">
                         <Typography variant="caption" sx={{ color: 'text.secondary', display: 'block', mb: 0.25, cursor: 'help', fontSize: '0.65rem' }}>
-                          Target Points ⓘ
+                          Target Points
                         </Typography>
                       </Tooltip>
                       <TextField
@@ -739,7 +672,7 @@ export const TargetTrajectoryPanel: React.FC<TargetTrajectoryPanelProps> = ({
                     <Box sx={{ flex: 1 }}>
                       <Tooltip title="Interpolation method. Parametric is best for closed curves." placement="top">
                         <Typography variant="caption" sx={{ color: 'text.secondary', display: 'block', mb: 0.25, cursor: 'help', fontSize: '0.65rem' }}>
-                          Method ⓘ
+                          Method
                         </Typography>
                       </Tooltip>
                       <Select
@@ -778,21 +711,21 @@ export const TargetTrajectoryPanel: React.FC<TargetTrajectoryPanelProps> = ({
                 '&.Mui-disabled': { borderColor: '#ccc' }
               }}
             >
-              {isPreprocessing ? '⏳ Processing...' : '🔄 Apply Preprocessing'}
+              {isPreprocessing ? 'Processing...' : 'Apply Preprocessing'}
             </Button>
 
             {/* Preprocessing Result */}
             {preprocessResult && (
               <Box sx={{ mt: 1, p: 1, borderRadius: 0.5, bgcolor: 'rgba(0, 137, 123, 0.1)' }}>
                 <Typography variant="caption" sx={{ display: 'block', color: '#00695c', fontWeight: 500 }}>
-                  ✓ Processed successfully
+                  Processed successfully
                 </Typography>
                 <Typography variant="caption" sx={{ display: 'block', color: 'text.secondary', fontSize: '0.65rem' }}>
-                  {preprocessResult.originalPoints} → {preprocessResult.outputPoints} points
+                  {preprocessResult.originalPoints} {'->'} {preprocessResult.outputPoints} points
                   {preprocessResult.analysis && (
                     <>
-                      {' • '}Path length: {(preprocessResult.analysis.total_path_length as number)?.toFixed(1)}
-                      {preprocessResult.analysis.is_closed && ' • Closed curve'}
+                      {' - '}Path length: {(preprocessResult.analysis.total_path_length as number)?.toFixed(1)}
+                      {preprocessResult.analysis.is_closed && ' - Closed curve'}
                     </>
                   )}
                 </Typography>

@@ -22,6 +22,20 @@ LOG_FILE = BASE_DIR / 'backend.log'
 _logging_configured = False
 
 
+def _reset_logger(logger: logging.Logger) -> None:
+    """Detach and close all handlers on a logger."""
+    if not isinstance(logger, logging.Logger):
+        return
+
+    for handler in list(logger.handlers):
+        try:
+            handler.flush()
+        except Exception:
+            pass
+        handler.close()
+        logger.removeHandler(handler)
+
+
 def setup_logging(
     level: int = logging.INFO,
     log_file: Path | str | None = None,
@@ -43,21 +57,28 @@ def setup_logging(
     if log_file is None:
         log_file = LOG_FILE
 
+    log_path = Path(log_file)
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+
     # Create formatter
     formatter = logging.Formatter(
         fmt='%(asctime)s | %(levelname)-8s | %(name)s | %(message)s',
         datefmt='%Y-%m-%d %H:%M:%S',
     )
 
-    # Get root logger for our project
-    root_logger = logging.getLogger('pylink_tools')
+    # Clear handlers from root and any previously instantiated loggers so we own output destinations
+    root_logger = logging.getLogger()
+    _reset_logger(root_logger)
     root_logger.setLevel(level)
 
-    # Clear existing handlers
-    root_logger.handlers.clear()
+    for logger_obj in list(logging.root.manager.loggerDict.values()):
+        if isinstance(logger_obj, logging.PlaceHolder):  # Skip placeholders created by logging module
+            continue
+        _reset_logger(logger_obj)
+        logger_obj.propagate = True
 
     # File handler
-    file_handler = logging.FileHandler(log_file, mode='a', encoding='utf-8')
+    file_handler = logging.FileHandler(log_path, mode='a', encoding='utf-8')
     file_handler.setLevel(level)
     file_handler.setFormatter(formatter)
     root_logger.addHandler(file_handler)
@@ -95,11 +116,7 @@ def get_logger(name: str) -> logging.Logger:
     if not _logging_configured:
         setup_logging()
 
-    # Return a child logger under pylink_tools namespace
-    if name.startswith('pylink_tools'):
-        return logging.getLogger(name)
-    else:
-        return logging.getLogger(f'pylink_tools.{name}')
+    return logging.getLogger(name)
 
 
 def log_separator(logger: logging.Logger, title: str = '') -> None:

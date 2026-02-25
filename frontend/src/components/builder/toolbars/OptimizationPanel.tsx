@@ -5,7 +5,7 @@
  * Separated from target trajectory management for better maintainability.
  */
 
-import React, { useState } from 'react'
+import React, { useMemo, useState } from 'react'
 import {
   Box, Typography, Button, Tooltip, Divider, FormControl, Select, MenuItem,
   TextField, FormControlLabel, Switch, Dialog, DialogTitle, DialogContent,
@@ -94,6 +94,8 @@ export interface OptimizationPanelProps {
   // Target paths (for optimization)
   targetPaths: TargetPath[]
   selectedPathId: string | null
+  targetJoint: string | null
+  onTargetJointChange: (joint: string | null) => void
 
   // Dimension info (fetched by parent after trajectory computation)
   dimensionInfo?: DimensionInfo | null
@@ -176,6 +178,8 @@ export const OptimizationPanel: React.FC<OptimizationPanelProps> = ({
   stretchingLinks = [],
   targetPaths,
   selectedPathId,
+  targetJoint,
+  onTargetJointChange,
   simulationSteps,
   simulationStepsInput,
   setSimulationStepsInput,
@@ -204,8 +208,27 @@ export const OptimizationPanel: React.FC<OptimizationPanelProps> = ({
 }) => {
   const hasCrank = canSimulate(joints)
   const selectedPath = targetPaths.find(p => p.id === selectedPathId)
-  const canOptimize = selectedPath && selectedPath.targetJoint && hasCrank && !isOptimizing
+  const canOptimize = Boolean(selectedPath && targetJoint && hasCrank && !isOptimizing)
   const currentMethodInfo = methodDescriptions[optMethod]
+  const jointOptions = useMemo(() => {
+    const dedupe = (list: PylinkJoint[]) => {
+      const seen = new Set<string>()
+      return list.filter(j => {
+        if (seen.has(j.name)) {
+          return false
+        }
+        seen.add(j.name)
+        return true
+      })
+    }
+
+    const revoluteJoints = dedupe(joints.filter(j => j.type === 'Revolute'))
+    if (revoluteJoints.length > 0) {
+      return revoluteJoints
+    }
+
+    return dedupe(joints.filter(j => j.type === 'Crank'))
+  }, [joints])
 
   // Dialog state
   const [showOptimizationBoundsDialog, setShowOptimizationBoundsDialog] = useState(false)
@@ -245,11 +268,40 @@ export const OptimizationPanel: React.FC<OptimizationPanelProps> = ({
 
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+      {/* Target Joint Selector */}
+      <Box>
+        <Typography variant="subtitle2" sx={{ fontWeight: 700, color: '#1976d2', mb: 1, fontSize: '0.8rem' }}>
+          Target Joint
+        </Typography>
+        <FormControl size="small" fullWidth>
+          <Select
+            value={targetJoint || ''}
+            onChange={(e) => onTargetJointChange(e.target.value ? (e.target.value as string) : null)}
+            displayEmpty
+            sx={{ fontSize: '0.85rem' }}
+          >
+            <MenuItem value="" sx={{ fontSize: '0.85rem' }}>
+              <em>Select joint...</em>
+            </MenuItem>
+            {jointOptions.map(j => (
+              <MenuItem key={j.name} value={j.name} sx={{ fontSize: '0.85rem' }}>
+                {j.name} ({j.type})
+              </MenuItem>
+            ))}
+          </Select>
+        </FormControl>
+        <Typography variant="caption" sx={{ color: 'text.secondary', display: 'block', mt: 0.5 }}>
+          Applies to the active target path, achievable target generation, and optimization.
+        </Typography>
+      </Box>
+
+      <Divider />
+
       {/* Optimization Bounds - Button to open dialog */}
       <Box>
         <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 1 }}>
           <Typography variant="subtitle2" sx={{ fontWeight: 700, color: '#1976d2', display: 'flex', alignItems: 'center', gap: 1, fontSize: '0.8rem' }}>
-            <span>⚙️</span> Optimization Bounds
+            Optimization Bounds
           </Typography>
           <Button
             size="small"
@@ -270,8 +322,8 @@ export const OptimizationPanel: React.FC<OptimizationPanelProps> = ({
 
       {/* Simulation Steps */}
       <Box>
-        <Typography variant="subtitle2" sx={{ fontWeight: 700, color: '#6a1b9a', mb: 1, display: 'flex', alignItems: 'center', gap: 1, fontSize: '0.8rem' }}>
-          <span>📊</span> Simulation Steps
+        <Typography variant="subtitle2" sx={{ fontWeight: 700, color: '#6a1b9a', mb: 1, display: 'flex', alignItems: 'center', fontSize: '0.8rem' }}>
+          Simulation Steps
         </Typography>
         <Tooltip title="Number of trajectory points for simulation and optimization. Higher = more precision but slower. Should match preprocessed trajectory points." placement="right">
           <TextField
@@ -292,8 +344,8 @@ export const OptimizationPanel: React.FC<OptimizationPanelProps> = ({
 
       {/* Optimization Method */}
       <Box>
-        <Typography variant="subtitle2" sx={{ fontWeight: 700, color: '#1976d2', mb: 1, display: 'flex', alignItems: 'center', gap: 1, fontSize: '0.8rem' }}>
-          <span>🔧</span> Method
+        <Typography variant="subtitle2" sx={{ fontWeight: 700, color: '#1976d2', mb: 1, display: 'flex', alignItems: 'center', fontSize: '0.8rem' }}>
+          Method
         </Typography>
 
         <FormControl size="small" fullWidth sx={{ mb: 1 }}>
@@ -326,13 +378,13 @@ export const OptimizationPanel: React.FC<OptimizationPanelProps> = ({
           </Typography>
           <Box sx={{ mt: 1, display: 'flex', gap: 2 }}>
             <Box sx={{ flex: 1 }}>
-              <Typography variant="caption" sx={{ color: '#2e7d32', fontWeight: 500 }}>✓ Pros</Typography>
+              <Typography variant="caption" sx={{ color: '#2e7d32', fontWeight: 500 }}>Pros</Typography>
               <Typography variant="caption" sx={{ color: 'text.secondary', display: 'block', fontSize: '0.65rem' }}>
                 {currentMethodInfo.pros}
               </Typography>
             </Box>
             <Box sx={{ flex: 1 }}>
-              <Typography variant="caption" sx={{ color: '#d32f2f', fontWeight: 500 }}>✗ Cons</Typography>
+              <Typography variant="caption" sx={{ color: '#d32f2f', fontWeight: 500 }}>Cons</Typography>
               <Typography variant="caption" sx={{ color: 'text.secondary', display: 'block', fontSize: '0.65rem' }}>
                 {currentMethodInfo.cons}
               </Typography>
@@ -345,8 +397,8 @@ export const OptimizationPanel: React.FC<OptimizationPanelProps> = ({
 
       {/* Hyperparameters */}
       <Box>
-        <Typography variant="subtitle2" sx={{ fontWeight: 700, color: '#7b1fa2', mb: 1, display: 'flex', alignItems: 'center', gap: 1, fontSize: '0.8rem' }}>
-          <span>⚙️</span> Hyperparameters
+        <Typography variant="subtitle2" sx={{ fontWeight: 700, color: '#7b1fa2', mb: 1, display: 'flex', alignItems: 'center', fontSize: '0.8rem' }}>
+          Hyperparameters
         </Typography>
 
         {/* PSO-specific parameters */}
@@ -355,7 +407,7 @@ export const OptimizationPanel: React.FC<OptimizationPanelProps> = ({
             <Box sx={{ mb: 1.5 }}>
               <Tooltip title="Number of particles in the swarm. More particles = better exploration but slower. Typical: 20-50" placement="left">
                 <Typography variant="caption" sx={{ color: 'text.secondary', display: 'block', mb: 0.5, cursor: 'help' }}>
-                  Swarm Size (Particles) ⓘ
+                  Swarm Size (Particles)
                 </Typography>
               </Tooltip>
               <TextField
@@ -372,7 +424,7 @@ export const OptimizationPanel: React.FC<OptimizationPanelProps> = ({
             <Box sx={{ mb: 1.5 }}>
               <Tooltip title="Number of iterations for the swarm. More iterations = better convergence but slower. Typical: 256-1024, max 10000" placement="left">
                 <Typography variant="caption" sx={{ color: 'text.secondary', display: 'block', mb: 0.5, cursor: 'help' }}>
-                  Iterations ⓘ
+                  Iterations
                 </Typography>
               </Tooltip>
               <TextField
@@ -394,7 +446,7 @@ export const OptimizationPanel: React.FC<OptimizationPanelProps> = ({
             <Box sx={{ mb: 1.5 }}>
               <Tooltip title="Maximum number of function evaluations. Prevents infinite loops. Typical: 100-1000" placement="left">
                 <Typography variant="caption" sx={{ color: 'text.secondary', display: 'block', mb: 0.5, cursor: 'help' }}>
-                  Max Iterations ⓘ
+                  Max Iterations
                 </Typography>
               </Tooltip>
               <TextField
@@ -411,7 +463,7 @@ export const OptimizationPanel: React.FC<OptimizationPanelProps> = ({
             <Box sx={{ mb: 1.5 }}>
               <Tooltip title="Convergence tolerance. Smaller = more precise but slower. Typical: 1e-4 to 1e-8" placement="left">
                 <Typography variant="caption" sx={{ color: 'text.secondary', display: 'block', mb: 0.5, cursor: 'help' }}>
-                  Tolerance ⓘ
+                  Tolerance
                 </Typography>
               </Tooltip>
               <Select
@@ -436,8 +488,8 @@ export const OptimizationPanel: React.FC<OptimizationPanelProps> = ({
 
       {/* Run Optimization */}
       <Box>
-        <Typography variant="subtitle2" sx={{ fontWeight: 700, color: '#e91e63', mb: 1, display: 'flex', alignItems: 'center', gap: 1, fontSize: '0.8rem' }}>
-          <span>⚡</span> Run Optimization
+        <Typography variant="subtitle2" sx={{ fontWeight: 700, color: '#e91e63', mb: 1, display: 'flex', alignItems: 'center', fontSize: '0.8rem' }}>
+          Run Optimization
         </Typography>
 
         <Box sx={{ mb: 1.5 }}>
@@ -469,15 +521,7 @@ export const OptimizationPanel: React.FC<OptimizationPanelProps> = ({
             '&.Mui-disabled': { backgroundColor: '#e0e0e0' }
           }}
         >
-          {isOptimizing ? (
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-              <span>⏳</span> Optimizing...
-            </Box>
-          ) : (
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-              <span>⚡</span> Run Optimization
-            </Box>
-          )}
+          {isOptimizing ? 'Optimizing…' : 'Run Optimization'}
         </Button>
 
         {/* Disabled reason */}
@@ -485,7 +529,7 @@ export const OptimizationPanel: React.FC<OptimizationPanelProps> = ({
           <Typography variant="caption" sx={{ color: 'text.secondary', display: 'block', mt: 1, textAlign: 'center' }}>
             {!hasCrank ? 'Need a valid mechanism with Crank' :
              !selectedPath ? 'Select a target path above' :
-             !selectedPath.targetJoint ? 'Select a joint to optimize' :
+             !targetJoint ? 'Select a joint to optimize' :
              'Ready to optimize'}
           </Typography>
         )}
@@ -500,8 +544,7 @@ export const OptimizationPanel: React.FC<OptimizationPanelProps> = ({
             border: '1px solid #ed6c02'
           }}>
             <Typography variant="caption" sx={{ color: '#ed6c02', display: 'flex', alignItems: 'center', gap: 0.5 }}>
-              <span>⚠️</span> Path has {selectedPath.points.length} points but simulation uses {simulationSteps}.
-              Preprocess or adjust N_STEPS for best results.
+              Warning: path has {selectedPath.points.length} points but simulation uses {simulationSteps}. Preprocess or adjust N_STEPS for best results.
             </Typography>
           </Box>
         )}
@@ -514,7 +557,7 @@ export const OptimizationPanel: React.FC<OptimizationPanelProps> = ({
         <Box>
           <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 1 }}>
             <Typography variant="subtitle2" sx={{ fontWeight: 700, color: optimizationResult.success ? '#2e7d32' : '#d32f2f' }}>
-              {optimizationResult.success ? '✓ Results' : '✗ Failed'}
+              {optimizationResult.success ? 'Results' : 'Optimization Failed'}
             </Typography>
             {(preOptimizationDoc != null) && optimizationResult.success && (
               <Button
@@ -530,7 +573,7 @@ export const OptimizationPanel: React.FC<OptimizationPanelProps> = ({
                   minWidth: 'auto'
                 }}
               >
-                ↩ Revert
+                Revert
               </Button>
             )}
           </Box>
@@ -576,10 +619,9 @@ export const OptimizationPanel: React.FC<OptimizationPanelProps> = ({
                       color: isSyncedToOptimizer ? '#2e7d32' : '#f57c00',
                       fontWeight: 500,
                       display: 'flex',
-                      alignItems: 'center',
-                      gap: 0.5
+                      alignItems: 'center'
                     }}>
-                      {isSyncedToOptimizer ? '✓ Synced to Optimizer' : '⚠ Out of Sync'}
+                      {isSyncedToOptimizer ? 'Synced to optimizer' : 'Out of sync'}
                     </Typography>
                   </Box>
                 )}

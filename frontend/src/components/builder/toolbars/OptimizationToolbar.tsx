@@ -7,7 +7,7 @@
  * Fetches dimension info ONCE after trajectory computation.
  */
 
-import React from 'react'
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Box, Divider } from '@mui/material'
 import type { TrajectoryData } from '../../AnimateSimulate'
 import type { PylinkJoint } from '../types'
@@ -147,6 +147,98 @@ export const OptimizationToolbar: React.FC<OptimizationToolbarProps> = (props) =
   const isLoadingDimensions = props.isLoadingDimensions || false
   const dimensionInfoError = props.dimensionInfoError || null
 
+  const [targetJoint, setTargetJointState] = useState<string | null>(null)
+  const [isUserTargetJointLocked, setIsUserTargetJointLocked] = useState(false)
+  const isUserTargetJointLockedRef = useRef(false)
+
+  const selectedPathId = props.selectedPathId
+  const selectedPath = useMemo(
+    () => props.targetPaths.find(p => p.id === selectedPathId) || null,
+    [props.targetPaths, selectedPathId]
+  )
+
+  const mechanismKey = useMemo(() => {
+    if (!props.linkageDoc) return null
+    try {
+      const doc = props.linkageDoc as { name?: string; linkage?: { joints?: Record<string, unknown>; edges?: Record<string, unknown> } }
+      const keyParts = {
+        name: doc.name,
+        jointCount: Object.keys(doc.linkage?.joints || {}).length,
+        edgeCount: Object.keys(doc.linkage?.edges || {}).length
+      }
+      return JSON.stringify(keyParts)
+    } catch {
+      return null
+    }
+  }, [props.linkageDoc])
+
+  useEffect(() => {
+    setIsUserTargetJointLocked(false)
+    isUserTargetJointLockedRef.current = false
+    setTargetJointState(null)
+  }, [mechanismKey])
+
+  const updateSelectedPathTargetJoint = useCallback((joint: string | null) => {
+    if (!selectedPath) {
+      console.log('[OptToolbar] Not updating path - no path selected')
+      return
+    }
+    const normalized = joint || undefined
+    if (selectedPath.targetJoint === normalized) {
+      return
+    }
+    console.log('[OptToolbar] Updating path targetJoint:', normalized)
+    props.setTargetPaths(prev => prev.map(path =>
+      path.id === selectedPath.id ? { ...path, targetJoint: normalized } : path
+    ))
+  }, [selectedPath, props.setTargetPaths])
+
+  const selectedPathTargetJoint = selectedPath?.targetJoint ?? null
+
+  useEffect(() => {
+    console.log('[OptToolbar] Sync effect:', { selectedPathId, selectedPathTargetJoint, targetJoint, locked: isUserTargetJointLockedRef.current })
+    
+    if (!selectedPathId) {
+      // Don't clear if user manually set a joint (locked)
+      if (targetJoint !== null && !isUserTargetJointLockedRef.current) {
+        console.log('[OptToolbar] Clearing joint (no path selected, not locked)')
+        setTargetJointState(null)
+      }
+      // Keep user lock state when no path selected (user might be setting joint before drawing path)
+      return
+    }
+
+    if (!selectedPath) {
+      return
+    }
+
+    if (selectedPathTargetJoint !== targetJoint) {
+      if (isUserTargetJointLockedRef.current) {
+        console.log('[OptToolbar] Skipping sync - user locked')
+        return
+      }
+      console.log('[OptToolbar] Syncing to path:', selectedPathTargetJoint)
+      setTargetJointState(selectedPathTargetJoint)
+    }
+  }, [selectedPathId, selectedPath, selectedPathTargetJoint, targetJoint])
+
+  const setTargetJointFromSystem = useCallback((joint: string | null) => {
+    console.log('[OptToolbar] System setting joint:', joint)
+    setIsUserTargetJointLocked(false)
+    isUserTargetJointLockedRef.current = false
+    setTargetJointState(joint)
+    updateSelectedPathTargetJoint(joint)
+  }, [updateSelectedPathTargetJoint])
+
+  const handleTargetJointChange = useCallback((joint: string | null) => {
+    console.log('[OptToolbar] USER changing joint:', joint, 'locked:', Boolean(joint))
+    const locked = Boolean(joint)
+    setIsUserTargetJointLocked(locked)
+    isUserTargetJointLockedRef.current = locked
+    setTargetJointState(joint)
+    updateSelectedPathTargetJoint(joint)
+  }, [updateSelectedPathTargetJoint])
+
   return (
     <Box sx={{ p: 1.5, display: 'flex', gap: 2 }}>
       {/* Left Column: Target Trajectory Panel */}
@@ -181,6 +273,9 @@ export const OptimizationToolbar: React.FC<OptimizationToolbarProps> = (props) =
           dimensionInfo={dimensionInfo}
           isLoadingDimensions={isLoadingDimensions}
           dimensionInfoError={dimensionInfoError}
+          targetJoint={targetJoint}
+          setTargetJoint={setTargetJointFromSystem}
+          allowAutoTargetJointSelection={!isUserTargetJointLocked}
         />
       </Box>
 
@@ -222,6 +317,8 @@ export const OptimizationToolbar: React.FC<OptimizationToolbarProps> = (props) =
           dimensionInfo={dimensionInfo}
           isLoadingDimensions={isLoadingDimensions}
           dimensionInfoError={dimensionInfoError}
+          targetJoint={targetJoint}
+          onTargetJointChange={handleTargetJointChange}
         />
       </Box>
     </Box>

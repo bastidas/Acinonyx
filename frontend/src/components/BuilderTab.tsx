@@ -2284,73 +2284,73 @@ const BuilderTab: React.FC = () => {
     />
   )
 
-  // Optimization toolbar content
-  const OptimizationContent = () => (
-      <OptimizationToolbar
-      joints={pylinkDoc.pylinkage.joints}
-      linkageDoc={linkageDoc}
-      trajectoryData={animation.trajectoryData}
-      stretchingLinks={animation.stretchingLinks}
-      targetPaths={targetPaths}
-      setTargetPaths={setTargetPaths}
-      selectedPathId={selectedPathId}
-      setSelectedPathId={setSelectedPathId}
-      preprocessResult={optimization.preprocessResult}
-      isPreprocessing={optimization.isPreprocessing}
-      prepEnableSmooth={optimization.prepEnableSmooth}
-      setPrepEnableSmooth={optimization.setPrepEnableSmooth}
-      prepSmoothMethod={optimization.prepSmoothMethod as SmoothMethod}
-      setPrepSmoothMethod={optimization.setPrepSmoothMethod}
-      prepSmoothWindow={optimization.prepSmoothWindow}
-      setPrepSmoothWindow={optimization.setPrepSmoothWindow}
-      prepSmoothPolyorder={optimization.prepSmoothPolyorder}
-      setPrepSmoothPolyorder={optimization.setPrepSmoothPolyorder}
-      prepEnableResample={optimization.prepEnableResample}
-      setPrepEnableResample={optimization.setPrepEnableResample}
-      prepTargetNSteps={optimization.prepTargetNSteps}
-      setPrepTargetNSteps={optimization.setPrepTargetNSteps}
-      prepResampleMethod={optimization.prepResampleMethod as ResampleMethod}
-      setPrepResampleMethod={optimization.setPrepResampleMethod}
-      preprocessTrajectory={optimization.preprocessTrajectory}
-      simulationSteps={simulationSteps}
-      simulationStepsInput={simulationStepsInput}
-      setSimulationStepsInput={setSimulationStepsInput}
-      optMethod={optimization.optMethod as OptMethod}
-      setOptMethod={optimization.setOptMethod}
-      optNParticles={optimization.optNParticles}
-      setOptNParticles={optimization.setOptNParticles}
-      optIterations={optimization.optIterations}
-      setOptIterations={optimization.setOptIterations}
-      optMaxIterations={optimization.optMaxIterations}
-      setOptMaxIterations={optimization.setOptMaxIterations}
-      optTolerance={optimization.optTolerance}
-      setOptTolerance={optimization.setOptTolerance}
-      optBoundsFactor={optimization.optBoundsFactor}
-      setOptBoundsFactor={optimization.setOptBoundsFactor}
-      optMinLength={optimization.optMinLength}
-      setOptMinLength={optimization.setOptMinLength}
-      optVerbose={optimization.optVerbose}
-      setOptVerbose={optimization.setOptVerbose}
-      isOptimizing={optimization.isOptimizing}
-      runOptimization={(config?: Record<string, unknown>) => { optimization.runOptimization(config ?? {}).catch(err => console.error('Optimization error:', err)) }}
-      optimizationResult={optimization.optimizationResult}
-      preOptimizationDoc={optimization.preOptimizationDoc}
-      revertOptimization={optimization.revertOptimization}
-      syncToOptimizerResult={optimization.syncToOptimizerResult}
-      isSyncedToOptimizer={optimization.isSyncedToOptimizer}
-      dimensionInfo={optimization.dimensionInfo}
-      isLoadingDimensions={optimization.isLoadingDimensions}
-      dimensionInfoError={optimization.dimensionInfoError}
-    />
-  )
-
   const renderToolbarContent = (id: string) => {
     switch (id) {
       case 'tools': return <ToolsContent />
       case 'links': return <LinksContent />
       case 'nodes': return <NodesContent />
       case 'more': return <MoreContent />
-      case 'optimize': return <OptimizationContent />
+      case 'optimize':
+        return (
+          <OptimizationToolbar
+            joints={pylinkDoc.pylinkage.joints}
+            linkageDoc={linkageDoc}
+            trajectoryData={animation.trajectoryData}
+            stretchingLinks={animation.stretchingLinks}
+            targetPaths={targetPaths}
+            setTargetPaths={setTargetPaths}
+            selectedPathId={selectedPathId}
+            setSelectedPathId={setSelectedPathId}
+            preprocessResult={optimization.preprocessResult}
+            isPreprocessing={optimization.isPreprocessing}
+            prepEnableSmooth={optimization.prepEnableSmooth}
+            setPrepEnableSmooth={optimization.setPrepEnableSmooth}
+            prepSmoothMethod={optimization.prepSmoothMethod as SmoothMethod}
+            setPrepSmoothMethod={optimization.setPrepSmoothMethod}
+            prepSmoothWindow={optimization.prepSmoothWindow}
+            setPrepSmoothWindow={optimization.setPrepSmoothWindow}
+            prepSmoothPolyorder={optimization.prepSmoothPolyorder}
+            setPrepSmoothPolyorder={optimization.setPrepSmoothPolyorder}
+            prepEnableResample={optimization.prepEnableResample}
+            setPrepEnableResample={optimization.setPrepEnableResample}
+            prepTargetNSteps={optimization.prepTargetNSteps}
+            setPrepTargetNSteps={optimization.setPrepTargetNSteps}
+            prepResampleMethod={optimization.prepResampleMethod as ResampleMethod}
+            setPrepResampleMethod={optimization.setPrepResampleMethod}
+            preprocessTrajectory={optimization.preprocessTrajectory}
+            simulationSteps={simulationSteps}
+            simulationStepsInput={simulationStepsInput}
+            setSimulationStepsInput={setSimulationStepsInput}
+            optMethod={optimization.optMethod as OptMethod}
+            setOptMethod={optimization.setOptMethod}
+            optNParticles={optimization.optNParticles}
+            setOptNParticles={optimization.setOptNParticles}
+            optIterations={optimization.optIterations}
+            setOptIterations={optimization.setOptIterations}
+            optMaxIterations={optimization.optMaxIterations}
+            setOptMaxIterations={optimization.setOptMaxIterations}
+            optTolerance={optimization.optTolerance}
+            setOptTolerance={optimization.setOptTolerance}
+            optBoundsFactor={optimization.optBoundsFactor}
+            setOptBoundsFactor={optimization.setOptBoundsFactor}
+            optMinLength={optimization.optMinLength}
+            setOptMinLength={optimization.setOptMinLength}
+            optVerbose={optimization.optVerbose}
+            setOptVerbose={optimization.setOptVerbose}
+            isOptimizing={optimization.isOptimizing}
+            runOptimization={(config?: Record<string, unknown>) => {
+              optimization.runOptimization(config ?? {}).catch(err => console.error('Optimization error:', err))
+            }}
+            optimizationResult={optimization.optimizationResult}
+            preOptimizationDoc={optimization.preOptimizationDoc}
+            revertOptimization={optimization.revertOptimization}
+            syncToOptimizerResult={optimization.syncToOptimizerResult}
+            isSyncedToOptimizer={optimization.isSyncedToOptimizer}
+            dimensionInfo={optimization.dimensionInfo}
+            isLoadingDimensions={optimization.isLoadingDimensions}
+            dimensionInfoError={optimization.dimensionInfoError}
+          />
+        )
       case 'settings': return <SettingsContent />
       default: return null
     }

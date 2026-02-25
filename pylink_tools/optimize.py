@@ -130,25 +130,6 @@ def optimize_trajectory(
         print(f'  Has max_attempts: {hasattr(mech_variation_config, "max_attempts")}')
         print(f'  Has fallback_ranges: {hasattr(mech_variation_config, "fallback_ranges")}')
         print(f'  Has random_seed: {hasattr(mech_variation_config, "random_seed")}')
-        # #region agent log
-        import json
-        import time
-        try:
-            from dataclasses import asdict
-            config_dict = asdict(mech_variation_config) if hasattr(mech_variation_config, '__dataclass_fields__') else {}
-        except Exception:
-            config_dict = {}
-        with open('/Users/abf/projects/Acinonyx/.cursor/debug.log', 'a') as f:
-            f.write(
-                json.dumps({
-                    'location': 'optimize.py:111', 'message': 'optimize_trajectory received MechVariationConfig', 'data': {
-                        'hasConfig': mech_variation_config is not None, 'configType': type(mech_variation_config).__name__, 'configDict': config_dict,
-                        'hasDimensionVariation': hasattr(mech_variation_config, 'dimension_variation') if mech_variation_config else False,
-                    }, 'timestamp': int(time.time() * 1000), 'sessionId': 'debug-session', 'runId': 'run6', 'hypothesisId': 'C',
-                }) + '\n',
-            )
-        # #endregion
-
     # Priority: dimension_bounds_spec > mech_variation_config > mechanism default
     if dimension_bounds_spec is None:
         if mech_variation_config is not None:

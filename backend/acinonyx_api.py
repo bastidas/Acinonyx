@@ -192,7 +192,7 @@ def save_pylink_graph(pylink_data: dict):
         with open(save_path, 'w') as f:
             json.dump(save_data, f, indent=2)
 
-        print(f'Pylink graph saved to: {save_path}')
+        logger.info(f'Saved pylink graph to {save_path}')
 
         return {
             'status': 'success',
@@ -240,7 +240,7 @@ def save_pylink_graph_as(request: dict):
         with open(save_path, 'w') as f:
             json.dump(save_data, f, indent=2)
 
-        print(f'Pylink graph saved as: {save_path}')
+        logger.info(f'Saved pylink graph as {save_path}')
 
         return {
             'status': 'success',
@@ -330,7 +330,7 @@ def load_pylink_graph(filename: str | None = None):
         with open(file_path) as f:
             graph_data = json.load(f)
 
-        print(f'Loaded pylink graph from: {file_path.name}')
+        logger.info(f'Loaded pylink graph from {file_path.name}')
 
         return {
             'status': 'success',
@@ -395,7 +395,7 @@ def load_demo(name: str):
         with open(file_path) as f:
             demo_data = json.load(f)
 
-        print(f'Loaded demo: {name} from {file_path.name}')
+        logger.info(f'Loaded demo {name} from {file_path.name}')
 
         return {
             'status': 'success',
@@ -437,8 +437,6 @@ def get_demo_target_joint(request: dict):
     request_id = str(uuid.uuid4())[:8]
     start_time = time.time()
 
-    print(f'[API] [get-demo-target-joint] [{request_id}] Entry')
-
     try:
         pylink_data = request.get('pylink_data', {})
 
@@ -453,8 +451,6 @@ def get_demo_target_joint(request: dict):
         elif 'pylinkage' in pylink_data and 'joints' in pylink_data['pylinkage']:
             joint_names = [j.get('name', '') for j in pylink_data['pylinkage']['joints'] if j.get('name')]
 
-        print(f'[API] [get-demo-target-joint] [{request_id}] Mechanism: {mechanism_name}, Joints: {len(joint_names)}')
-
         # Check if mechanism name matches a known demo type
         mechanism_name_lower = mechanism_name.lower()
         for mechanism_type in MECHANISMS.keys():
@@ -462,15 +458,12 @@ def get_demo_target_joint(request: dict):
                 try:
                     # Load the demo mechanism to get its target joint
                     _, demo_target_joint, _ = load_mechanism(mechanism_type)
-                    elapsed = (time.time() - start_time) * 1000
-                    print(f'[API] [get-demo-target-joint] [{request_id}] Found via demo match ({mechanism_type}): {demo_target_joint}, elapsed: {elapsed:.2f}ms')
                     return {
                         'status': 'success',
                         'target_joint': demo_target_joint,
                     }
-                except Exception as e:
+                except Exception:
                     # If loading fails, continue
-                    print(f'[API] [get-demo-target-joint] [{request_id}] Failed to load demo {mechanism_type}: {e}')
                     pass
 
         # Also check by characteristic joint names (heuristic for demos)
@@ -480,34 +473,28 @@ def get_demo_target_joint(request: dict):
             try:
                 _, demo_target_joint, _ = load_mechanism('leg')
                 heuristic_match = ('leg', demo_target_joint)
-            except Exception as e:
-                print(f'[API] [get-demo-target-joint] [{request_id}] Failed to load leg demo: {e}')
+            except Exception:
                 pass
         elif 'final_joint' in joint_names_set:
             try:
                 _, demo_target_joint, _ = load_mechanism('complex')
                 heuristic_match = ('complex', demo_target_joint)
-            except Exception as e:
-                print(f'[API] [get-demo-target-joint] [{request_id}] Failed to load complex demo: {e}')
+            except Exception:
                 pass
         elif 'final' in joint_names_set and 'coupler_rocker_joint' not in joint_names_set:
             try:
                 _, demo_target_joint, _ = load_mechanism('intermediate')
                 heuristic_match = ('intermediate', demo_target_joint)
-            except Exception as e:
-                print(f'[API] [get-demo-target-joint] [{request_id}] Failed to load intermediate demo: {e}')
+            except Exception:
                 pass
         elif 'coupler_rocker_joint' in joint_names_set:
             try:
                 _, demo_target_joint, _ = load_mechanism('simple')
                 heuristic_match = ('simple', demo_target_joint)
-            except Exception as e:
-                print(f'[API] [get-demo-target-joint] [{request_id}] Failed to load simple demo: {e}')
+            except Exception:
                 pass
 
         if heuristic_match:
-            elapsed = (time.time() - start_time) * 1000
-            print(f'[API] [get-demo-target-joint] [{request_id}] Found via heuristic ({heuristic_match[0]}): {heuristic_match[1]}, elapsed: {elapsed:.2f}ms')
             return {
                 'status': 'success',
                 'target_joint': heuristic_match[1],
@@ -552,12 +539,6 @@ def get_demo_target_joint(request: dict):
             mechanism_name_hash = hash(mechanism_name) if mechanism_name else 0
             selected_index = abs(mechanism_name_hash) % len(sorted_candidates)
             target_joint = sorted_candidates[selected_index]
-            elapsed = (time.time() - start_time) * 1000
-            msg = (
-                f'[API] [get-demo-target-joint] [{request_id}] Using fallback (deterministic non-default): '
-                f'{target_joint}, candidates: {len(candidate_joints)}, elapsed: {elapsed:.2f}ms'
-            )
-            print(msg)
             return {
                 'status': 'success',
                 'target_joint': target_joint,
@@ -582,33 +563,26 @@ def get_demo_target_joint(request: dict):
                     joint_type = joint_data.type
 
                 if joint_type in ('Crank', 'Revolute'):
-                    elapsed = (time.time() - start_time) * 1000
-                    print(f'[API] [get-demo-target-joint] [{request_id}] Using fallback (any Crank/Revolute): {joint_name}, elapsed: {elapsed:.2f}ms')
                     return {
                         'status': 'success',
                         'target_joint': joint_name,
                     }
 
         # No suitable joint found
-        elapsed = (time.time() - start_time) * 1000
-        print(f'[API] [get-demo-target-joint] [{request_id}] No suitable joint found, elapsed: {elapsed:.2f}ms')
         return {
             'status': 'success',
             'target_joint': None,
         }
 
     except Exception as e:
-        elapsed = (time.time() - start_time) * 1000
-        print(f'[API] [get-demo-target-joint] [{request_id}] Error in {elapsed:.2f}ms: {e}')
-        import traceback
-        traceback.print_exc()
+        logger.error(f'Error getting demo target joint [{request_id}]: {e}')
         return {
             'status': 'error',
             'message': f'Failed to get target joint: {str(e)}',
         }
 
     except Exception as e:
-        print(f'Error getting demo target joint: {e}')
+        logger.error(f'Error getting demo target joint: {e}')
         return {
             'status': 'error',
             'message': f'Failed to get demo target joint: {str(e)}',
@@ -673,8 +647,6 @@ def compute_pylink_trajectory(request: dict):
             error_msg = f'Unsolvable mechanism: {", ".join(error_reasons)}. '
             error_msg += 'This may be due to over-constrained geometry, invalid link lengths, or impossible joint positions.'
 
-            print(f'  Mechanism simulation failed: {error_msg}')
-
             return {
                 'status': 'error',
                 'error_type': 'unsolvable_mechanism',
@@ -706,8 +678,6 @@ def compute_pylink_trajectory(request: dict):
         end_time = time.perf_counter()
         execution_time_ms = (end_time - start_time) * 1000
 
-        print(f'  Computed trajectory in {execution_time_ms:.2f}ms (Mechanism)')
-
         response = {
             'status': 'success',
             'message': f'Computed {n_steps} trajectory steps for {len(trajectories)} joints',
@@ -721,7 +691,7 @@ def compute_pylink_trajectory(request: dict):
         return sanitize_for_json(response)
 
     except Exception as e:
-        print(f'Error computing pylink trajectory: {e}')
+        logger.error(f'Error computing pylink trajectory: {e}')
         traceback.print_exc()
         return {
             'status': 'error',
@@ -799,7 +769,7 @@ def compute_pylink_trajectories_batch(request: dict):
                 })
         return sanitize_for_json({'results': results})
     except Exception as e:
-        print(f'Error in compute-pylink-trajectories-batch: {e}')
+        logger.error(f'Error in compute-pylink-trajectories-batch: {e}')
         traceback.print_exc()
         return sanitize_for_json({
             'status': 'error',
@@ -845,7 +815,7 @@ def validate_mechanism_endpoint(request: dict):
         }
 
     except Exception as e:
-        print(f'Error validating mechanism: {e}')
+        logger.error(f'Error validating mechanism: {e}')
         traceback.print_exc()
         return {
             'status': 'error',
@@ -1199,46 +1169,22 @@ def optimize_trajectory_endpoint(request: dict):
 
         # Build response using OptimizationResult.to_dict() for proper type serialization
         # This ensures all fields are correctly formatted (convergence_history, best_error, etc.)
-        # #region agent log
-        with open('/Users/abf/projects/Acinonyx/.cursor/debug.log', 'a') as f:
-            f.write(
-                json.dumps({
-                    'location': 'acinonyx_api.py:1082',
-                    'message': 'Before result.to_dict(), checking optimized_dimensions',
-                    'data': {
-                        'optimized_dimensions': result.optimized_dimensions,
-                        'optimized_mechanism_current_dims': list(optimized_mechanism._current_dimensions) if optimized_mechanism else None,
-                        'optimized_mechanism_dim_names': list(optimized_mechanism._dimension_mapping.names) if optimized_mechanism else None,
-                    },
-                    'timestamp': int(time.time() * 1000),
-                    'sessionId': 'debug-session',
-                    'runId': 'run1',
-                    'hypothesisId': 'H',
-                }) + '\n',
-            )
-        # #endregion
         result_dict = result.to_dict()
 
-        # ═══════════════════════════════════════════════════════════════════════════════
-        # CRITICAL VALIDATION: Ensure optimized_dimensions match edge distances
-        # ═══════════════════════════════════════════════════════════════════════════════
-        # This is a fundamental correctness check. The optimizer reports dimension values
+        # Ensure optimized_dimensions match edge distances
+        # correctness check. The optimizer reports dimension values
         # in optimized_dimensions (e.g., {"crank_link_distance": 4.953}). These MUST match
         # the actual edge distances in the returned mechanism's linkage.edges.
-        #
         # If they don't match, it means:
         # - Mechanism.to_dict() is not correctly applying optimized distances to edges, OR
         # - The dimension_mapping.edge_mapping is incorrect, OR
         # - There's a bug in how we're reading/writing _current_dimensions
-        #
         # We validate by:
         # 1. For each dimension in optimized_dimensions, look up its edge_id from edge_mapping
         # 2. Check that edges[edge_id].distance matches the dimension value
         # 3. Raise ValueError with detailed error message if any mismatch is found
-        #
         # This validation runs BEFORE returning the response, ensuring we never return
         # inconsistent data to the frontend.
-        # ═══════════════════════════════════════════════════════════════════════════════
         if result.success:
             # CRITICAL: Fail hard if optimized_pylink_data is missing
             if not result_dict.get('optimized_pylink_data'):
@@ -1311,27 +1257,6 @@ def optimize_trajectory_endpoint(request: dict):
                                 'edge_distance': edge_distance,
                                 'matches': abs(float(dim_value) - float(edge_distance)) <= tolerance,
                             })
-
-                    # #region agent log
-                    with open('/Users/abf/projects/Acinonyx/.cursor/debug.log', 'a') as f:
-                        f.write(
-                            json.dumps({
-                                'location': 'acinonyx_api.py:1099',
-                                'message': 'CRITICAL: Validating optimized_dimensions vs edge distances',
-                                'data': {
-                                    'optimized_dimensions': optimized_dimensions,
-                                    'edge_distances': {eid: e.get('distance') for eid, e in edges.items()},
-                                    'validation_details': validation_details,
-                                    'mismatches': mismatches,
-                                    'has_mismatches': len(mismatches) > 0,
-                                },
-                                'timestamp': int(time.time() * 1000),
-                                'sessionId': 'debug-session',
-                                'runId': 'run1',
-                                'hypothesisId': 'VALIDATION',
-                            }) + '\n',
-                        )
-                    # #endregion
 
                     # RAISE EXCEPTION if there are mismatches - this is a critical bug
                     if mismatches:
@@ -1436,9 +1361,7 @@ def optimize_trajectory_endpoint(request: dict):
 
             logger.info('Preserved original metadata (colors, showPath, link names, etc.)')
 
-        # ═══════════════════════════════════════════════════════════════════════════════
-        # CRITICAL VALIDATION: Ensure optimized_pylink_data exists and is valid
-        # ═══════════════════════════════════════════════════════════════════════════════
+        # Ensure optimized_pylink_data exists and is valid
         if result.success:
             if not result_dict.get('optimized_pylink_data'):
                 error_msg = 'CRITICAL ERROR: Optimization succeeded but optimized_pylink_data is missing'
@@ -1542,12 +1465,9 @@ def get_optimizable_dimensions(request: dict):
     request_id = str(uuid.uuid4())[:8]
     start_time = time.time()
 
-    print(f'[API] [get-optimizable-dimensions] [{request_id}] Entry')
-
     try:
         if not request:
             elapsed = (time.time() - start_time) * 1000
-            print(f'[API] [get-optimizable-dimensions] [{request_id}] Error: Missing request data, elapsed: {elapsed:.2f}ms')
             return {
                 'status': 'error',
                 'message': 'Missing request data',
@@ -1557,13 +1477,9 @@ def get_optimizable_dimensions(request: dict):
         mechanism = create_mechanism_from_request(request)
         mechanism_name = getattr(mechanism, 'name', 'unknown')
 
-        print(f'[API] [get-optimizable-dimensions] [{request_id}] Mechanism: {mechanism_name}')
-
         # Get dimension spec from Mechanism
         dim_spec = mechanism.get_dimension_bounds_spec()
         initial_dim_count = len(dim_spec.names) if dim_spec else 0
-
-        print(f'[API] [get-optimizable-dimensions] [{request_id}] Initial dimensions: {initial_dim_count}')
 
         # Check for configs and apply filtering if provided
         config_applied: dict[str, str | dict[str, object] | None] = {'type': 'none', 'config': None}
@@ -1573,19 +1489,6 @@ def get_optimizable_dimensions(request: dict):
         dimension_variation_config = request.get('dimension_variation_config')
         mech_variation_config = request.get('mech_variation_config')  # NEW name
         achievable_target_config = request.get('achievable_target_config')  # OLD name (backward compat)
-
-        # #region agent log
-        import json
-        with open('/Users/abf/projects/Acinonyx/.cursor/debug.log', 'a') as f:
-            f.write(
-                json.dumps({
-                    'location': 'acinonyx_api.py:1223', 'message': 'Initializing dimension_variation_config', 'data': {
-                        'hasDimensionVariationConfig': dimension_variation_config is not None, 'hasMechVariationConfig':
-                        mech_variation_config is not None, 'hasAchievableTargetConfig': achievable_target_config is not None,
-                    }, 'timestamp': int(time.time() * 1000), 'sessionId': 'debug-session', 'runId': 'run6', 'hypothesisId': 'B',
-                }) + '\n',
-            )
-        # #endregion
 
         # Use new name if provided, fall back to old name for backward compatibility
         if mech_variation_config:
@@ -1651,64 +1554,13 @@ def get_optimizable_dimensions(request: dict):
                         'random_seed': config.random_seed,
                     },
                 }
-                # #region agent log
-                import json
-                with open('/Users/abf/projects/Acinonyx/.cursor/debug.log', 'a') as f:
-                    f.write(
-                        json.dumps({
-                            'location': 'acinonyx_api.py:1283', 'message': 'Successfully extracted dimension_variation_config from MechVariationConfig', 'data': {
-                                'hasDimensionVariationConfig': dimension_variation_config is not None, 'type': type(
-                                    dimension_variation_config,
-                                ).__name__ if dimension_variation_config is not None else 'None',
-                            }, 'timestamp': int(time.time() * 1000), 'sessionId': 'debug-session', 'runId': 'run6', 'hypothesisId': 'B',
-                        }) + '\n',
-                    )
-                # #endregion
             except Exception as e:
-                print(f'[ERROR] Failed to create MechVariationConfig in get_optimizable_dimensions: {e}')
+                logger.error(f'Failed to create MechVariationConfig in get_optimizable_dimensions: {e}')
                 traceback.print_exc()
-                # #region agent log
-                import json
-                with open('/Users/abf/projects/Acinonyx/.cursor/debug.log', 'a') as f:
-                    f.write(
-                        json.dumps({
-                            'location': 'acinonyx_api.py:1292', 'message': 'ERROR creating MechVariationConfig', 'data': {
-                                'error': str(e), 'hasDimensionVariationConfig': 'dimension_variation_config' in locals(
-                                ), 'dimensionVariationConfigValue': dimension_variation_config if 'dimension_variation_config' in locals() else 'NOT_DEFINED',
-                            }, 'timestamp': int(time.time() * 1000), 'sessionId': 'debug-session', 'runId': 'run6', 'hypothesisId': 'B',
-                        }) + '\n',
-                    )
-                # #endregion
                 return {
                     'status': 'error',
                     'message': f'Invalid MechVariationConfig: {str(e)}',
                 }
-
-        # #region agent log
-        with open('/Users/abf/projects/Acinonyx/.cursor/debug.log', 'a') as f:
-            _dv_in_locals = 'dimension_variation_config' in locals()
-            _data = {
-                'hasDimensionVariationConfig': _dv_in_locals,
-                'isNone': dimension_variation_config is None if _dv_in_locals else 'NOT_DEFINED',
-                'type': (
-                    type(dimension_variation_config).__name__
-                    if _dv_in_locals and dimension_variation_config is not None
-                    else 'N/A'
-                ),
-                'hasConfigData': config_data is not None if 'config_data' in locals() else False,
-            }
-            f.write(
-                json.dumps({
-                    'location': 'acinonyx_api.py:1305',
-                    'message': 'Checking dimension_variation_config before use',
-                    'data': _data,
-                    'timestamp': int(time.time() * 1000),
-                    'sessionId': 'debug-session',
-                    'runId': 'run6',
-                    'hypothesisId': 'B',
-                }) + '\n',
-            )
-        # #endregion
 
         if dimension_variation_config:
             try:
@@ -1748,17 +1600,6 @@ def get_optimizable_dimensions(request: dict):
         final_dim_count = len(dim_spec.names) if dim_spec else 0
         elapsed = (time.time() - start_time) * 1000
 
-        if config_applied['type'] != 'none':
-            print(
-                f'[API] [get-optimizable-dimensions] [{request_id}] Applied {config_applied["type"]}, '
-                f'final dimensions: {final_dim_count} (was {initial_dim_count}), elapsed: {elapsed:.2f}ms',
-            )
-        else:
-            print(
-                f'[API] [get-optimizable-dimensions] [{request_id}] No config applied, '
-                f'final dimensions: {final_dim_count}, elapsed: {elapsed:.2f}ms',
-            )
-
         return {
             'status': 'success',
             'dimension_bounds_spec': dim_spec.to_dict(),
@@ -1767,8 +1608,7 @@ def get_optimizable_dimensions(request: dict):
 
     except Exception as e:
         elapsed = (time.time() - start_time) * 1000
-        print(f'[API] [get-optimizable-dimensions] [{request_id}] Error in {elapsed:.2f}ms: {e}')
-        print(f'Error extracting dimensions: {e}')
+        logger.error(f'Error extracting dimensions [{request_id}] in {elapsed:.2f}ms: {e}')
         traceback.print_exc()
         return {
             'status': 'error',
@@ -1975,7 +1815,7 @@ def prepare_trajectory(request: dict):
         return sanitize_for_json(response)
 
     except Exception as e:
-        print(f'Error preparing trajectory: {e}')
+        logger.error(f'Error preparing trajectory: {e}')
         traceback.print_exc()
         return {
             'status': 'error',
@@ -2056,7 +1896,7 @@ def analyze_trajectory_endpoint(request: dict):
         return sanitize_for_json(response)
 
     except Exception as e:
-        print(f'Error analyzing trajectory: {e}')
+        logger.error(f'Error analyzing trajectory: {e}')
         return {
             'status': 'error',
             'message': f'Failed to analyze trajectory: {str(e)}',
@@ -2111,7 +1951,7 @@ def create_dimension_variation_config(request: dict):
             'message': f'Invalid DimensionVariationConfig parameters: {str(e)}',
         }
     except Exception as e:
-        print(f'Error creating DimensionVariationConfig: {e}')
+        logger.error(f'Error creating DimensionVariationConfig: {e}')
         traceback.print_exc()
         return {
             'status': 'error',
@@ -2208,7 +2048,7 @@ def create_achievable_target_config(request: dict):
             'message': f'Invalid MechVariationConfig parameters: {str(e)}',
         }
     except Exception as e:
-        print(f'Error creating MechVariationConfig: {e}')
+        logger.error(f'Error creating MechVariationConfig: {e}')
         traceback.print_exc()
         return {
             'status': 'error',
@@ -2264,14 +2104,11 @@ def get_achievable_target(request: dict):
     """
     try:
         start_time = time.perf_counter()
-        print(f'[DEBUG] get_achievable_target called with target_joint={request.get("target_joint")}, n_steps={request.get("n_steps")}')
 
         # Extract parameters
         target_joint = request.get('target_joint')
         n_steps = request.get('n_steps')
         config_input = request.get('config')
-
-        print(f'[DEBUG] Extracted: target_joint={target_joint}, n_steps={n_steps}, has_config={config_input is not None}')
 
         if not target_joint:
             return {
@@ -2314,27 +2151,8 @@ def get_achievable_target(request: dict):
 
                 # Now instantiate MechVariationConfig with properly converted nested dataclasses
                 config = MechVariationConfig(**config_dict)
-                print('[DEBUG] Created MechVariationConfig successfully')
-
-                # Log config stats
-                if config:
-                    print('\n[get-achievable-target] MechVariationConfig:')
-                    dim_var = config.dimension_variation
-                    print('  DimensionVariationConfig:')
-                    print(f'    default_variation_range: {dim_var.default_variation_range}')
-                    print(f'    default_enabled: {dim_var.default_enabled}')
-                    print(f'    dimension_overrides: {len(dim_var.dimension_overrides)} overrides')
-                    print(f'    exclude_dimensions: {len(dim_var.exclude_dimensions)} excluded')
-
-                    static_joint = config.static_joint_movement
-                    print('  StaticJointMovementConfig:')
-                    print(f'    enabled: {static_joint.enabled}')
-                    print(f'    max_x_movement: {static_joint.max_x_movement}')
-                    print(f'    max_y_movement: {static_joint.max_y_movement}')
-                    print(f'    joint_overrides: {len(static_joint.joint_overrides)} overrides')
-                    print(f'    linked_joints: {len(static_joint.linked_joints)} pairs')
             except Exception as e:
-                print(f'[ERROR] Failed to create MechVariationConfig: {e}')
+                logger.error(f'Failed to create MechVariationConfig: {e}')
                 traceback.print_exc()
                 return {
                     'status': 'error',
@@ -2343,14 +2161,12 @@ def get_achievable_target(request: dict):
                 }
 
         # Call create_achievable_target
-        print(f'[DEBUG] Calling create_achievable_target with target_joint={target_joint}, n_steps={n_steps}')
         result = create_achievable_target(
             mechanism=mechanism,
             target_joint=target_joint,
             config=config,
             n_steps=n_steps,
         )
-        print(f'[DEBUG] create_achievable_target returned: target.joint_name={result.target.joint_name}, positions count={len(result.target.positions)}')
 
         # Convert AchievableTargetResult to dict format
         # Note: AchievableTargetResult doesn't have .to_dict(), so we convert manually
@@ -2369,7 +2185,6 @@ def get_achievable_target(request: dict):
         end_time = time.perf_counter()
         execution_time_ms = (end_time - start_time) * 1000
 
-        print(f'[DEBUG] Returning response with {len(result_dict["target"]["positions"])} positions')
         response = {
             'status': 'success',
             'result': result_dict,
@@ -2386,7 +2201,7 @@ def get_achievable_target(request: dict):
             'message': str(e),
         }
     except Exception as e:
-        print(f'Error creating achievable target: {e}')
+        logger.error(f'Error creating achievable target: {e}')
         traceback.print_exc()
         return {
             'status': 'error',
@@ -2514,7 +2329,7 @@ def reduce_dimensions_endpoint(request: dict):
             'message': f'Required library not available: {str(e)}',
         }
     except Exception as e:
-        print(f'Error reducing dimensions: {e}')
+        logger.error(f'Error reducing dimensions: {e}')
         traceback.print_exc()
         return {
             'status': 'error',
@@ -2651,7 +2466,7 @@ def generate_samples_endpoint(request: dict):
         return sanitize_for_json(response)
 
     except Exception as e:
-        print(f'Error generating samples: {e}')
+        logger.error(f'Error generating samples: {e}')
         traceback.print_exc()
         return {
             'status': 'error',
@@ -2795,7 +2610,7 @@ def generate_valid_samples_endpoint(request: dict):
         return sanitize_for_json(response)
 
     except Exception as e:
-        print(f'Error generating valid samples: {e}')
+        logger.error(f'Error generating valid samples: {e}')
         traceback.print_exc()
         # Check if we have a partial result we can return
         error_response = {
@@ -2954,7 +2769,7 @@ def generate_good_samples_endpoint(request: dict):
         return sanitize_for_json(response)
 
     except Exception as e:
-        print(f'Error generating good samples: {e}')
+        logger.error(f'Error generating good samples: {e}')
         traceback.print_exc()
         error_response = {
             'status': 'error',

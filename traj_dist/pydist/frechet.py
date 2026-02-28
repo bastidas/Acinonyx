@@ -46,7 +46,6 @@ def free_line(p, eps, s, dps1, dps2, ds):
             lf = [0, 1]
     else:
         if point_to_seg(p, s[0], s[1], dps1, dps2, ds) > eps:
-            # print("No Intersection")
             lf = [-1, -1]
         else:
             segl = eucl_dist(s[0], s[1])
@@ -257,12 +256,11 @@ def frechet(P: np.ndarray, Q: np.ndarray) -> float:
     cc = compute_critical_values(P, Q, p, q, mdist, P_dist, Q_dist)
     eps = cc[0]
     while (len(cc) != 1):
-        m_i = len(cc) / 2 - 1
+        m_i = len(cc) // 2 - 1
         eps = cc[m_i]
         rep = decision_problem(P, Q, p, q, eps, mdist, P_dist, Q_dist)
         if rep:
-            cc = cc[:m_i + 1]
+            cc = cc[: m_i + 1]
         else:
             cc = cc[m_i + 1:]
-    frech = eps
-    return frech
+    return float(eps)

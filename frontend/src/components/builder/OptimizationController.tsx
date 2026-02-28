@@ -44,6 +44,8 @@ export interface OptimizationControllerContext {
   triggerMechanismChange: () => void
   autoSimulateDelayMs: number
   pylinkDoc: PylinkDocument
+  /** When true, dimension fetch is allowed (on simulation complete or when panel opens). */
+  isOptimizerPanelOpen: boolean
   // Helper functions
   isHypergraphFormat: (data: unknown) => data is LinkageDocument
   logMechanismState: (label: string, doc: LinkageDocument) => void
@@ -62,9 +64,14 @@ export interface UseOptimizationControllerReturn {
   optIterations: number
   optMaxIterations: number
   optTolerance: number
+  optInertia: number
+  optC1: number
+  optC2: number
+  optDiscretizationSteps: number
+  optTimeLimit: number
+  optGapLimit: number
   optBoundsFactor: number
   optMinLength: number
-  optVerbose: boolean
   prepEnableSmooth: boolean
   prepSmoothWindow: number
   prepSmoothPolyorder: number
@@ -89,9 +96,14 @@ export interface UseOptimizationControllerReturn {
   setOptIterations: React.Dispatch<React.SetStateAction<number>>
   setOptMaxIterations: React.Dispatch<React.SetStateAction<number>>
   setOptTolerance: React.Dispatch<React.SetStateAction<number>>
+  setOptInertia: React.Dispatch<React.SetStateAction<number>>
+  setOptC1: React.Dispatch<React.SetStateAction<number>>
+  setOptC2: React.Dispatch<React.SetStateAction<number>>
+  setOptDiscretizationSteps: React.Dispatch<React.SetStateAction<number>>
+  setOptTimeLimit: React.Dispatch<React.SetStateAction<number>>
+  setOptGapLimit: React.Dispatch<React.SetStateAction<number>>
   setOptBoundsFactor: React.Dispatch<React.SetStateAction<number>>
   setOptMinLength: React.Dispatch<React.SetStateAction<number>>
-  setOptVerbose: React.Dispatch<React.SetStateAction<boolean>>
   setPrepEnableSmooth: React.Dispatch<React.SetStateAction<boolean>>
   setPrepSmoothWindow: React.Dispatch<React.SetStateAction<number>>
   setPrepSmoothPolyorder: React.Dispatch<React.SetStateAction<number>>
@@ -107,6 +119,8 @@ export interface UseOptimizationControllerReturn {
 
   // Functions
   revertOptimization: () => void
+  /** Clear optimizer result and sync state so sync effect does not re-apply. Use on Clear all and when loading a new document. */
+  clearOptimizerState: () => void
   preprocessTrajectory: () => Promise<void>
   runOptimization: (config: Record<string, unknown>) => Promise<void>
   syncToOptimizerResult: () => void
@@ -148,12 +162,25 @@ export function useOptimizationController(
   const [optIterations, setOptIterations] = useState(512)
   const [optMaxIterations, setOptMaxIterations] = useState(100)
   const [optTolerance, setOptTolerance] = useState(1e-6)
+  const [optInertia, setOptInertia] = useState(0.7)
+  const [optC1, setOptC1] = useState(1.5)
+  const [optC2, setOptC2] = useState(1.5)
+  const [optDiscretizationSteps, setOptDiscretizationSteps] = useState(20)
+  const [optTimeLimit, setOptTimeLimit] = useState(300)
+  const [optGapLimit, setOptGapLimit] = useState(0.01)
   const [optBoundsFactor, setOptBoundsFactor] = useState(2.0)
   const [optMinLength, setOptMinLength] = useState(5)
-  const [optVerbose, setOptVerbose] = useState(true)
-
   // Trajectory preprocessing state
   const [prepEnableSmooth, setPrepEnableSmooth] = useState(true)
+
+  // Default max iterations by method: Powell and Nelder-Mead use 512; L-BFGS-B uses 100
+  useEffect(() => {
+    if (optMethod === 'powell' || optMethod === 'nelder-mead') {
+      setOptMaxIterations(512)
+    } else if (optMethod === 'scipy') {
+      setOptMaxIterations(100)
+    }
+  }, [optMethod])
   const [prepSmoothWindow, setPrepSmoothWindow] = useState(4)
   const [prepSmoothPolyorder, setPrepSmoothPolyorder] = useState(3)
   const [prepSmoothMethod, setPrepSmoothMethod] = useState<SmoothMethod>('savgol')
@@ -162,6 +189,11 @@ export function useOptimizationController(
   const [prepResampleMethod, setPrepResampleMethod] = useState<ResampleMethod>('parametric')
   const [isPreprocessing, setIsPreprocessing] = useState(false)
   const [preprocessResult, setPreprocessResult] = useState<PreprocessResult | null>(null)
+
+  // When the optimization panel first opens, match target points to Trajectory Simulation Steps
+  useEffect(() => {
+    setPrepTargetNSteps(context.simulationSteps)
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps -- only on first mount
 
   // Dimension info state - fetched after trajectory computation
   const [dimensionInfo, setDimensionInfo] = useState<DimensionInfo | null>(null)
@@ -230,11 +262,24 @@ export function useOptimizationController(
     }
   }, [preOptimizationDoc, context])
 
+  // Clear optimizer result and sync state so the sync effect does not re-apply (e.g. on Clear all or load document)
+  const clearOptimizerState = useCallback(() => {
+    lastOptimizerResultRef.current = null
+    setPreOptimizationDoc(null)
+    setOptimizationResult(null)
+    setIsOptimizedMechanism(false)
+    setIsSyncedToOptimizer(false)
+  }, [])
+
   // Preprocess trajectory (smooth and/or resample)
   const preprocessTrajectory = useCallback(async () => {
     const selectedPath = context.targetPaths.find(p => p.id === context.selectedPathId)
     if (!selectedPath || selectedPath.points.length < 3) {
       context.showStatus('Select a path with at least 3 points', 'warning', 2000)
+      return
+    }
+    if (!selectedPath.targetJoint) {
+      context.showStatus('Select a target joint for this path first', 'warning', 2000)
       return
     }
 
@@ -246,7 +291,7 @@ export function useOptimizationController(
       // Send in TargetTrajectory format (preferred) or raw trajectory (backward compatible)
       const requestBody: Record<string, unknown> = {
         target_trajectory: {
-          joint_name: selectedPath.targetJoint || 'unknown',
+          joint_name: selectedPath.targetJoint,
           positions: selectedPath.points
         },
         target_n_steps: prepTargetNSteps,
@@ -280,15 +325,18 @@ export function useOptimizationController(
           (p: number[]) => [p[0], p[1]] as [number, number]
         )
 
-        // Store the full TargetTrajectory for use in optimization
+        // Store the full TargetTrajectory for use in optimization (never store 'unknown')
+        const storedJointName =
+          (targetTrajectory.joint_name && String(targetTrajectory.joint_name).trim() && String(targetTrajectory.joint_name) !== 'unknown')
+            ? String(targetTrajectory.joint_name)
+            : selectedPath.targetJoint
         context.setTargetPaths(prev => prev.map(p =>
           p.id === context.selectedPathId
             ? {
                 ...p,
                 points: newPoints,
-                // Store TargetTrajectory for optimizer (keep original name)
                 targetTrajectory: {
-                  joint_name: targetTrajectory.joint_name || selectedPath.targetJoint || 'unknown',
+                  joint_name: storedJointName,
                   positions: targetTrajectory.positions,
                   n_steps: targetTrajectory.n_steps || targetTrajectory.positions.length
                 }
@@ -345,30 +393,54 @@ export function useOptimizationController(
       // Serialize and log optimization config before sending
       const serializedConfig = serializeMechVariationConfig(config as Record<string, unknown>)
 
-      // Build optimization options based on method
+      // Build optimization options based on method (logging is done via Python/backend.log)
       const optimizationOptions: Record<string, unknown> = {
         method: optMethod,
-        verbose: optVerbose,
+        verbose: false,
         mech_variation_config: serializedConfig
       }
 
-      // PSO-specific options
-      if (optMethod === 'pso' || optMethod === 'pylinkage') {
+      // Particle Swarm (pylinkage) options
+      if (optMethod === 'pylinkage') {
         optimizationOptions.n_particles = optNParticles
         optimizationOptions.iterations = optIterations
+        if (optInertia != null) optimizationOptions.w = optInertia
+        if (optC1 != null) optimizationOptions.c1 = optC1
+        if (optC2 != null) optimizationOptions.c2 = optC2
       }
 
-      // SciPy-specific options
+      // SciPy options (L-BFGS-B, Powell, Nelder-Mead)
       if (optMethod === 'scipy' || optMethod === 'powell' || optMethod === 'nelder-mead') {
         optimizationOptions.max_iterations = optMaxIterations
         optimizationOptions.tolerance = optTolerance
       }
 
-      // Use stored TargetTrajectory if available (from preprocessing), otherwise construct from points
-      const targetTrajectory = selectedPath.targetTrajectory || {
+      // SCIP options
+      if (optMethod === 'scip') {
+        optimizationOptions.discretization_steps = optDiscretizationSteps
+        optimizationOptions.time_limit = optTimeLimit
+        optimizationOptions.gap_limit = optGapLimit
+      }
+
+      // Use stored TargetTrajectory if available (from preprocessing), otherwise construct from points.
+      // Always prefer selectedPath.targetJoint for joint_name so UI selection wins over stale stored 'unknown'.
+      const baseTrajectory = selectedPath.targetTrajectory || {
         joint_name: selectedPath.targetJoint,
         positions: selectedPath.points,
         n_steps: selectedPath.points.length
+      }
+      const effectiveJointName =
+        selectedPath.targetJoint ||
+        (baseTrajectory.joint_name && baseTrajectory.joint_name !== 'unknown' ? baseTrajectory.joint_name : null)
+      if (!effectiveJointName) {
+        context.showStatus('Select a target joint for this path first', 'warning', 2000)
+        return
+      }
+      const targetTrajectory = {
+        ...baseTrajectory,
+        joint_name: effectiveJointName,
+        positions: baseTrajectory.positions,
+        n_steps: baseTrajectory.n_steps ?? baseTrajectory.positions.length
       }
 
       const response = await fetch('/api/optimize-trajectory', {
@@ -536,7 +608,6 @@ export function useOptimizationController(
             throw new Error(errorMsg)
           }
 
-          console.log(`[Optimization] ✓ Validation passed: All ${Object.keys(optimizedDims).length} optimized dimensions match edge distances`)
         }
 
         // CRITICAL VALIDATION: Ensure node positions match edge distances
@@ -589,17 +660,9 @@ export function useOptimizationController(
           throw new Error(errorMsg)
         }
 
-        console.log(`[Optimization] ✓ Position validation passed: All ${Object.keys(edges).length} edge distances match node positions`)
-
         // CRITICAL: Apply optimized mechanism - this is the ONLY source of truth
         context.logMechanismState('Before optimization', context.linkageDoc)
         context.logMechanismState('After optimization (optimizer result)', resultData)
-
-        console.log('[Optimization] Applying optimized mechanism:', {
-          nodeCount: Object.keys(resultData.linkage.nodes || {}).length,
-          edgeCount: Object.keys(resultData.linkage.edges || {}).length,
-          success: optResult.success
-        })
 
         // Track optimizer result for verification and sync
         lastOptimizerResultRef.current = resultData
@@ -621,10 +684,7 @@ export function useOptimizationController(
           setTimeout(() => {
             optimizationJustCompletedRef.current = false
             optimizationCompleteTimeRef.current = null
-            console.log('[Optimization] Mechanism lock released after 2 seconds')
           }, 2000)
-
-          console.log('[Optimization] Applied optimized mechanism - mechanism is synced to optimizer result and locked for 2 seconds')
         }
 
         // Safely calculate improvement
@@ -692,7 +752,7 @@ export function useOptimizationController(
     } finally {
       setIsOptimizing(false)
     }
-  }, [context, optMethod, optNParticles, optIterations, optMaxIterations, optTolerance, optVerbose, serializeMechVariationConfig])
+  }, [context, optMethod, optNParticles, optIterations, optMaxIterations, optTolerance, optInertia, optC1, optC2, optDiscretizationSteps, optTimeLimit, optGapLimit, serializeMechVariationConfig])
 
   // Sync mechanism to optimizer result
   const syncToOptimizerResult = useCallback(() => {
@@ -702,7 +762,6 @@ export function useOptimizationController(
     }
 
     const optimizerDoc = lastOptimizerResultRef.current
-    console.log('[Optimization] Syncing mechanism to optimizer result')
     context.setLinkageDoc(optimizerDoc)
     context.triggerMechanismChange()
     setIsSyncedToOptimizer(true)
@@ -713,19 +772,67 @@ export function useOptimizationController(
   // DIMENSION FETCHING
   // ═══════════════════════════════════════════════════════════════════════════════
 
-  // Fetch dimensions after simulation completes
-  // CRITICAL: Use refs to access context values to prevent infinite loops
-  // The callback should be stable and not recreate on every render
+  // Fetch dimensions only when optimizer panel is open (on simulation complete or when panel opens)
+  const prevMechanismKeyRef = useRef<string | null>(null)
+
+  const runDimensionFetch = useCallback((cacheKey: string, delayMs: number = 50) => {
+    if (dimensionFetchTimerRef.current) {
+      clearTimeout(dimensionFetchTimerRef.current)
+    }
+    dimensionFetchTimerRef.current = setTimeout(async () => {
+      setIsLoadingDimensions(true)
+      setDimensionInfoError(null)
+      try {
+        const latestContext = contextRef.current
+        if (!latestContext.linkageDoc || typeof latestContext.linkageDoc !== 'object' || !('linkage' in latestContext.linkageDoc)) {
+          setDimensionInfoError('Invalid linkage structure - missing linkage field')
+          setIsLoadingDimensions(false)
+          return
+        }
+        const response = await fetch('/api/get-optimizable-dimensions', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ pylink_data: latestContext.linkageDoc })
+        })
+        if (response.ok) {
+          const result = await response.json()
+          if (result.status === 'success' && result.dimension_bounds_spec) {
+            const spec = result.dimension_bounds_spec
+            setDimensionInfo({
+              names: spec.names || [],
+              initial_values: spec.initial_values || [],
+              bounds: spec.bounds || [],
+              n_dimensions: spec.names?.length || 0
+            })
+            prevTrajectoryKeyRef.current = cacheKey
+            const linkage = latestContext.linkageDoc.linkage as { nodes?: Record<string, unknown>; edges?: Record<string, unknown> } | undefined
+            prevMechanismKeyRef.current = JSON.stringify({
+              name: latestContext.linkageDoc.name,
+              jointCount: Object.keys(linkage?.nodes || {}).length,
+              edgeCount: Object.keys(linkage?.edges || {}).length
+            })
+          } else {
+            setDimensionInfoError(result.message || 'Failed to load dimensions')
+          }
+        } else {
+          setDimensionInfoError('Failed to fetch dimensions')
+        }
+      } catch (error) {
+        console.error('[OptimizationController] Error fetching dimensions:', error)
+        setDimensionInfoError('Error fetching dimensions')
+      } finally {
+        setIsLoadingDimensions(false)
+      }
+    }, delayMs)
+  }, [])
+
   const handleSimulationComplete = useCallback((data: TrajectoryData) => {
-    // Access latest context values via ref to avoid dependency on changing object
     const currentContext = contextRef.current
     if (!currentContext.linkageDoc) return
+    if (!currentContext.isOptimizerPanelOpen) return
 
-    // Generate stable key for this trajectory
-    const generateKey = () => {
+    const generateTrajectoryKey = () => {
       try {
-        // LinkageDocument has name, linkage.nodes, linkage.edges structure
-        // Use pylinkDoc for joint count (converted legacy format)
         const keyParts = {
           name: currentContext.linkageDoc.name,
           jointCount: currentContext.pylinkDoc.pylinkage.joints.length,
@@ -739,71 +846,32 @@ export function useOptimizationController(
       }
     }
 
-    const trajectoryKey = generateKey()
-    if (!trajectoryKey) return
+    const trajectoryKey = generateTrajectoryKey()
+    if (!trajectoryKey || trajectoryKey === prevTrajectoryKeyRef.current) return
 
-    // Skip if already fetched for this trajectory
-    if (trajectoryKey === prevTrajectoryKeyRef.current) {
-      console.log('[OptimizationController] Already fetched dimensions for this trajectory, skipping')
-      return
-    }
-
-    // Clear any existing timer
-    if (dimensionFetchTimerRef.current) {
-      clearTimeout(dimensionFetchTimerRef.current)
-    }
-
-    // Fetch with delay (auto-simulate delay + a few ms)
     const fetchDelay = currentContext.autoSimulateDelayMs + 50
-    console.log('[OptimizationController] Scheduling dimension fetch after', fetchDelay, 'ms')
-    dimensionFetchTimerRef.current = setTimeout(async () => {
-      setIsLoadingDimensions(true)
-      setDimensionInfoError(null)
+    runDimensionFetch(trajectoryKey, fetchDelay)
+  }, [runDimensionFetch])
 
+  // When user opens the optimizer panel, fetch dimensions if we have a mechanism and haven't fetched for it yet
+  useEffect(() => {
+    if (!context.isOptimizerPanelOpen || !context.linkageDoc) return
+    const mechanismKey = (() => {
       try {
-        // Access latest context values inside timeout (they may have changed)
-        const latestContext = contextRef.current
-        // Validate linkageDoc has required structure before calling API
-        if (!latestContext.linkageDoc || typeof latestContext.linkageDoc !== 'object' || !('linkage' in latestContext.linkageDoc)) {
-          setDimensionInfoError('Invalid linkage structure - missing linkage field')
-          setIsLoadingDimensions(false)
-          return
-        }
-
-        // Send LinkageDocument directly (same format as compute-pylink-trajectory)
-        // Backend expects hypergraph format with linkage.nodes and linkage.edges
-        const response = await fetch('/api/get-optimizable-dimensions', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ pylink_data: latestContext.linkageDoc })
+        const doc = context.linkageDoc
+        const linkage = doc.linkage as { nodes?: Record<string, unknown>; edges?: Record<string, unknown> } | undefined
+        return JSON.stringify({
+          name: doc.name,
+          jointCount: Object.keys(linkage?.nodes || {}).length,
+          edgeCount: Object.keys(linkage?.edges || {}).length
         })
-
-        if (response.ok) {
-          const result = await response.json()
-          if (result.status === 'success' && result.dimension_bounds_spec) {
-            const spec = result.dimension_bounds_spec
-            setDimensionInfo({
-              names: spec.names || [],
-              initial_values: spec.initial_values || [],
-              bounds: spec.bounds || [],
-              n_dimensions: spec.names?.length || 0
-            })
-            prevTrajectoryKeyRef.current = trajectoryKey
-            console.log('[OptimizationController] Successfully fetched dimensions:', spec.names?.length || 0)
-          } else {
-            setDimensionInfoError(result.message || 'Failed to load dimensions')
-          }
-        } else {
-          setDimensionInfoError('Failed to fetch dimensions')
-        }
-      } catch (error) {
-        console.error('[OptimizationController] Error fetching dimensions:', error)
-        setDimensionInfoError('Error fetching dimensions')
-      } finally {
-        setIsLoadingDimensions(false)
+      } catch {
+        return null
       }
-    }, fetchDelay)
-  }, []) // Empty deps - callback is stable, uses refs to access latest values
+    })()
+    if (!mechanismKey || mechanismKey === prevMechanismKeyRef.current) return
+    runDimensionFetch(mechanismKey, 50)
+  }, [context.isOptimizerPanelOpen, context.linkageDoc, runDimensionFetch])
 
   return {
     // State
@@ -817,9 +885,14 @@ export function useOptimizationController(
     optIterations,
     optMaxIterations,
     optTolerance,
+    optInertia,
+    optC1,
+    optC2,
+    optDiscretizationSteps,
+    optTimeLimit,
+    optGapLimit,
     optBoundsFactor,
     optMinLength,
-    optVerbose,
     prepEnableSmooth,
     prepSmoothWindow,
     prepSmoothPolyorder,
@@ -844,9 +917,14 @@ export function useOptimizationController(
     setOptIterations,
     setOptMaxIterations,
     setOptTolerance,
+    setOptInertia,
+    setOptC1,
+    setOptC2,
+    setOptDiscretizationSteps,
+    setOptTimeLimit,
+    setOptGapLimit,
     setOptBoundsFactor,
     setOptMinLength,
-    setOptVerbose,
     setPrepEnableSmooth,
     setPrepSmoothWindow,
     setPrepSmoothPolyorder,
@@ -862,6 +940,7 @@ export function useOptimizationController(
 
     // Functions
     revertOptimization,
+    clearOptimizerState,
     preprocessTrajectory,
     runOptimization,
     syncToOptimizerResult,

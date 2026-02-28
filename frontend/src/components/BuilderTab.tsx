@@ -1,4 +1,4 @@
-import React, { useRef, useCallback, useEffect, useMemo } from 'react'
+import React, { useRef, useCallback, useEffect, useLayoutEffect, useMemo } from 'react'
 import { Box } from '@mui/material'
 import {
   TOOLS,
@@ -7,30 +7,28 @@ import {
   initialGroupSelectionState,
   initialPolygonDrawState,
   initialMeasureState,
+  DrawnObject,
   DrawnObjectsState,
   createDrawnObject,
-  initialDrawnObjectsState,
   initialMoveGroupState,
   initialMergePolygonState,
   initialPathDrawState,
-  TargetPath,
   createTargetPath,
   findNearestJoint,
   findNearestLink,
   findMergeTarget,
   calculateDistance,
   getDefaultColor,
-  findConnectedMechanism,
   findElementsInBox,
   isPointInPolygon,
   areLinkEndpointsInPolygon,
   transformPolygonPoints,
   MERGE_THRESHOLD,
-  JOINT_SNAP_THRESHOLD,
   TOOLBAR_CONFIGS,
   ToolbarPosition,
   JointData,
   LinkData,
+  FormData,
   type ExploreTrajectoriesState,
   type ExploreTrajectorySample
 } from './BuilderTools'
@@ -55,22 +53,17 @@ import {
   MIN_SIMULATION_STEPS,
   MAX_SIMULATION_STEPS,
   PIXELS_PER_UNIT,
+  DRAG_MOVE_THRESHOLD,
   CANVAS_MIN_WIDTH_PX,
   CANVAS_MIN_HEIGHT_PX,
-  // Toolbar components
-  ToolsToolbar,
-  LinksToolbar,
-  NodesToolbar,
-  MoreToolbar,
-  SettingsToolbar,
-  OptimizationToolbar,
+  // Toolbar (AnimateToolbar; other toolbars rendered via useToolbarContent)
+  type ZLevelRow,
+  type ZLevelHeuristicConfig,
+  DEFAULT_Z_LEVEL_CONFIG,
   AnimateToolbar,
   // Toolbar types
   type CanvasBgColor,
   type TrajectoryStyle,
-  type OptMethod,
-  type SmoothMethod,
-  type ResampleMethod,
   // Rendering (layer renders moved to useCanvasLayerRenders)
   getHighlightStyle as getHighlightStyleFromBuilder,
   BuilderModals,
@@ -105,7 +98,6 @@ import {
   // Animation Controller
   useAnimationController,
   // Tool handlers
-  getToolHandler,
   handleMergeLinkClick,
   handleMergePolygonClick,
   useMoveGroup,
@@ -116,13 +108,19 @@ import {
   useStatusState,
   useCanvasSettingsState,
   useDocumentState,
-  type ToolContext,
   applyLoadedDocument,
   computeOptimizerSyncStatus,
   useCanvasLayerRenders,
   type UseCanvasLayerRendersParams,
+  useDisplayFrame,
+  useMechanismPositions,
+  type PendingDropPosition,
+  useToolContext,
+  useCanvasEventHandlers,
+  useToolbarContent,
   createEmptyLinkageDocument,
-  useViewportState
+  useViewportState,
+  buildSyncedDocAfterDrop
 } from './builder'
 import { getStoredGraphFilename, setStoredGraphFilename } from '../prefs'
 
@@ -133,7 +131,7 @@ import { getStoredGraphFilename, setStoredGraphFilename } from '../prefs'
 // Responsibilities:
 // - Own top-level state (linkage doc, selection, tool mode, draw/measure/merge/path state,
 //   modals, move group, animation, optimization, settings).
-// - Compose OptimizationController, AnimationController, useMoveGroup, buildToolContext/toolContext.
+// - Compose OptimizationController, AnimationController, useMoveGroup, useToolContext.
 // - Compose presentational components: BuilderModals, BuilderCanvasArea, BuilderToolbars, AnimateToolbar.
 // - Provide canvas event handlers and layer render functions to BuilderCanvasArea.
 // - Provide toolbar content via renderToolbarContent to BuilderToolbars.
@@ -203,8 +201,8 @@ const BuilderTab: React.FC = () => {
     return convertLinkageDocumentToLegacy(linkageDoc)
   }, [linkageDoc])
 
-  // Status state (consolidated: statusMessage, showStatus, clearStatus)
-  const { statusMessage, showStatus, clearStatus } = useStatusState()
+  // Status state (consolidated: statusMessage, showStatus, clearStatus, statusHistory)
+  const { statusMessage, showStatus, clearStatus, statusHistory, clearStatusHistory } = useStatusState()
 
   // Tool flows state (consolidated: link creation, drag, group select, polygon draw, measure, move group)
   const {
@@ -244,6 +242,15 @@ const BuilderTab: React.FC = () => {
 
   const [editingCanvasId, setEditingCanvasId] = React.useState<string | null>(null)
 
+  // Forms toolbar and form edit modal
+  const [editingFormData, setEditingFormData] = React.useState<FormData | null>(null)
+  const runComputeAfterFormSaveRef = useRef(false)
+  const [formPaddingUnits, setFormPaddingUnits] = React.useState(5)
+  const [createRigidForms, setCreateRigidForms] = React.useState(true)
+  const [createLinkForms, setCreateLinkForms] = React.useState(true)
+  const [computeZLevelsAfterCreate, setComputeZLevelsAfterCreate] = React.useState(true)
+  const [zLevelConfig, setZLevelConfig] = React.useState<ZLevelHeuristicConfig>(() => ({ ...DEFAULT_Z_LEVEL_CONFIG }))
+
   // Explore node trajectories mode: state cleared when switching tools
   const [exploreTrajectoriesState, setExploreTrajectoriesState] = React.useState<ExploreTrajectoriesState>({
     exploreNodeId: null,
@@ -271,6 +278,9 @@ const BuilderTab: React.FC = () => {
       explorePinnedFirstPosition: null
     })
   }, [])
+
+  /** Position of just-released joint to show until new trajectory arrives (avoids jump on release). */
+  const [pendingDropPosition, setPendingDropPosition] = React.useState<PendingDropPosition>(null)
 
   const getNodeShowPath = useCallback((nodeId: string): boolean => {
     const meta = getNodeMeta(linkageDoc, nodeId)
@@ -306,14 +316,24 @@ const BuilderTab: React.FC = () => {
     setCanvasBgColor,
     jointSize,
     setJointSize,
+    jointOutline,
+    setJointOutline,
     linkThickness,
     setLinkThickness,
+    linkTransparency,
+    setLinkTransparency,
+    linkColorMode,
+    setLinkColorMode,
+    linkColorSingle,
+    setLinkColorSingle,
     trajectoryDotSize,
     setTrajectoryDotSize,
     trajectoryDotOutline,
     setTrajectoryDotOutline,
     trajectoryDotOpacity,
     setTrajectoryDotOpacity,
+    showTrajectoryStepNumbers,
+    setShowTrajectoryStepNumbers,
     selectionHighlightColor,
     trajectoryStyle,
     setTrajectoryStyle,
@@ -622,21 +642,8 @@ const BuilderTab: React.FC = () => {
     setMechanismVersion(v => v + 1)
   }, [setMechanismVersion])
 
-  // CRITICAL: Logging helper for mechanism state tracking
-  const logMechanismState = useCallback((label: string, doc: LinkageDocument) => {
-    const nodeCount = Object.keys(doc.linkage?.nodes || {}).length
-    const edgeCount = Object.keys(doc.linkage?.edges || {}).length
-    const edgeDistances = Object.entries(doc.linkage?.edges || {}).slice(0, 5).map(([id, edge]) => ({
-      id,
-      distance: (edge as { distance?: number }).distance
-    }))
-    console.log(`[Mechanism State] ${label}:`, {
-      nodeCount,
-      edgeCount,
-      edgeDistances,
-      timestamp: Date.now()
-    })
-  }, [])
+  // Logging helper for mechanism state tracking (no-op in production)
+  const logMechanismState = useCallback((_label: string, _doc: LinkageDocument) => {}, [])
 
   // Extract dimensions from LinkageDocument using the same naming scheme as backend
   // Backend uses edge IDs: "edge_id_distance"
@@ -699,6 +706,7 @@ const BuilderTab: React.FC = () => {
     triggerMechanismChange,
     autoSimulateDelayMs,
     pylinkDoc,
+    isOptimizerPanelOpen: openToolbars.has('optimize'),
     isHypergraphFormat,
     logMechanismState,
     extractDimensionsFromLinkageDoc
@@ -714,6 +722,9 @@ const BuilderTab: React.FC = () => {
     // AnimationController handles updating animatedPositions internally
   }, [])
 
+  /** Ref kept in sync with user-set frame (slider) for setAnimationFrameWithDisplay. */
+  const displayFrameRef = useRef<number | null>(null)
+
   // Dimension fetching is now handled by OptimizationController
 
   const animation = useAnimationController({
@@ -722,11 +733,52 @@ const BuilderTab: React.FC = () => {
     simulationSteps,
     autoSimulateDelayMs,
     mechanismVersion,
+    isDragging: dragState.isDragging || moveGroupState.isDragging,
     onSimulationComplete: optimization.handleSimulationComplete,
     showStatus,
     // Animation dependencies
-    onFrameChange: handleAnimationFrameChange,
-    frameIntervalMs: 50  // 20fps default
+    onFrameChange: handleAnimationFrameChange
+  })
+
+  /** Set frame and update displayFrameRef so drag start captures the frame the user is viewing (not N-1 from loop). */
+  const setAnimationFrameWithDisplay = useCallback(
+    (frame: number) => {
+      displayFrameRef.current = frame
+      animation.setAnimationFrame(frame)
+    },
+    [animation.setAnimationFrame]
+  )
+
+  // Sync display ref when trajectory first appears so we have an initial frame (e.g. 0) before user scrubs.
+  useEffect(() => {
+    if (animation.trajectoryData && displayFrameRef.current === null) {
+      displayFrameRef.current = animation.animationState?.currentFrame ?? 0
+    }
+  }, [animation.trajectoryData, animation.animationState?.currentFrame])
+
+  // Single owner for display frame and edit mode (drag start → frame 0, drag end → follow animation).
+  const { displayFrame, displayFrameOverrideRef, enterEditMode, exitEditMode } = useDisplayFrame({
+    animationCurrentFrame: animation.animationState?.currentFrame ?? 0,
+    setAnimationFrame: animation.setAnimationFrame,
+    pauseAnimation: animation.pauseAnimation,
+    isAnimating: animation.animationState?.isAnimating ?? false
+  })
+  /** Effective display frame: override ref (0 on drag start) so first paint shows 1/N, not N/N.
+   * Requires enterEditMode to be called synchronously (e.g. flushSync) on drag start—see useDisplayFrame. */
+  const effectiveDisplayFrame =
+    displayFrameOverrideRef.current !== null ? displayFrameOverrideRef.current : displayFrame
+  /** Called on drag start (single-node or group) so mechanism and label show 1/N. */
+  const resetAnimationToFirstFrame = enterEditMode
+
+  // Single display frame for mechanism and toolbar (effectiveDisplayFrame so drag start paints 0 synchronously)
+  const { getJointPosition } = useMechanismPositions({
+    linkageDoc,
+    pylinkDoc,
+    trajectoryData: animation.trajectoryData,
+    displayFrame: effectiveDisplayFrame,
+    animatedPositions: animation.animatedPositions,
+    dragState,
+    pendingDropPosition
   })
 
   // Restore graph from cookie on mount (persisted current graph filename)
@@ -740,6 +792,7 @@ const BuilderTab: React.FC = () => {
       .then(res => res.ok ? res.json() : Promise.reject(new Error(res.statusText)))
       .then(result => {
         if (result.status === 'success' && result.data && isHypergraphFormat(result.data)) {
+          optimization.clearOptimizerState()
           applyLoadedDocument({
             doc: result.data,
             setLinkageDoc,
@@ -756,7 +809,7 @@ const BuilderTab: React.FC = () => {
         }
       })
       .catch(() => setStoredGraphFilename(null))
-  }, [animation.clearTrajectory, triggerMechanismChange, isHypergraphFormat])
+  }, [optimization.clearOptimizerState, animation.clearTrajectory, triggerMechanismChange, isHypergraphFormat])
 
   // Validate links after simulation completes - detect links that would stretch
   useEffect(() => {
@@ -844,79 +897,102 @@ const BuilderTab: React.FC = () => {
     setToolMode('select')
   }, [linkCreationState.isDrawing, dragState.isDragging, groupSelectionState.isSelecting, polygonDrawState.isDrawing, measureState.isMeasuring, mergePolygonState.step, pathDrawState.isDrawing, showStatus, toolMode, resetExploreTrajectories])
 
-  // Get visual position for any joint
-  // SINGLE SOURCE OF TRUTH:
-  // - Static joints: position from pylinkage data (x, y)
-  // - Crank/Revolute joints: position from meta.joints (x, y) if available,
-  //   otherwise calculate from parent relationships
-  const getJointPosition = useCallback((jointName: string, visited: Set<string> = new Set()): [number, number] | null => {
-    // Cycle detection: prevent infinite recursion
-    if (visited.has(jointName)) {
-      console.warn(`Cycle detected in joint relationships for ${jointName}`)
-      return null
+  // On drag end: clear display frame override only when neither single-node nor group drag is active.
+  // TRAJECTORY HOP FIX: We only call triggerMechanismChange when the user actually moved (actualMove);
+  // otherwise a click-without-drag would bump mechanismVersion and trigger auto-sim, causing a hop to N/N.
+  const prevSingleNodeDraggingRef = useRef(false)
+  /** Bake dragged joint position once per drag so document position = trajectory[X] (stops dragged node jumping to N/N). */
+  const dragBakedRef = useRef(false)
+  /** Capture last drag positions so we can tell at drag-end if user actually moved (H1). */
+  const lastDragStartRef = useRef<[number, number] | null>(null)
+  const lastDragCurrentRef = useRef<[number, number] | null>(null)
+  /** Capture dragged joint name for drag-end sync (state is reset on mouseup). */
+  const lastDraggedJointRef = useRef<string | null>(null)
+  const anyDragging = dragState.isDragging || moveGroupState.isDragging
+  useEffect(() => {
+    if (dragState.isDragging && dragState.dragStartPosition && dragState.currentPosition) {
+      lastDragStartRef.current = dragState.dragStartPosition
+      lastDragCurrentRef.current = dragState.currentPosition
+      if (dragState.draggedJoint) lastDraggedJointRef.current = dragState.draggedJoint
     }
-    visited.add(jointName)
-
-    // When animating, use animated positions for moving joints
-    if (animation.animatedPositions && animation.animatedPositions[jointName]) {
-      return animation.animatedPositions[jointName]
-    }
-
-    const joint = pylinkDoc.pylinkage.joints.find(j => j.name === jointName)
-    if (!joint) return null
-
-    // For Static joints, always use the stored x, y
-    if (joint.type === 'Static') {
-      return [joint.x, joint.y]
-    }
-
-    // For non-Static joints, check meta.joints first (single source of truth for UI position)
-    const meta = pylinkDoc.meta.joints[jointName]
-    if (meta?.x !== undefined && meta?.y !== undefined) {
-      return [meta.x, meta.y]
-    }
-
-    // Fallback: calculate position from parent relationships (for initial load/demo)
-    if (joint.type === 'Crank') {
-      const parent = pylinkDoc.pylinkage.joints.find(j => j.name === joint.joint0.ref)
-      if (parent && parent.type === 'Static') {
-        const x = parent.x + joint.distance * Math.cos(joint.angle)
-        const y = parent.y + joint.distance * Math.sin(joint.angle)
-        return [x, y]
-      }
-    } else if (joint.type === 'Revolute') {
-      // For Revolute, use circle-circle intersection or approximate from distances
-      const parent0 = pylinkDoc.pylinkage.joints.find(j => j.name === joint.joint0.ref)
-      const parent1 = pylinkDoc.pylinkage.joints.find(j => j.name === joint.joint1.ref)
-      if (parent0 && parent1) {
-        const pos0 = getJointPosition(parent0.name, new Set(visited))
-        const pos1 = getJointPosition(parent1.name, new Set(visited))
-        if (pos0 && pos1) {
-          // Circle-circle intersection to find the joint position
-          const d0 = joint.distance0
-          const d1 = joint.distance1
-          const dx = pos1[0] - pos0[0]
-          const dy = pos1[1] - pos0[1]
-          const d = Math.sqrt(dx * dx + dy * dy)
-
-          if (d > 0 && d <= d0 + d1 && d >= Math.abs(d0 - d1)) {
-            // Valid triangle, compute intersection point
-            const a = (d0 * d0 - d1 * d1 + d * d) / (2 * d)
-            const h = Math.sqrt(Math.max(0, d0 * d0 - a * a))
-            const px = pos0[0] + (a * dx) / d
-            const py = pos0[1] + (a * dy) / d
-            // Return one of the two intersection points (above the line)
-            const x = px - (h * dy) / d
-            const y = py + (h * dx) / d
-            return [x, y]
-          }
-          // Fallback if geometry doesn't work
-          return [(pos0[0] + pos1[0]) / 2, (pos0[1] + pos1[1]) / 2 - 20]
+    const wasSingleNodeDragging = prevSingleNodeDraggingRef.current
+    prevSingleNodeDraggingRef.current = dragState.isDragging
+    if (!anyDragging) {
+      dragBakedRef.current = false
+      exitEditMode()
+      const start = lastDragStartRef.current
+      const current = lastDragCurrentRef.current
+      const actualMove = start != null && current != null && Math.hypot(current[0] - start[0], current[1] - start[1]) >= DRAG_MOVE_THRESHOLD
+      if (wasSingleNodeDragging && actualMove) {
+        const trajectories = animation.trajectoryData?.trajectories
+        const draggedJoint = lastDraggedJointRef.current
+        const dropPosition = current
+        const frame = 0 // We always edit at frame 0 (enterEditMode sets it).
+        // Show dropped position until new trajectory arrives (avoids jump to old trajectory for one frame).
+        if (draggedJoint && dropPosition) {
+          setPendingDropPosition({ jointName: draggedJoint, position: [dropPosition[0], dropPosition[1]] })
+        }
+        // TRAJECTORY HOP FIX: Sync doc to edited frame (1/N) with dropped joint at user position, then run sim
+        // with that doc. If we don't, the backend would get an inconsistent doc (only dragged node updated)
+        // and return a wrong frame 0, so the mechanism would "hop" to N/N or show cyclic shift (0->1, 1->2).
+        if (trajectories && draggedJoint && dropPosition && linkageDoc?.linkage?.nodes) {
+          const syncedDoc = buildSyncedDocAfterDrop(
+            linkageDoc,
+            trajectories,
+            draggedJoint,
+            [dropPosition[0], dropPosition[1]],
+            frame
+          )
+          setLinkageDoc(syncedDoc)
+          // Run sim with synced doc so backend gets consistent 1/N state (avoids hop); do not rely on timer.
+          ;(animation.runSimulation as (doc?: unknown) => Promise<void>)(syncedDoc)
+        } else {
+          triggerMechanismChange()
         }
       }
+      lastDragStartRef.current = null
+      lastDragCurrentRef.current = null
+      lastDraggedJointRef.current = null
     }
-    return null
-  }, [pylinkDoc.pylinkage.joints, pylinkDoc.meta.joints, animation.animatedPositions])
+  }, [anyDragging, dragState.isDragging, dragState.dragStartPosition, dragState.currentPosition, dragState.draggedJoint, triggerMechanismChange, exitEditMode, animation.trajectoryData, animation.runSimulation, linkageDoc, setLinkageDoc, setPendingDropPosition])
+
+  // Clear pending drop position when trajectory updates (e.g. after runSimulation(syncedDoc) completes).
+  useEffect(() => {
+    if (pendingDropPosition) setPendingDropPosition(null)
+  }, [animation.trajectoryData])
+
+  // TRAJECTORY HOP FIX: Only bake when the user has actually moved (not on click-only). If we baked on every
+  // mousedown, linkageDoc would change and the auto-sim effect would run after the delay, causing a hop.
+  // When we do bake, use currentPosition so we don't overwrite moveJoint. See also: triggerMechanismChange
+  // only when actualMove, and drag-end sync + runSimulation(syncedDoc).
+  useLayoutEffect(() => {
+    if (
+      !dragState.isDragging ||
+      !dragState.draggedJoint ||
+      !dragState.dragStartPosition ||
+      !dragState.currentPosition ||
+      dragBakedRef.current
+    ) {
+      return
+    }
+    const dist = Math.hypot(
+      dragState.currentPosition[0] - dragState.dragStartPosition[0],
+      dragState.currentPosition[1] - dragState.dragStartPosition[1]
+    )
+    if (dist < DRAG_MOVE_THRESHOLD) {
+      return
+    }
+    dragBakedRef.current = true
+    const jointName = dragState.draggedJoint
+    const pos = dragState.currentPosition
+    setLinkageDoc((prev) => {
+      const linkage = prev?.linkage
+      if (!linkage?.nodes?.[jointName]) return prev
+      const nodes = { ...linkage.nodes }
+      nodes[jointName] = { ...nodes[jointName], position: [pos[0], pos[1]] }
+      return { ...prev, linkage: { ...linkage, nodes } }
+    })
+  }, [dragState.isDragging, dragState.draggedJoint, dragState.dragStartPosition, dragState.currentPosition, setLinkageDoc])
 
   // Get all joints with their positions for snapping
   const getJointsWithPositions = useCallback(() => {
@@ -1004,6 +1080,7 @@ const BuilderTab: React.FC = () => {
       connects: [linkMeta.connects[0], linkMeta.connects[1]],
       length,
       isGround: linkMeta.isGround || false,
+      zlevel: linkMeta.zlevel,
       jointPositions: [pos0, pos1]
     }
   }, [pylinkDoc.meta.links, linkageDoc, getJointPosition])
@@ -1165,15 +1242,18 @@ const BuilderTab: React.FC = () => {
       console.warn('[CRITICAL] Skipping syncAllEdgeDistances on optimized mechanism to preserve optimizer distances')
     }
 
-    // Clear trajectory and trigger auto-simulation if enabled
-    animation.clearTrajectory()
-    triggerMechanismChange()
+    // Do not clear trajectory or trigger simulation during drag: keep trajectory and frame (X/N).
+    // Clear and trigger only when not dragging; on drag end we trigger via effect below.
+    if (!dragState.isDragging) {
+      animation.clearTrajectory()
+      triggerMechanismChange()
+    }
 
     setLinkageDoc(newDoc)
 
     // Mark as unsynced if manually modified (but keep isOptimizedMechanism true)
     // setIsSyncedToOptimizer will be updated by the useEffect
-  }, [linkageDoc, showStatus, optimization.isOptimizedMechanism])
+  }, [linkageDoc, showStatus, optimization.isOptimizedMechanism, dragState.isDragging, animation.clearTrajectory, triggerMechanismChange])
 
   /** Move two joints in one document update (used when applying combinatorial explore result). */
   const moveTwoJoints = useCallback(
@@ -1232,6 +1312,153 @@ const BuilderTab: React.FC = () => {
     return m?.connects?.length >= 2 ? (m.connects as [string, string]) : null
   }, [pylinkDoc.meta.links])
 
+  const drawnObjectsRef = useRef(drawnObjects.objects)
+  drawnObjectsRef.current = drawnObjects.objects
+
+  const apiValidatePolygonRigidity = useCallback(async () => {
+    const trajectoryData = animation.trajectoryData
+    if (!trajectoryData?.trajectories) return { status: 'success' as const, polygons: {} }
+    const objects = drawnObjectsRef.current
+    const polygons = objects.filter(
+      (o: { type?: string; contained_links?: string[] }) =>
+        o.type === 'polygon' && (o.contained_links?.length ?? 0) > 0
+    )
+    if (polygons.length === 0) return { status: 'success' as const, polygons: {} }
+    const drawn_objects = polygons.map((obj: { id: string; type?: string; contained_links?: string[] }) => ({
+      id: obj.id,
+      type: 'polygon',
+      contained_links: obj.contained_links ?? []
+    }))
+    const body = {
+      trajectories: trajectoryData.trajectories,
+      linkage: linkageDoc.linkage,
+      drawn_objects
+    }
+    const res = await fetch('/api/validate-polygon-rigidity', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    })
+    const data = await res.json()
+    if (data.status === 'success' && data.polygons) {
+      setDrawnObjects(prev => ({
+        ...prev,
+        objects: prev.objects.map(obj => {
+          const rigid = data.polygons[obj.id]
+          if (rigid == null) return obj
+          const prevValid = (obj as { contained_links_valid?: boolean }).contained_links_valid
+          const rigid_valid = rigid.rigid_valid !== false
+          const contained_links_valid = prevValid !== false && rigid_valid
+          return { ...obj, contained_links_valid }
+        })
+      }))
+    }
+    return data
+  }, [animation.trajectoryData, linkageDoc.linkage, setDrawnObjects])
+
+  /** Build a copy of linkage with each node position replaced by current position (for merge/find-associated to match current view). */
+  const buildLinkageWithCurrentPositions = useCallback(
+    (linkage: { nodes?: Record<string, { position?: number[] }>; edges?: unknown }, getPos: (id: string) => [number, number] | null) => {
+      const nodes = linkage?.nodes ?? {}
+      const nextNodes: Record<string, { position?: number[] }> = {}
+      for (const [id, node] of Object.entries(nodes)) {
+        const pos = getPos(id)
+        nextNodes[id] = { ...node, position: pos ?? node?.position ?? [0, 0] }
+      }
+      return { ...linkage, nodes: nextNodes }
+    },
+    []
+  )
+
+  const apiFindAssociatedPolygons = useCallback(async () => {
+    const polygons = drawnObjects.objects.filter(
+      (o: { type?: string; points?: unknown[] }) => o.type === 'polygon' && o.points && o.points.length >= 3
+    )
+    const edges = linkageDoc.meta?.edges ?? {}
+    const drawn_objects = polygons.map(obj => {
+      let points: [number, number][] = obj.points as [number, number][]
+      const mergedLinkName = (obj as { mergedLinkName?: string }).mergedLinkName
+      const mergedLinkOriginalStart = (obj as { mergedLinkOriginalStart?: [number, number] }).mergedLinkOriginalStart
+      const mergedLinkOriginalEnd = (obj as { mergedLinkOriginalEnd?: [number, number] }).mergedLinkOriginalEnd
+      if (mergedLinkName && mergedLinkOriginalStart && mergedLinkOriginalEnd) {
+        const linkMeta = edges[mergedLinkName] as { connects?: [string, string] } | undefined
+        if (linkMeta?.connects) {
+          const currentStart = getJointPosition(linkMeta.connects[0])
+          const currentEnd = getJointPosition(linkMeta.connects[1])
+          if (currentStart && currentEnd) {
+            points = transformPolygonPoints(
+              obj.points as [number, number][],
+              mergedLinkOriginalStart,
+              mergedLinkOriginalEnd,
+              currentStart,
+              currentEnd
+            )
+          }
+        }
+      }
+      return { ...obj, points }
+    })
+    const linkageForRequest = buildLinkageWithCurrentPositions(linkageDoc.linkage, getJointPosition)
+    const body = {
+      pylink_data: { linkage: linkageForRequest, meta: linkageDoc.meta },
+      drawn_objects
+    }
+    const res = await fetch('/api/find-associated-polygons', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    })
+    const data = await res.json()
+    if (data.status === 'success' && data.polygons) {
+      const hasContainedLinks = Object.values(data.polygons as Record<string, { contained_links?: string[] }>).some(
+        r => (r.contained_links?.length ?? 0) > 0
+      )
+      let rigidResult: Record<string, { rigid_valid?: boolean }> = {}
+      if (animation.trajectoryData?.trajectories && hasContainedLinks) {
+        const validateRes = await fetch('/api/validate-polygon-rigidity', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            trajectories: animation.trajectoryData.trajectories,
+            linkage: linkageDoc.linkage,
+            drawn_objects: polygons.map((obj: { id: string; type?: string }) => ({
+              id: obj.id,
+              type: 'polygon',
+              contained_links: data.polygons[obj.id]?.contained_links ?? (obj as { contained_links?: string[] }).contained_links ?? []
+            }))
+          })
+        })
+        const validateData = await validateRes.json()
+        if (validateData.status === 'success' && validateData.polygons) rigidResult = validateData.polygons
+      }
+      setDrawnObjects(prev => ({
+        ...prev,
+        objects: prev.objects.map(obj => {
+          const r = data.polygons[obj.id]
+          if (r == null) return obj
+          const all_inside = r.all_inside
+          const rigid = rigidResult[obj.id]
+          const rigid_valid = rigid == null ? true : rigid.rigid_valid !== false
+          return { ...obj, contained_links_valid: all_inside && rigid_valid }
+        })
+      }))
+    }
+    return data
+  }, [linkageDoc.linkage, linkageDoc.meta, linkageDoc.meta?.edges, drawnObjects.objects, setDrawnObjects, getJointPosition, transformPolygonPoints, animation.trajectoryData, buildLinkageWithCurrentPositions])
+
+  // After simulation, validate polygon rigidity once (only if polygons with contained_links exist).
+  // Ref and stable callback avoid depending on drawnObjects.objects so updating it doesn't retrigger and loop.
+  useEffect(() => {
+    if (!animation.trajectoryData?.trajectories) return
+    const objects = drawnObjectsRef.current
+    const hasPolygonsWithLinks = objects.some(
+      (o: { type?: string; contained_links?: string[] }) =>
+        o.type === 'polygon' && (o.contained_links?.length ?? 0) > 0
+    )
+    if (!hasPolygonsWithLinks) return
+    apiValidatePolygonRigidity()
+  }, [animation.trajectoryData, apiValidatePolygonRigidity])
+
   const moveGroup = useMoveGroup({
     moveGroupState,
     setMoveGroupState,
@@ -1246,7 +1473,9 @@ const BuilderTab: React.FC = () => {
     translateGroupRigid,
     exitMoveGroupMode,
     showStatus: showStatus as (message: string, type?: string, duration?: number) => void,
-    triggerMechanismChange
+    triggerMechanismChange,
+    resetAnimationToFirstFrame,
+    apiFindAssociatedPolygons
   })
 
   // Merge two joints (nodes) together (source is absorbed into target)
@@ -1387,161 +1616,78 @@ const BuilderTab: React.FC = () => {
     }
   }, [selectedJoints, selectedLinks, drawnObjects.selectedIds, batchDelete, showStatus])
 
-  type BuildToolContextParams = Omit<
-    ToolContext,
-    'getPointFromEvent' | 'snapThreshold' | 'mergeThreshold' | 'getLinkMeta' | 'mergeLinkThreshold' | 'setDrawnObjects' | 'setTargetPaths' | 'createDrawnObject' | 'createTargetPath'
-  > & {
-    linkMeta: PylinkDocument['meta']['links']
-    setDrawnObjects: React.Dispatch<React.SetStateAction<DrawnObjectsState>>
-    setTargetPaths: React.Dispatch<React.SetStateAction<TargetPath[]>>
-    createDrawnObject: (type: 'polygon', points: [number, number][], existingIds: string[]) => { id: string; type: string; points: [number, number][]; name: string }
-    createTargetPath: (points: [number, number][], existingPaths: TargetPath[]) => TargetPath
-    viewport: { zoom: number; panX: number; panY: number }
-  }
-  function buildToolContext(params: BuildToolContextParams): ToolContext {
-    const {
-      canvasRef: cr,
-      pixelsToUnits: pu,
-      viewport: vp,
-      linkMeta,
-      setDrawnObjects: setDrawn,
-      setTargetPaths: setPaths,
-      createTargetPath: createPath,
-      createDrawnObject: createDrawn,
-      ...rest
-    } = params
-    return {
-      ...rest,
-      canvasRef: cr as React.RefObject<SVGSVGElement | HTMLDivElement | null>,
-      pixelsToUnits: pu,
-      getPointFromEvent: (event: React.MouseEvent<SVGSVGElement>) => {
-        if (!cr.current) return null
-        const rect = cr.current.getBoundingClientRect()
-        const screenPx = event.clientX - rect.left
-        const screenPy = event.clientY - rect.top
-        const x = (screenPx - vp.panX) / vp.zoom / PIXELS_PER_UNIT
-        const y = (screenPy - vp.panY) / vp.zoom / PIXELS_PER_UNIT
-        return [x, y] as [number, number]
-      },
-      snapThreshold: JOINT_SNAP_THRESHOLD,
-      mergeThreshold: MERGE_THRESHOLD,
-      getLinkMeta: (linkName: string) => {
-        const m = linkMeta[linkName]
-        return m ? { connects: m.connects as [string, string], color: m.color } : null
-      },
-      mergeLinkThreshold: 8.0,
-      setDrawnObjects: setDrawn as unknown as ToolContext['setDrawnObjects'],
-      createDrawnObject: createDrawn as unknown as ToolContext['createDrawnObject'],
-      setTargetPaths: setPaths as unknown as ToolContext['setTargetPaths'],
-      createTargetPath: createPath as unknown as ToolContext['createTargetPath']
-    } as ToolContext
-  }
-
-  // Tool context for per-tool handlers (select, etc.)
-  const toolContext: ToolContext = useMemo(
-    () =>
-      buildToolContext({
-        canvasRef,
-        pixelsToUnits,
-        viewport: viewport.viewport,
-        toolMode,
-        setToolMode,
-        getJointsWithPositions,
-        getLinksWithPositions,
-        getJointPosition,
-        findNearestJoint,
-        findNearestLink,
-        findMergeTarget,
-        jointMergeRadius,
-        dragState,
-        setDragState,
-        selectedJoints,
-        setSelectedJoints,
-        selectedLinks,
-        setSelectedLinks,
-        moveJoint,
-        moveTwoJoints,
-        mergeJoints,
-        showStatus,
-        clearStatus,
-        linkCreationState,
-        setLinkCreationState,
-        setPreviewLine,
-        createLinkWithRevoluteDefault,
-        deleteJoint,
-        deleteLink,
-        handleDeleteSelected,
-        measureState,
-        setMeasureState,
-        setMeasurementMarkers,
-        calculateDistance,
-        groupSelectionState,
-        setGroupSelectionState,
-        findElementsInBox,
-        drawnObjects,
-        setDrawnObjects,
-        enterMoveGroupMode,
-        polygonDrawState,
-        setPolygonDrawState,
-        createDrawnObject,
-        mergePolygonState,
-        setMergePolygonState,
-        linkMeta: pylinkDoc.meta.links,
-        isPointInPolygon,
-        areLinkEndpointsInPolygon,
-        getDefaultColor,
-        transformPolygonPoints,
-        pathDrawState,
-        setPathDrawState,
-        targetPaths,
-        setTargetPaths,
-        createTargetPath,
-        setSelectedPathId,
-        linkageDoc,
-        exploreTrajectoriesState,
-        setExploreTrajectoriesState,
-        runExploreTrajectories,
-        runExploreTrajectoriesSecond,
-        runExploreTrajectoriesCombinatorial,
-        getNodeShowPath,
-        getJointType: (name: string) => pylinkDoc.pylinkage.joints.find(j => j.name === name)?.type ?? null
-      }),
-    [
-      toolMode,
-      dragState,
-      selectedJoints,
-      selectedLinks,
-      jointMergeRadius,
-      linkCreationState,
-      measureState,
-      groupSelectionState,
-      polygonDrawState,
-      mergePolygonState,
-      pathDrawState,
-      drawnObjects,
-      targetPaths,
-      pylinkDoc.meta.links,
-      getJointsWithPositions,
-      getLinksWithPositions,
-      getJointPosition,
-      moveJoint,
-      moveTwoJoints,
-      mergeJoints,
-      showStatus,
-      clearStatus,
-      createLinkWithRevoluteDefault,
-      handleDeleteSelected,
-      transformPolygonPoints,
-      linkageDoc,
-      exploreTrajectoriesState,
-      runExploreTrajectories,
-      runExploreTrajectoriesSecond,
-      runExploreTrajectoriesCombinatorial,
-      getNodeShowPath,
-      pylinkDoc.pylinkage.joints,
-      viewport.viewport
-    ]
-  )
+  // Tool context for per-tool handlers (select, etc.) — built by useToolContext
+  const toolContext = useToolContext({
+    buildLinkageWithCurrentPositions,
+    canvasRef,
+    pixelsToUnits,
+    viewport: viewport.viewport,
+    toolMode,
+    setToolMode,
+    getJointsWithPositions,
+    getLinksWithPositions,
+    getJointPosition,
+    findNearestJoint,
+    findNearestLink,
+    findMergeTarget,
+    jointMergeRadius,
+    dragState,
+    setDragState,
+    selectedJoints,
+    setSelectedJoints,
+    selectedLinks,
+    setSelectedLinks,
+    moveJoint,
+    moveTwoJoints,
+    mergeJoints,
+    resetAnimationToFirstFrame,
+    pauseAnimation: animation.pauseAnimation,
+    showStatus,
+    clearStatus,
+    linkCreationState,
+    setLinkCreationState,
+    setPreviewLine,
+    createLinkWithRevoluteDefault,
+    deleteJoint,
+    deleteLink,
+    handleDeleteSelected,
+    measureState,
+    setMeasureState,
+    setMeasurementMarkers,
+    calculateDistance,
+    groupSelectionState,
+    setGroupSelectionState,
+    findElementsInBox,
+    drawnObjects,
+    setDrawnObjects,
+    enterMoveGroupMode,
+    polygonDrawState,
+    setPolygonDrawState,
+    createDrawnObject,
+    mergePolygonState,
+    setMergePolygonState,
+    linkMeta: pylinkDoc.meta.links,
+    isPointInPolygon,
+    areLinkEndpointsInPolygon,
+    getDefaultColor,
+    transformPolygonPoints,
+    pathDrawState,
+    setPathDrawState,
+    targetPaths,
+    setTargetPaths,
+    createTargetPath,
+    setSelectedPathId,
+    linkageDoc,
+    setLinkageDoc,
+    apiFindAssociatedPolygons,
+    exploreTrajectoriesState,
+    setExploreTrajectoriesState,
+    runExploreTrajectories,
+    runExploreTrajectoriesSecond,
+    runExploreTrajectoriesCombinatorial,
+    getNodeShowPath,
+    getJointType: (name: string) => pylinkDoc.pylinkage.joints.find(j => j.name === name)?.type ?? null
+  })
 
   // Layer render functions (data prep + render wiring) — built by hook
   const layerRenders = useCanvasLayerRenders({
@@ -1571,10 +1717,15 @@ const BuilderTab: React.FC = () => {
     canvasDimensions,
     darkMode,
     jointSize,
+    jointOutline,
     linkThickness,
+    linkTransparency,
+    linkColorMode,
+    linkColorSingle,
     trajectoryDotSize,
     trajectoryDotOutline,
     trajectoryDotOpacity,
+    showTrajectoryStepNumbers,
     trajectoryStyle,
     trajectoryColorCycle,
     showJointLabels,
@@ -1606,67 +1757,38 @@ const BuilderTab: React.FC = () => {
     exploreRadius
   })
 
-  // Handle mouse down on canvas (for drag start)
-  const handleCanvasMouseDown = useCallback((event: React.MouseEvent<SVGSVGElement>) => {
-    if (!canvasRef.current) return
-
-    if (viewport.handlePanStart(event)) return
-
-    // Auto-pause animation on any canvas interaction
-    if (animation.animationState.isAnimating) {
-      animation.pauseAnimation()
-      showStatus('Animation paused for editing', 'info', 1500)
-    }
-
-    const rect = canvasRef.current.getBoundingClientRect()
-    const pixelX = event.clientX - rect.left
-    const pixelY = event.clientY - rect.top
-    const clickPoint = screenToUnit(pixelX, pixelY)
-
-    if (moveGroup.handleMouseDown(event, clickPoint)) return
-
-    const point = toolContext.getPointFromEvent(event)
-    if (point) {
-      const handler = getToolHandler(toolMode)
-      if (handler.onMouseDown?.(event, point, toolContext)) return
-    }
-  }, [toolMode, toolContext, moveGroup, viewport, screenToUnit, animation.animationState.isAnimating, animation.pauseAnimation])
-
-  // Handle mouse move on canvas
-  const handleCanvasMouseMove = useCallback((event: React.MouseEvent<SVGSVGElement>) => {
-    if (!canvasRef.current) return
-
-    if (viewport.isPanningRef.current) {
-      viewport.handlePanMove(event)
-      return
-    }
-
-    const rect = canvasRef.current.getBoundingClientRect()
-    const pixelX = event.clientX - rect.left
-    const pixelY = event.clientY - rect.top
-    const currentPoint = screenToUnit(pixelX, pixelY)
-
-    if (moveGroup.handleMouseMove(event, currentPoint)) return
-
-    const handler = getToolHandler(toolMode)
-    if (handler.onMouseMove?.(event, currentPoint, toolContext)) return
-  }, [toolMode, toolContext, moveGroup, viewport, screenToUnit, linkCreationState.isDrawing, linkCreationState.startPoint, dragState.isDragging, dragState.draggedJoint, groupSelectionState.isSelecting, groupSelectionState.startPoint])
-
-  // Handle mouse up on canvas (for drag end)
-  const handleCanvasMouseUp = useCallback((event: React.MouseEvent<SVGSVGElement>) => {
-    viewport.handlePanEnd()
-    if (moveGroup.handleMouseUp(event)) return
-
-    const handler = getToolHandler(toolMode)
-    if (handler.onMouseUp?.(event, toolContext)) return
-  }, [toolMode, toolContext, moveGroup, viewport])
-
-  // Handle mouse leave (e.g. clear explore trajectory hover)
-  const handleCanvasMouseLeave = useCallback((event: React.MouseEvent<SVGSVGElement>) => {
-    viewport.handlePanEnd()
-    const handler = getToolHandler(toolMode)
-    if (handler.onMouseLeave?.(event, toolContext)) return
-  }, [toolMode, toolContext, viewport])
+  // Canvas event handlers (mouse, click, double-click) — built by useCanvasEventHandlers
+  const {
+    handleCanvasMouseDown,
+    handleCanvasMouseMove,
+    handleCanvasMouseUp,
+    handleCanvasMouseLeave,
+    handleCanvasClick,
+    handleCanvasDoubleClick
+  } = useCanvasEventHandlers({
+    canvasRef,
+    viewport,
+    screenToUnit,
+    toolMode,
+    toolContext,
+    moveGroup,
+    enterEditMode,
+    animation,
+    showStatus,
+    dragState,
+    groupSelectionState,
+    getJointsWithPositions,
+    getLinksWithPositions,
+    findNearestJoint,
+    findNearestLink,
+    drawnObjects,
+    setDrawnObjects,
+    setSelectedJoints,
+    setSelectedLinks,
+    enterMoveGroupMode,
+    exitMoveGroupMode,
+    pylinkDoc
+  })
 
   // Confirm delete multiple items
   const confirmDelete = useCallback(() => {
@@ -1821,81 +1943,6 @@ const BuilderTab: React.FC = () => {
     return () => document.removeEventListener('keydown', handleKeyDown)
   }, [toolMode, moveGroupState.isActive, exitMoveGroupMode, linkCreationState.isDrawing, groupSelectionState.isSelecting, polygonDrawState.isDrawing, measureState.isMeasuring, pathDrawState.isDrawing, cancelAction, showStatus, selectedJoints, selectedLinks, handleDeleteSelected, animation.animationState.isAnimating, animation.playAnimation, animation.pauseAnimation, animation.trajectoryData, animation.runSimulation, pylinkDoc.pylinkage.joints, completePathDrawing, resetExploreTrajectories])
 
-  // Handle canvas click
-  const handleCanvasClick = useCallback((event: React.MouseEvent<SVGSVGElement>) => {
-    // Don't process click if we just finished dragging or group selecting
-    if (dragState.isDragging || groupSelectionState.isSelecting) return
-
-    if (!canvasRef.current) return
-
-    const rect = canvasRef.current.getBoundingClientRect()
-    const pixelX = event.clientX - rect.left
-    const pixelY = event.clientY - rect.top
-    const clickPoint = screenToUnit(pixelX, pixelY)
-
-    const jointsWithPositions = getJointsWithPositions()
-    const linksWithPositions = getLinksWithPositions()
-    const nearestJoint = findNearestJoint(clickPoint, jointsWithPositions)
-    // Use larger threshold (8 units) in merge mode for easier link clicking
-    const linkThreshold = toolMode === 'merge' ? 8.0 : JOINT_SNAP_THRESHOLD
-    const nearestLink = findNearestLink(clickPoint, linksWithPositions, linkThreshold)
-
-    // Delegate to tool handler (e.g. select: click to select joint/link)
-    const handler = getToolHandler(toolMode)
-    if (handler.onClick?.(event, clickPoint, toolContext)) return
-
-    // Handle mechanism select mode - select and enter move mode
-    if (toolMode === 'mechanism_select') {
-      // Helper to find DrawnObjects merged with mechanism links
-      const findMergedDrawnObjects = (linkNames: string[]): string[] => {
-        return drawnObjects.objects
-          .filter(obj => obj.mergedLinkName && linkNames.includes(obj.mergedLinkName))
-          .map(obj => obj.id)
-      }
-
-      if (nearestJoint) {
-        const mechanism = findConnectedMechanism(nearestJoint.name, pylinkDoc.meta.links)
-        setSelectedJoints(mechanism.joints)
-        setSelectedLinks(mechanism.links)
-        // Find DrawnObjects merged with this mechanism's links
-        const mergedDrawnObjects = findMergedDrawnObjects(mechanism.links)
-        setDrawnObjects(prev => ({ ...prev, selectedIds: mergedDrawnObjects }))
-        // Enter move mode with the selected mechanism and merged DrawnObjects
-        enterMoveGroupMode(mechanism.joints, mergedDrawnObjects)
-      } else if (nearestLink) {
-        // Get joints from the link and find their connected mechanism
-        const linkMeta = pylinkDoc.meta.links[nearestLink.name]
-        if (linkMeta && linkMeta.connects.length > 0) {
-          const mechanism = findConnectedMechanism(linkMeta.connects[0], pylinkDoc.meta.links)
-          setSelectedJoints(mechanism.joints)
-          setSelectedLinks(mechanism.links)
-          // Find DrawnObjects merged with this mechanism's links
-          const mergedDrawnObjects = findMergedDrawnObjects(mechanism.links)
-          setDrawnObjects(prev => ({ ...prev, selectedIds: mergedDrawnObjects }))
-          // Enter move mode with the selected mechanism and merged DrawnObjects
-          enterMoveGroupMode(mechanism.joints, mergedDrawnObjects)
-        }
-      } else {
-        setSelectedJoints([])
-        setSelectedLinks([])
-        setDrawnObjects(prev => ({ ...prev, selectedIds: [] }))
-        exitMoveGroupMode()
-        showStatus('Click on a joint or link to select its mechanism', 'info', 1500)
-      }
-      return
-    }
-
-  }, [toolMode, toolContext, linkCreationState, dragState.isDragging, groupSelectionState.isSelecting, measureState, polygonDrawState, pathDrawState, selectedJoints, selectedLinks, getJointsWithPositions, getLinksWithPositions, pylinkDoc.meta.links, pylinkDoc.pylinkage.joints, deleteJoint, deleteLink, handleDeleteSelected, showStatus, clearStatus, triggerMechanismChange, createLinkWithRevoluteDefault])
-
-  // Handle canvas double-click (for completing path drawing)
-  const handleCanvasDoubleClick = useCallback((event: React.MouseEvent<SVGSVGElement>) => {
-    const point = toolContext.getPointFromEvent(event)
-    if (point) {
-      const handler = getToolHandler(toolMode)
-      if (handler.onDoubleClick?.(event, point, toolContext)) return
-    }
-  }, [toolMode, toolContext])
-
   // Get cursor style based on tool mode
   const getCursorStyle = () => {
     if (moveGroupState.isDragging) return 'grabbing'
@@ -1969,29 +2016,14 @@ const BuilderTab: React.FC = () => {
         return { minWidth: 200, maxHeight: 480 }  // 1.5x taller for links list
       case 'nodes':
         return { minWidth: 200, maxHeight: 320 }  // Taller for nodes list
+      case 'forms':
+        return { minWidth: 255, maxHeight: 580 }
       case 'settings':
         return { minWidth: 280, maxHeight: 900 }  // 40px narrower; x=-280 keeps it on-screen
       default:
         return { minWidth: 200, maxHeight: 400 }
     }
   }
-
-  // ═══════════════════════════════════════════════════════════════════════════════
-  // TOOLBAR CONTENT COMPONENTS (using extracted components from builder/toolbars/)
-  // ═══════════════════════════════════════════════════════════════════════════════
-
-  const ToolsContent = () => (
-    <ToolsToolbar
-      toolMode={toolMode}
-      setToolMode={setToolMode}
-      hoveredTool={hoveredTool}
-      setHoveredTool={setHoveredTool}
-      linkCreationState={linkCreationState}
-      setLinkCreationState={setLinkCreationState}
-      setPreviewLine={setPreviewLine}
-      onPauseAnimation={animation.animationState.isAnimating ? animation.pauseAnimation : undefined}
-    />
-  )
 
   // Update link (edge) property - using hypergraph operations
   const updateLinkProperty = useCallback((linkName: string, property: string, value: string | string[] | boolean) => {
@@ -2019,21 +2051,707 @@ const BuilderTab: React.FC = () => {
     showStatus(`Renamed to ${newName}`, 'success', 1500)
   }, [linkageDoc, showStatus, editingLinkData])
 
-  // Links toolbar content - double-click opens edit modal
-  const LinksContent = () => (
-    <LinksToolbar
-      links={pylinkDoc.meta.links}
-      linkageDoc={linkageDoc}
-      selectedLinks={selectedLinks}
-      setSelectedLinks={setSelectedLinks}
-      setSelectedJoints={setSelectedJoints}
-      hoveredLink={hoveredLink}
-      setHoveredLink={setHoveredLink}
-      selectionColor={selectionColor}
-      getJointPosition={getJointPosition}
-      openLinkEditModal={openLinkEditModal}
-    />
-  )
+  // Z-level palette: distinct colors for each layer (same z => same color)
+  const Z_LEVEL_PALETTE = [
+    '#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd', '#8c564b',
+    '#e377c2', '#7f7f7f', '#bcbd22', '#17becf', '#aec7e8', '#ffbb78'
+  ]
+
+  const zLevelRows = React.useMemo((): ZLevelRow[] => {
+    const edges = linkageDoc.meta?.edges ?? {}
+    const objects = drawnObjects.objects as DrawnObject[]
+    const zToColor = new Map<number, string>()
+    const isNumericZ = (z: unknown): z is number =>
+      typeof z === 'number' && Number.isFinite(z)
+    for (const meta of Object.values(edges)) {
+      const z = (meta as { zlevel?: unknown }).zlevel
+      if (!isNumericZ(z) || zToColor.has(z)) continue
+      const color = (meta as { color?: string }).color
+      zToColor.set(z, typeof color === 'string' ? color : Z_LEVEL_PALETTE[zToColor.size % Z_LEVEL_PALETTE.length])
+    }
+    for (const o of objects) {
+      if (o.type !== 'polygon') continue
+      const z = o.z_level
+      if (!isNumericZ(z) || zToColor.has(z)) continue
+      const color = o.fillColor
+      zToColor.set(z, typeof color === 'string' ? color : Z_LEVEL_PALETTE[zToColor.size % Z_LEVEL_PALETTE.length])
+    }
+    const uniqueZ = [...zToColor.keys()].sort((a, b) => a - b)
+    return uniqueZ.map(z => ({ z, color: zToColor.get(z) ?? '#888888' }))
+  }, [linkageDoc.meta?.edges, drawnObjects.objects])
+
+  const getColorForZLevel = useCallback((z: number): string => {
+    const row = zLevelRows.find(r => r.z === z)
+    if (row) return row.color
+    const idx = zLevelRows.length ? zLevelRows.length : Math.abs(z) % Z_LEVEL_PALETTE.length
+    return Z_LEVEL_PALETTE[idx % Z_LEVEL_PALETTE.length]
+  }, [zLevelRows])
+
+  const onZLevelColorChange = useCallback((z: number, color: string) => {
+    setLinkageDoc(prev => {
+      const nextEdges = { ...prev.meta.edges }
+      for (const [linkId, meta] of Object.entries(nextEdges)) {
+        if ((meta as { zlevel?: number }).zlevel === z) {
+          nextEdges[linkId] = { ...meta, color }
+        }
+      }
+      return { ...prev, meta: { ...prev.meta, edges: nextEdges } }
+    })
+    setDrawnObjects(prev => ({
+      ...prev,
+      objects: prev.objects.map(obj => {
+        const o = obj as DrawnObject
+        if (o.type === 'polygon' && o.z_level === z) {
+          return { ...o, fillColor: color, strokeColor: color }
+        }
+        return obj
+      })
+    }))
+    setLinkColorMode('z-level')
+  }, [setLinkageDoc, setDrawnObjects, setLinkColorMode])
+
+  const onReorderForms = useCallback(async (formId: string, newZLevel: number) => {
+    const fixed_entity_z_levels: Record<string, number> = {}
+    for (const obj of drawnObjects.objects as DrawnObject[]) {
+      if (obj.type !== 'polygon' || obj.z_level == null) continue
+      const isDragged = obj.id === formId
+      if (isDragged || obj.z_level_fixed) {
+        fixed_entity_z_levels['polygon:' + obj.id] = isDragged ? newZLevel : obj.z_level
+      }
+    }
+    setDrawnObjects(prev => ({
+      ...prev,
+      objects: prev.objects.map(obj => {
+        if (obj.id !== formId) return obj
+        const o = obj as DrawnObject
+        return { ...o, z_level: newZLevel, z_level_fixed: true }
+      })
+    }))
+    try {
+      const drawn_objects = drawnObjects.objects
+        .filter((o: { type?: string; id?: string; contained_links?: string[] }) =>
+          o.type === 'polygon' && o.id && (o.contained_links?.length ?? 0) > 0
+        )
+        .map((o: DrawnObject) => ({
+          id: o.id,
+          type: 'polygon' as const,
+          contained_links: o.contained_links ?? [],
+          ...(Array.isArray(o.points) && o.points.length >= 3 && { points: o.points })
+        }))
+      const formSoftPinsReorder: Record<string, [number, number]> = {}
+      for (const o of drawnObjects.objects as DrawnObject[]) {
+        if (o.type === 'polygon' && o.target_z_level != null && Number.isFinite(o.target_z_level)) {
+          formSoftPinsReorder['polygon:' + o.id] = [o.target_z_level, 1]
+        }
+      }
+      const body: Record<string, unknown> = {
+        linkage: linkageDoc.linkage,
+        meta: linkageDoc.meta,
+        n_steps: simulationSteps || 32,
+        ...(drawn_objects.length > 0 && { drawn_objects }),
+        ...(drawn_objects.length > 0 && { margin_units: formPaddingUnits }),
+        fixed_entity_z_levels,
+        z_level_config: {
+          ...zLevelConfig,
+          crank_z: zLevelConfig.crank_z ?? null,
+          soft_pins: { ...(zLevelConfig.soft_pins ?? {}), ...formSoftPinsReorder }
+        }
+      }
+      if (animation.trajectoryData?.trajectories && animation.trajectoryData.nSteps > 0) {
+        body.trajectories = animation.trajectoryData.trajectories
+        body.n_steps = animation.trajectoryData.nSteps
+      }
+      const res = await fetch('/api/compute-link-z-levels', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body)
+      })
+      const data = (await res.json()) as {
+        status: string
+        assignments?: Array<Record<string, number>>
+        polygon_z_levels?: Record<string, number>
+        message?: string
+      }
+      if (data.status === 'error' || !res.ok) {
+        showStatus(data.message ?? 'Z-level recompute failed', 'error', 5000)
+        return
+      }
+      if (!Array.isArray(data.assignments) || data.assignments.length === 0) {
+        showStatus(data.message ?? 'No z-level assignment returned', 'error', 3000)
+        return
+      }
+      const assignment = data.assignments[0]
+      const uniqueZ = [...new Set(Object.values(assignment))].sort((a, b) => a - b)
+      const zToColor = new Map<number, string>()
+      uniqueZ.forEach((z, i) => {
+        zToColor.set(z, Z_LEVEL_PALETTE[i % Z_LEVEL_PALETTE.length])
+      })
+      setLinkageDoc(prev => {
+        const nextEdges = { ...prev.meta.edges }
+        for (const [linkId, z] of Object.entries(assignment)) {
+          const existing = nextEdges[linkId] ?? {}
+          nextEdges[linkId] = {
+            ...existing,
+            zlevel: z,
+            color: zToColor.get(z) ?? (existing as { color?: string }).color ?? '#888888'
+          }
+        }
+        return { ...prev, meta: { ...prev.meta, edges: nextEdges } }
+      })
+      setDrawnObjects(prev => ({
+        ...prev,
+        objects: prev.objects.map((obj): DrawnObject => {
+          const o = obj as DrawnObject
+          if (o.type !== 'polygon' || !data.polygon_z_levels || !(o.id in data.polygon_z_levels)) return o
+          const z = data.polygon_z_levels[o.id]
+          // Preserve custom fill when z-level unchanged so form color edits are not reverted
+          const color = z === o.z_level ? o.fillColor : (zToColor.get(z) ?? o.fillColor)
+          return {
+            ...o,
+            z_level: z,
+            fillColor: color,
+            strokeColor: color,
+            fillOpacity: 0.25
+          }
+        })
+      }))
+      setLinkColorMode('z-level')
+      animation.setAnimationFrame(0)
+      showStatus('Z-levels updated', 'success', 3000)
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : 'Z-level recompute failed'
+      showStatus(msg, 'error', 5000)
+    }
+  }, [drawnObjects.objects, linkageDoc, simulationSteps, formPaddingUnits, zLevelConfig, animation.trajectoryData, animation.setAnimationFrame, setLinkageDoc, setDrawnObjects, setLinkColorMode, showStatus])
+
+  const onFormZLevelFixedChange = useCallback((formId: string, fixed: boolean) => {
+    setDrawnObjects(prev => ({
+      ...prev,
+      objects: prev.objects.map(obj =>
+        obj.id !== formId ? obj : { ...obj, z_level_fixed: fixed }
+      )
+    }))
+  }, [setDrawnObjects])
+
+  const handleComputeLinkZLevels = useCallback(async () => {
+    try {
+      const drawn_objects = drawnObjects.objects
+        .filter((o: { type?: string; id?: string; contained_links?: string[] }) =>
+          o.type === 'polygon' && o.id && (o.contained_links?.length ?? 0) > 0
+        )
+        .map((o: DrawnObject) => ({
+          id: o.id,
+          type: 'polygon' as const,
+          contained_links: o.contained_links ?? [],
+          ...(Array.isArray(o.points) && o.points.length >= 3 && { points: o.points })
+        }))
+      const fixedPolygons = (drawnObjects.objects as DrawnObject[]).filter(
+        (o): o is DrawnObject => o.type === 'polygon' && !!o.z_level_fixed && o.z_level != null
+      )
+      const fixed_entity_z_levels: Record<string, number> = {}
+      for (const p of fixedPolygons) {
+        fixed_entity_z_levels['polygon:' + p.id] = p.z_level!
+      }
+      const formSoftPins: Record<string, [number, number]> = {}
+      for (const o of drawnObjects.objects as DrawnObject[]) {
+        if (o.type === 'polygon' && o.target_z_level != null && Number.isFinite(o.target_z_level)) {
+          formSoftPins['polygon:' + o.id] = [o.target_z_level, 1]
+        }
+      }
+      const body: Record<string, unknown> = {
+        linkage: linkageDoc.linkage,
+        meta: linkageDoc.meta,
+        n_steps: simulationSteps || 32,
+        ...(drawn_objects.length > 0 && { drawn_objects }),
+        ...(drawn_objects.length > 0 && { margin_units: formPaddingUnits }),
+        ...(Object.keys(fixed_entity_z_levels).length > 0 && { fixed_entity_z_levels }),
+        z_level_config: {
+          ...zLevelConfig,
+          crank_z: zLevelConfig.crank_z ?? null,
+          soft_pins: { ...(zLevelConfig.soft_pins ?? {}), ...formSoftPins }
+        }
+      }
+      if (animation.trajectoryData?.trajectories && animation.trajectoryData.nSteps > 0) {
+        body.trajectories = animation.trajectoryData.trajectories
+        body.n_steps = animation.trajectoryData.nSteps
+      }
+      const res = await fetch('/api/compute-link-z-levels', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body)
+      })
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      const data = (await res.json()) as {
+        status: string
+        assignments?: Array<Record<string, number>>
+        polygon_z_levels?: Record<string, number>
+        message?: string
+      }
+      if (data.status === 'error') {
+        showStatus(data.message ?? 'Z-level assignment failed', 'error', 5000)
+        return
+      }
+      if (data.status !== 'success' || !Array.isArray(data.assignments) || data.assignments.length === 0) {
+        showStatus(data.message ?? 'No z-level assignment returned', 'error', 3000)
+        return
+      }
+      const assignment = data.assignments[0]
+      const uniqueZ = [...new Set(Object.values(assignment))].sort((a, b) => a - b)
+      const zToColor = new Map<number, string>()
+      uniqueZ.forEach((z, i) => {
+        zToColor.set(z, Z_LEVEL_PALETTE[i % Z_LEVEL_PALETTE.length])
+      })
+      setLinkageDoc(prev => {
+        const nextEdges = { ...prev.meta.edges }
+        for (const [linkId, z] of Object.entries(assignment)) {
+          const existing = nextEdges[linkId] ?? {}
+          nextEdges[linkId] = {
+            ...existing,
+            zlevel: z,
+            color: zToColor.get(z) ?? (existing as { color?: string }).color ?? '#888888'
+          }
+        }
+        return { ...prev, meta: { ...prev.meta, edges: nextEdges } }
+      })
+      if (data.polygon_z_levels && Object.keys(data.polygon_z_levels).length > 0) {
+        const fillOpacityZ = 0.25
+        setDrawnObjects(prev => ({
+          ...prev,
+          objects: prev.objects.map((obj): DrawnObject => {
+            const o = obj as DrawnObject
+            if (data.polygon_z_levels && o.id in data.polygon_z_levels) {
+              const z = data.polygon_z_levels[o.id]
+              // Preserve custom fill when z-level unchanged so form color edits are not reverted
+              const color = z === o.z_level ? o.fillColor : (zToColor.get(z) ?? o.fillColor)
+              return {
+                ...o,
+                z_level: z,
+                fillColor: color,
+                strokeColor: color,
+                fillOpacity: fillOpacityZ
+              }
+            }
+            return o
+          })
+        }))
+      }
+      setLinkColorMode('z-level')
+      animation.setAnimationFrame(0)
+      showStatus('Z-levels computed; links colored by layer', 'success', 3000)
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : 'Z-level computation failed'
+      showStatus(msg, 'error', 3000)
+    }
+  }, [linkageDoc, simulationSteps, drawnObjects.objects, setLinkageDoc, setDrawnObjects, setLinkColorMode, showStatus, animation, formPaddingUnits])
+
+  useEffect(() => {
+    if (!runComputeAfterFormSaveRef.current) return
+    runComputeAfterFormSaveRef.current = false
+    void handleComputeLinkZLevels()
+  }, [drawnObjects.objects, handleComputeLinkZLevels])
+
+  type SuggestedPolygon = { polygon_id: string; points: [number, number][]; contained_links: string[]; z_level: number }
+
+  const handleCreateForms = useCallback(async () => {
+    if (!createRigidForms && !createLinkForms) {
+      showStatus('Turn on "Create rigid forms" and/or "Create link forms"', 'warning', 3000)
+      return
+    }
+    try {
+      // Flow: 1) Create and merge rigid forms  2) Create and merge link forms (each with only its link)
+      //       3) Z-level calculation on full set (when computeZLevelsAfterCreate) so layers are valid
+      const nodes = linkageDoc.linkage?.nodes ?? {}
+      const getStep0Position = (nodeId: string): [number, number] | undefined => {
+        const pos = nodes[nodeId]?.position
+        if (Array.isArray(pos) && pos.length >= 2) return [Number(pos[0]), Number(pos[1])]
+        return undefined
+      }
+      animation.setAnimationFrame(0)
+
+      let suggested: SuggestedPolygon[] = []
+      let assignments: Record<string, number> = {}
+      let polygon_z_levels: Record<string, number> = {}
+
+      const buildBody = (): Record<string, unknown> => {
+        const body: Record<string, unknown> = {
+          linkage: linkageDoc.linkage,
+          meta: linkageDoc.meta,
+          n_steps: simulationSteps || 32,
+          margin_units: formPaddingUnits,
+          z_level_config: { ...zLevelConfig, crank_z: zLevelConfig.crank_z ?? null },
+          skip_existing_forms: true,
+          existing_drawn_objects: drawnObjects.objects
+            .filter((o: { type?: string; id?: string; contained_links?: string[] }) =>
+              o.type === 'polygon' && o.id && (o.contained_links?.length ?? 0) > 0
+            )
+            .map((o: { id: string; type?: string; contained_links?: string[] }) => ({
+              id: o.id,
+              type: 'polygon',
+              contained_links: o.contained_links ?? []
+            }))
+        }
+        if (animation.trajectoryData?.trajectories && animation.trajectoryData.nSteps > 0) {
+          body.trajectories = animation.trajectoryData.trajectories
+          body.n_steps = animation.trajectoryData.nSteps
+        }
+        return body
+      }
+
+      const fetchAndParse = async (mode: 'rigid_groups' | 'per_link') => {
+        const res = await fetch('/api/create-polygons-from-rigid-groups', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ ...buildBody(), mode })
+        })
+        if (!res.ok) throw new Error(`HTTP ${res.status}`)
+        return (await res.json()) as {
+          status: string
+          assignments?: Record<string, number>
+          polygon_z_levels?: Record<string, number>
+          suggested_polygons?: SuggestedPolygon[]
+          message?: string
+        }
+      }
+
+      if (createRigidForms) {
+        const data = await fetchAndParse('rigid_groups')
+        if (data.status !== 'success') {
+          showStatus(data.message ?? 'Failed to create rigid forms', 'error', 3000)
+          return
+        }
+        const rigidSuggested = data.suggested_polygons ?? []
+        suggested = rigidSuggested
+        assignments = data.assignments ?? {}
+        polygon_z_levels = data.polygon_z_levels ?? {}
+      }
+
+      if (createLinkForms) {
+        const data = await fetchAndParse('per_link')
+        if (data.status !== 'success') {
+          showStatus(data.message ?? 'Failed to create link forms', 'error', 3000)
+          return
+        }
+        const linkSuggested = data.suggested_polygons ?? []
+        if (createRigidForms && suggested.length > 0) {
+          const linksInRigid = new Set(suggested.flatMap(p => p.contained_links))
+          const extra = linkSuggested.filter(p => p.contained_links[0] && !linksInRigid.has(p.contained_links[0]))
+          suggested = [...suggested, ...extra]
+          polygon_z_levels = { ...polygon_z_levels, ...(data.polygon_z_levels ?? {}) }
+          assignments = { ...assignments, ...(data.assignments ?? {}) }
+        } else {
+          suggested = linkSuggested
+          assignments = data.assignments ?? {}
+          polygon_z_levels = data.polygon_z_levels ?? {}
+        }
+      }
+
+      if (suggested.length === 0) {
+        showStatus(createRigidForms ? 'No rigid groups detected' : 'No links', 'info', 3000)
+        return
+      }
+
+      animation.setAnimationFrame(0)
+      const uniqueZ = [...new Set(Object.values(assignments))].sort((a, b) => a - b)
+      const zToColor = new Map<number, string>()
+      uniqueZ.forEach((z, i) => {
+        zToColor.set(z, Z_LEVEL_PALETTE[i % Z_LEVEL_PALETTE.length])
+      })
+      setLinkageDoc(prev => {
+        const nextEdges = { ...prev.meta.edges }
+        for (const [linkId, z] of Object.entries(assignments)) {
+          const existing = nextEdges[linkId] ?? {}
+          nextEdges[linkId] = {
+            ...existing,
+            zlevel: z,
+            color: zToColor.get(z) ?? (existing as { color?: string }).color ?? '#888888'
+          }
+        }
+        return { ...prev, meta: { ...prev.meta, edges: nextEdges } }
+      })
+      const fillOpacityZ = 0.25
+      const edges = linkageDoc.meta?.edges ?? {}
+      const traj = animation.trajectoryData?.trajectories
+      const newObjects: DrawnObject[] = suggested.map(sp => {
+        const color = zToColor.get(sp.z_level) ?? '#888888'
+        const primaryLink = sp.contained_links[0]
+        const isLinkForm = sp.contained_links.length === 1
+        const linkFormSuffix = primaryLink?.replace(/^link_/, '') ?? ''
+        const formId = isLinkForm ? `link_form_${linkFormSuffix}` : sp.polygon_id
+        const formName = isLinkForm ? formId : sp.polygon_id.replace('rigid_group_', 'rigid_form_')
+        const linkMeta = primaryLink ? (edges[primaryLink] as { connects?: [string, string] } | undefined) : undefined
+        const connects = linkMeta?.connects
+        const mergedLinkOriginalStart =
+          connects && traj?.[connects[0]]?.[0]
+            ? (traj[connects[0]][0] as [number, number])
+            : connects ? getStep0Position(connects[0]) : undefined
+        const mergedLinkOriginalEnd =
+          connects && traj?.[connects[1]]?.[0]
+            ? (traj[connects[1]][0] as [number, number])
+            : connects ? getStep0Position(connects[1]) : undefined
+        return {
+          id: formId,
+          type: 'polygon',
+          name: formName,
+          points: sp.points,
+          fillColor: color,
+          strokeColor: color,
+          strokeWidth: 1.5,
+          fillOpacity: fillOpacityZ,
+          closed: true,
+          contained_links: sp.contained_links,
+          z_level: sp.z_level,
+          mergedLinkName: primaryLink ?? undefined,
+          mergedLinkOriginalStart: mergedLinkOriginalStart ?? undefined,
+          mergedLinkOriginalEnd: mergedLinkOriginalEnd ?? undefined,
+          contained_links_valid: true
+        }
+      })
+
+      let linkageForMerge: typeof linkageDoc.linkage = linkageDoc.linkage
+      if (traj && linkageDoc.linkage?.nodes) {
+        const nodesCopy = { ...linkageDoc.linkage.nodes }
+        for (const nodeId of Object.keys(nodesCopy)) {
+          const pos = traj[nodeId]?.[0]
+          if (pos) nodesCopy[nodeId] = { ...nodesCopy[nodeId], position: pos }
+        }
+        linkageForMerge = { ...linkageDoc.linkage, nodes: nodesCopy }
+      }
+      const mergePayload = {
+        pylink_data: { linkage: linkageForMerge, meta: linkageDoc.meta },
+        polygon_id: '' as string,
+        polygon_points: [] as [number, number][]
+      }
+      const mergeResponses = await Promise.all(
+        suggested.map(async sp => {
+          const isLinkForm = sp.contained_links.length === 1
+          const formId = isLinkForm
+            ? `link_form_${(sp.contained_links[0] ?? '').replace(/^link_/, '')}`
+            : sp.polygon_id
+          const restrictToLinks = isLinkForm ? [sp.contained_links[0]] : sp.contained_links
+          const res = await fetch('/api/merge-polygon', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              ...mergePayload,
+              polygon_id: formId,
+              polygon_points: sp.points,
+              restrict_to_links: restrictToLinks
+            })
+          })
+          const data = await res.json() as { status?: string; polygon?: { contained_links?: string[]; mergedLinkName?: string; mergedLinkOriginalStart?: [number, number]; mergedLinkOriginalEnd?: [number, number]; fill_color?: string; stroke_color?: string } }
+          return { polygonId: formId, data }
+        })
+      )
+
+      const linkageAfterMerge = (() => {
+        const nextEdges = { ...linkageDoc.meta.edges }
+        for (const r of mergeResponses) {
+          const sp = suggested.find(s => {
+            const sid = s.contained_links.length === 1 ? `link_form_${(s.contained_links[0] ?? '').replace(/^link_/, '')}` : s.polygon_id
+            return sid === r.polygonId
+          })
+          const p = r.data.polygon
+          const fillColor = p?.fill_color
+          if (r.data.status !== 'success' || !sp?.contained_links?.length || !fillColor) continue
+          const links = sp.contained_links
+          const polygonObj = newObjects.find(o => o.id === r.polygonId) as { z_level?: number } | undefined
+          const polygonZ = polygonObj?.z_level ?? (nextEdges[links[0]] as { zlevel?: number } | undefined)?.zlevel
+          for (const lid of links) {
+            const existing = nextEdges[lid] ?? {}
+            nextEdges[lid] = { ...existing, color: fillColor, ...(polygonZ !== undefined && { zlevel: polygonZ }) }
+          }
+        }
+        return { ...linkageDoc, meta: { ...linkageDoc.meta, edges: nextEdges } }
+      })()
+
+      const mergedObjects: DrawnObject[] = drawnObjects.objects.concat(newObjects).map(obj => {
+        const r = mergeResponses.find(m => m.polygonId === obj.id)
+        const sp = r ? suggested.find(s => {
+          const sid = s.contained_links.length === 1 ? `link_form_${(s.contained_links[0] ?? '').replace(/^link_/, '')}` : s.polygon_id
+          return sid === r.polygonId
+        }) : null
+        if (!r || !sp || r.data.status !== 'success' || !r.data.polygon) return obj
+        const p = r.data.polygon
+        const rigidGroup = new Set(sp.contained_links)
+        const containedOnly = (p.contained_links ?? []).filter((lid: string) => rigidGroup.has(lid))
+        const primary = containedOnly.length > 0 ? containedOnly[0] : sp.contained_links[0]
+        return {
+          ...obj,
+          contained_links: sp.contained_links,
+          mergedLinkName: primary ?? undefined,
+          mergedLinkOriginalStart: obj.mergedLinkOriginalStart ?? p.mergedLinkOriginalStart ?? undefined,
+          mergedLinkOriginalEnd: obj.mergedLinkOriginalEnd ?? p.mergedLinkOriginalEnd ?? undefined,
+          fillColor: p.fill_color ?? obj.fillColor,
+          strokeColor: p.stroke_color ?? obj.strokeColor,
+          fillOpacity: 0.25,
+          contained_links_valid: true
+        }
+      })
+
+      setLinkageDoc(linkageAfterMerge)
+      setDrawnObjects(prev => ({ ...prev, objects: mergedObjects, selectedIds: [] }))
+
+      showStatus(`Created ${newObjects.length} form(s)`, 'success', 3000)
+
+      if (computeZLevelsAfterCreate) {
+        try {
+          const drawn_objects = mergedObjects
+            .filter((o: { type?: string; id?: string; contained_links?: string[] }) =>
+              o.type === 'polygon' && o.id && (o.contained_links?.length ?? 0) > 0
+            )
+            .map((o: DrawnObject) => ({
+              id: o.id,
+              type: 'polygon' as const,
+              contained_links: o.contained_links ?? [],
+              ...(Array.isArray(o.points) && o.points.length >= 3 && { points: o.points })
+            }))
+          const formSoftPinsCreate: Record<string, [number, number]> = {}
+          for (const o of mergedObjects as DrawnObject[]) {
+            if (o.type === 'polygon' && o.target_z_level != null && Number.isFinite(o.target_z_level)) {
+              formSoftPinsCreate['polygon:' + o.id] = [o.target_z_level, 1]
+            }
+          }
+          const zBody: Record<string, unknown> = {
+            linkage: linkageAfterMerge.linkage,
+            meta: linkageAfterMerge.meta,
+            n_steps: simulationSteps || 32,
+            ...(drawn_objects.length > 0 && { drawn_objects }),
+            ...(drawn_objects.length > 0 && { margin_units: formPaddingUnits }),
+            z_level_config: {
+              ...zLevelConfig,
+              crank_z: zLevelConfig.crank_z ?? null,
+              soft_pins: { ...(zLevelConfig.soft_pins ?? {}), ...formSoftPinsCreate }
+            }
+          }
+          if (animation.trajectoryData?.trajectories && animation.trajectoryData.nSteps > 0) {
+            zBody.trajectories = animation.trajectoryData.trajectories
+            zBody.n_steps = animation.trajectoryData.nSteps
+          }
+          const zRes = await fetch('/api/compute-link-z-levels', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(zBody)
+          })
+          if (!zRes.ok) throw new Error(`HTTP ${zRes.status}`)
+          const zData = (await zRes.json()) as {
+            status: string
+            assignments?: Array<Record<string, number>>
+            polygon_z_levels?: Record<string, number>
+            message?: string
+          }
+          if (zData.status === 'success' && Array.isArray(zData.assignments) && zData.assignments.length > 0) {
+            const assignment = zData.assignments[0]
+            const uniqueZ = [...new Set(Object.values(assignment))].sort((a, b) => a - b)
+            const zToColor = new Map<number, string>()
+            uniqueZ.forEach((z, i) => {
+              zToColor.set(z, Z_LEVEL_PALETTE[i % Z_LEVEL_PALETTE.length])
+            })
+            setLinkageDoc(prev => {
+              const nextEdges = { ...prev.meta.edges }
+              for (const [linkId, z] of Object.entries(assignment)) {
+                const existing = nextEdges[linkId] ?? {}
+                nextEdges[linkId] = {
+                  ...existing,
+                  zlevel: z,
+                  color: zToColor.get(z) ?? (existing as { color?: string }).color ?? '#888888'
+                }
+              }
+              return { ...prev, meta: { ...prev.meta, edges: nextEdges } }
+            })
+            const pz = zData.polygon_z_levels
+            if (pz && Object.keys(pz).length > 0) {
+              const fillOpacityZ = 0.25
+              const zLeveledObjects = mergedObjects.map((obj): DrawnObject => {
+                const o = obj as DrawnObject
+                if (o.id in pz) {
+                  const z = pz[o.id]
+                  const color = zToColor.get(z) ?? o.fillColor
+                  return {
+                    ...o,
+                    z_level: z,
+                    fillColor: color,
+                    strokeColor: color,
+                    fillOpacity: fillOpacityZ
+                  }
+                }
+                return o
+              })
+              setDrawnObjects(prev => ({ ...prev, objects: zLeveledObjects }))
+            }
+            setLinkColorMode('z-level')
+            showStatus('Z-levels computed; links and forms colored by layer', 'success', 3000)
+          }
+        } catch (zErr) {
+          const zMsg = zErr instanceof Error ? zErr.message : 'Compute z-levels failed'
+          showStatus(zMsg, 'error', 3000)
+        }
+      }
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : 'Create forms failed'
+      showStatus(msg, 'error', 3000)
+    }
+  }, [
+    linkageDoc,
+    drawnObjects.objects,
+    simulationSteps,
+    setLinkageDoc,
+    setDrawnObjects,
+    setLinkColorMode,
+    showStatus,
+    formPaddingUnits,
+    zLevelConfig,
+    createRigidForms,
+    createLinkForms,
+    computeZLevelsAfterCreate,
+    animation
+  ])
+
+  const openFormEdit = useCallback((formId: string) => {
+    const obj = drawnObjects.objects.find((o: { id: string }) => o.id === formId) as DrawnObject | undefined
+    if (!obj || obj.type !== 'polygon') return
+    setEditingFormData({
+      id: obj.id,
+      name: obj.name,
+      fillColor: obj.fillColor,
+      z_level: obj.z_level,
+      z_level_fixed: obj.z_level_fixed,
+      target_z_level: obj.target_z_level
+    })
+  }, [drawnObjects.objects])
+
+  const onSaveForm = useCallback((id: string, updates: { name: string; fillColor: string; strokeColor: string; z_level?: number; z_level_fixed?: boolean; target_z_level?: number }) => {
+    setDrawnObjects(prev => ({
+      ...prev,
+      objects: prev.objects.map(obj =>
+        obj.id !== id
+          ? obj
+          : {
+              ...obj,
+              name: updates.name,
+              fillColor: updates.fillColor,
+              strokeColor: updates.strokeColor,
+              ...(updates.z_level !== undefined && { z_level: updates.z_level }),
+              ...(updates.z_level_fixed !== undefined && { z_level_fixed: updates.z_level_fixed }),
+              ...(updates.target_z_level !== undefined && { target_z_level: updates.target_z_level })
+            }
+      )
+    }))
+    setEditingFormData(null)
+    showStatus('Form updated', 'success', 1500)
+    if (updates.z_level !== undefined || updates.z_level_fixed !== undefined) {
+      runComputeAfterFormSaveRef.current = true
+    }
+  }, [setDrawnObjects, showStatus])
+
+  const handleDeleteAllForms = useCallback(() => {
+    if (!window.confirm('Remove all forms? This cannot be undone.')) return
+    setDrawnObjects(prev => ({
+      ...prev,
+      objects: prev.objects.filter((o: { type?: string }) => o.type !== 'polygon'),
+      selectedIds: []
+    }))
+    showStatus('All forms removed', 'success', 2000)
+  }, [setDrawnObjects, showStatus])
 
   // Valid pylinkage joint types
   const JOINT_TYPES = ['Static', 'Crank', 'Revolute'] as const
@@ -2164,43 +2882,6 @@ const BuilderTab: React.FC = () => {
     showStatus(`Renamed to ${newName}`, 'success', 1500)
   }, [linkageDoc, showStatus, editingJointData, hoveredJoint])
 
-  // Nodes toolbar content - double-click opens edit modal
-  const NodesContent = () => (
-    <NodesToolbar
-      joints={pylinkDoc.pylinkage.joints}
-      selectedJoints={selectedJoints}
-      setSelectedJoints={setSelectedJoints}
-      setSelectedLinks={setSelectedLinks}
-      hoveredJoint={hoveredJoint}
-      setHoveredJoint={setHoveredJoint}
-      selectionColor={selectionColor}
-      getJointPosition={getJointPosition}
-      openJointEditModal={openJointEditModal}
-    />
-  )
-
-  // More toolbar content (Demos, File Operations, Canvas, Validation)
-  // Note: Animation controls are now in AnimateToolbar
-  const MoreContent = () => (
-    <MoreToolbar
-      loadDemo4Bar={loadDemo4Bar}
-      loadDemoLeg={loadDemoLeg}
-      loadDemoWalker={loadDemoWalker}
-      loadDemoComplex={loadDemoComplex}
-      loadPylinkGraphLast={loadPylinkGraphLast}
-      onLoadFileSelected={handleLoadFileSelected}
-      savePylinkGraph={savePylinkGraph}
-      suggestedSaveAsName={suggestedSaveAsName}
-      onSaveAs={handleSaveAs}
-      onClearAll={handleClearAll}
-      canvases={canvases}
-      setCanvases={setCanvases}
-      editingCanvasId={editingCanvasId}
-      setEditingCanvasId={setEditingCanvasId}
-      showStatus={showStatus}
-    />
-  )
-
   // ═══════════════════════════════════════════════════════════════════════════════
   // CRITICAL: Check if mechanism is synced to optimizer result - FAIL HARD ON MISMATCH
   // ═══════════════════════════════════════════════════════════════════════════════
@@ -2227,134 +2908,10 @@ const BuilderTab: React.FC = () => {
     }
     if (result.kind === 'value_mismatch') {
       optimization.setIsSyncedToOptimizer(false)
-      console.log('[Sync] Mechanism modified by user - marked as unsynced', { valueMismatches: result.valueMismatches.length })
       return
     }
     optimization.setIsSyncedToOptimizer(true)
   }, [linkageDoc, optimization.isOptimizedMechanism, showStatus, triggerMechanismChange])
-
-  // Settings toolbar content
-  const SettingsContent = () => (
-    <SettingsToolbar
-      darkMode={darkMode}
-      setDarkMode={setDarkMode}
-      showGrid={showGrid}
-      setShowGrid={setShowGrid}
-      showJointLabels={showJointLabels}
-      setShowJointLabels={setShowJointLabels}
-      showLinkLabels={showLinkLabels}
-      setShowLinkLabels={setShowLinkLabels}
-      simulationStepsInput={simulationStepsInput}
-      setSimulationStepsInput={setSimulationStepsInput}
-      autoSimulateDelayMs={autoSimulateDelayMs}
-      setAutoSimulateDelayMs={setAutoSimulateDelayMs}
-      trajectoryColorCycle={trajectoryColorCycle}
-      setTrajectoryColorCycle={setTrajectoryColorCycle}
-      trajectoryData={animation.trajectoryData}
-      autoSimulateEnabled={animation.autoSimulateEnabled}
-      triggerMechanismChange={triggerMechanismChange}
-      jointMergeRadius={jointMergeRadius}
-      setJointMergeRadius={setJointMergeRadius}
-      canvasBgColor={canvasBgColor as CanvasBgColor}
-      setCanvasBgColor={setCanvasBgColor}
-      jointSize={jointSize}
-      setJointSize={setJointSize}
-      linkThickness={linkThickness}
-      setLinkThickness={setLinkThickness}
-      trajectoryDotSize={trajectoryDotSize}
-      setTrajectoryDotSize={setTrajectoryDotSize}
-      trajectoryDotOutline={trajectoryDotOutline}
-      setTrajectoryDotOutline={setTrajectoryDotOutline}
-      trajectoryDotOpacity={trajectoryDotOpacity}
-      setTrajectoryDotOpacity={setTrajectoryDotOpacity}
-      trajectoryStyle={trajectoryStyle as TrajectoryStyle}
-      setTrajectoryStyle={setTrajectoryStyle}
-      exploreRadius={exploreRadius}
-      setExploreRadius={settings.setExploreRadius}
-      exploreRadialSamples={exploreRadialSamples}
-      setExploreRadialSamples={settings.setExploreRadialSamples}
-      exploreAzimuthalSamples={exploreAzimuthalSamples}
-      setExploreAzimuthalSamples={settings.setExploreAzimuthalSamples}
-      exploreNMaxCombinatorial={exploreNMaxCombinatorial}
-      setExploreNMaxCombinatorial={settings.setExploreNMaxCombinatorial}
-      exploreColormapEnabled={exploreColormapEnabled}
-      setExploreColormapEnabled={settings.setExploreColormapEnabled}
-      exploreColormapType={exploreColormapType}
-      setExploreColormapType={settings.setExploreColormapType}
-    />
-  )
-
-  const renderToolbarContent = (id: string) => {
-    switch (id) {
-      case 'tools': return <ToolsContent />
-      case 'links': return <LinksContent />
-      case 'nodes': return <NodesContent />
-      case 'more': return <MoreContent />
-      case 'optimize':
-        return (
-          <OptimizationToolbar
-            joints={pylinkDoc.pylinkage.joints}
-            linkageDoc={linkageDoc}
-            trajectoryData={animation.trajectoryData}
-            stretchingLinks={animation.stretchingLinks}
-            targetPaths={targetPaths}
-            setTargetPaths={setTargetPaths}
-            selectedPathId={selectedPathId}
-            setSelectedPathId={setSelectedPathId}
-            preprocessResult={optimization.preprocessResult}
-            isPreprocessing={optimization.isPreprocessing}
-            prepEnableSmooth={optimization.prepEnableSmooth}
-            setPrepEnableSmooth={optimization.setPrepEnableSmooth}
-            prepSmoothMethod={optimization.prepSmoothMethod as SmoothMethod}
-            setPrepSmoothMethod={optimization.setPrepSmoothMethod}
-            prepSmoothWindow={optimization.prepSmoothWindow}
-            setPrepSmoothWindow={optimization.setPrepSmoothWindow}
-            prepSmoothPolyorder={optimization.prepSmoothPolyorder}
-            setPrepSmoothPolyorder={optimization.setPrepSmoothPolyorder}
-            prepEnableResample={optimization.prepEnableResample}
-            setPrepEnableResample={optimization.setPrepEnableResample}
-            prepTargetNSteps={optimization.prepTargetNSteps}
-            setPrepTargetNSteps={optimization.setPrepTargetNSteps}
-            prepResampleMethod={optimization.prepResampleMethod as ResampleMethod}
-            setPrepResampleMethod={optimization.setPrepResampleMethod}
-            preprocessTrajectory={optimization.preprocessTrajectory}
-            simulationSteps={simulationSteps}
-            simulationStepsInput={simulationStepsInput}
-            setSimulationStepsInput={setSimulationStepsInput}
-            optMethod={optimization.optMethod as OptMethod}
-            setOptMethod={optimization.setOptMethod}
-            optNParticles={optimization.optNParticles}
-            setOptNParticles={optimization.setOptNParticles}
-            optIterations={optimization.optIterations}
-            setOptIterations={optimization.setOptIterations}
-            optMaxIterations={optimization.optMaxIterations}
-            setOptMaxIterations={optimization.setOptMaxIterations}
-            optTolerance={optimization.optTolerance}
-            setOptTolerance={optimization.setOptTolerance}
-            optBoundsFactor={optimization.optBoundsFactor}
-            setOptBoundsFactor={optimization.setOptBoundsFactor}
-            optMinLength={optimization.optMinLength}
-            setOptMinLength={optimization.setOptMinLength}
-            optVerbose={optimization.optVerbose}
-            setOptVerbose={optimization.setOptVerbose}
-            isOptimizing={optimization.isOptimizing}
-            runOptimization={(config?: Record<string, unknown>) => {
-              optimization.runOptimization(config ?? {}).catch(err => console.error('Optimization error:', err))
-            }}
-            optimizationResult={optimization.optimizationResult}
-            preOptimizationDoc={optimization.preOptimizationDoc}
-            revertOptimization={optimization.revertOptimization}
-            syncToOptimizerResult={optimization.syncToOptimizerResult}
-            isSyncedToOptimizer={optimization.isSyncedToOptimizer}
-            dimensionInfo={optimization.dimensionInfo}
-            isLoadingDimensions={optimization.isLoadingDimensions}
-            dimensionInfoError={optimization.dimensionInfoError}
-          />
-        )
-      case 'settings': return <SettingsContent />
-      default: return null
-    }
-  }
 
   // Load demo from backend
   const loadDemoFromBackend = async (demoName: string) => {
@@ -2368,6 +2925,7 @@ const BuilderTab: React.FC = () => {
       if (result.status === 'success' && result.data) {
         // Check if it's the new hypergraph format
         if (isHypergraphFormat(result.data)) {
+          optimization.clearOptimizerState()
           // Store target_joint in metadata if provided by demo
           const docWithTargetJoint = result.data
           if (result.target_joint) {
@@ -2447,6 +3005,7 @@ const BuilderTab: React.FC = () => {
       if (result.status === 'success' && result.data) {
         // Check if it's the new hypergraph format
         if (isHypergraphFormat(result.data)) {
+          optimization.clearOptimizerState()
           applyLoadedDocument({
             doc: result.data,
             setLinkageDoc,
@@ -2485,6 +3044,7 @@ const BuilderTab: React.FC = () => {
             showStatus('Load failed: file is not a valid mechanism document (legacy format not supported)', 'error', 5000)
             return
           }
+          optimization.clearOptimizerState()
           applyLoadedDocument({
             doc: data,
             setLinkageDoc,
@@ -2507,6 +3067,7 @@ const BuilderTab: React.FC = () => {
     },
     [
       isHypergraphFormat,
+      optimization.clearOptimizerState,
       applyLoadedDocument,
       setLinkageDoc,
       setDrawnObjects,
@@ -2561,8 +3122,9 @@ const BuilderTab: React.FC = () => {
   )
 
   const handleClearAll = useCallback(() => {
+    optimization.clearOptimizerState()
     setLinkageDoc(createEmptyLinkageDocument('untitled'))
-    setDrawnObjects(initialDrawnObjectsState)
+    setDrawnObjects({ objects: [], selectedIds: [] })
     setCanvases([])
     setSelectedJoints([])
     setSelectedLinks([])
@@ -2570,6 +3132,7 @@ const BuilderTab: React.FC = () => {
     setStoredGraphFilename(null)
     showStatus('Cleared. Starting with an empty mechanism.', 'info', 3000)
   }, [
+    optimization.clearOptimizerState,
     setLinkageDoc,
     setDrawnObjects,
     setCanvases,
@@ -2578,6 +3141,390 @@ const BuilderTab: React.FC = () => {
     animation.clearTrajectory,
     showStatus
   ])
+
+  // Toolbar content by id — built by useToolbarContent (after all load/save callbacks)
+  const toolbarContentParams = useMemo(
+    () => ({
+      toolsProps: {
+        toolMode,
+        setToolMode,
+        hoveredTool,
+        setHoveredTool,
+        linkCreationState,
+        setLinkCreationState,
+        setPreviewLine,
+        onPauseAnimation: animation.animationState.isAnimating ? animation.pauseAnimation : undefined
+      },
+      linksProps: {
+        links: pylinkDoc.meta.links,
+        linkageDoc,
+        selectedLinks,
+        setSelectedLinks,
+        setSelectedJoints,
+        hoveredLink,
+        setHoveredLink,
+        selectionColor,
+        getJointPosition,
+        openLinkEditModal
+      },
+      nodesProps: {
+        joints: pylinkDoc.pylinkage.joints,
+        selectedJoints,
+        setSelectedJoints,
+        setSelectedLinks,
+        hoveredJoint,
+        setHoveredJoint,
+        selectionColor,
+        getJointPosition,
+        openJointEditModal
+      },
+      moreProps: {
+        loadDemo4Bar,
+        loadDemoLeg,
+        loadDemoWalker,
+        loadDemoComplex,
+        loadPylinkGraphLast,
+        onLoadFileSelected: handleLoadFileSelected,
+        savePylinkGraph,
+        suggestedSaveAsName,
+        onSaveAs: handleSaveAs,
+        onClearAll: handleClearAll,
+        canvases,
+        setCanvases,
+        editingCanvasId,
+        setEditingCanvasId,
+        showStatus
+      },
+      formsProps: {
+        formPaddingUnits,
+        onFormPaddingChange: setFormPaddingUnits,
+        createRigidForms,
+        setCreateRigidForms,
+        createLinkForms,
+        setCreateLinkForms,
+        computeZLevelsAfterCreate,
+        setComputeZLevelsAfterCreate,
+        onCreateForms: handleCreateForms,
+        onComputeLinkZLevels: handleComputeLinkZLevels,
+        objects: drawnObjects.objects as import('./builder/rendering/types').DrawnObject[],
+        selectedIds: drawnObjects.selectedIds,
+        onSelectForms: (ids: string[]) => setDrawnObjects(prev => ({ ...prev, selectedIds: ids })),
+        openFormEdit,
+        showStatus,
+        darkMode,
+        zLevelRows,
+        onZLevelColorChange,
+        onReorderForms,
+        onFormZLevelFixedChange,
+        zLevelConfig,
+        onZLevelConfigChange: setZLevelConfig,
+        onDeleteAllForms: handleDeleteAllForms
+      },
+      settingsProps: {
+        darkMode,
+        setDarkMode,
+        showGrid,
+        setShowGrid,
+        showJointLabels,
+        setShowJointLabels,
+        showLinkLabels,
+        setShowLinkLabels,
+        simulationStepsInput,
+        setSimulationStepsInput,
+        autoSimulateDelayMs,
+        setAutoSimulateDelayMs,
+        trajectoryColorCycle,
+        setTrajectoryColorCycle,
+        trajectoryData: animation.trajectoryData,
+        autoSimulateEnabled: animation.autoSimulateEnabled,
+        setAutoSimulateEnabled: animation.setAutoSimulateEnabled,
+        triggerMechanismChange,
+        jointMergeRadius,
+        setJointMergeRadius,
+        canvasBgColor: canvasBgColor as CanvasBgColor,
+        setCanvasBgColor,
+        jointSize,
+        setJointSize,
+        jointOutline,
+        setJointOutline,
+        linkThickness,
+        setLinkThickness,
+        linkTransparency,
+        setLinkTransparency,
+        linkColorMode,
+        setLinkColorMode,
+        linkColorSingle,
+        setLinkColorSingle,
+        trajectoryDotSize,
+        setTrajectoryDotSize,
+        trajectoryDotOutline,
+        setTrajectoryDotOutline,
+        trajectoryDotOpacity,
+        setTrajectoryDotOpacity,
+        showTrajectoryStepNumbers,
+        setShowTrajectoryStepNumbers,
+        trajectoryStyle: trajectoryStyle as TrajectoryStyle,
+        setTrajectoryStyle,
+        exploreRadius,
+        setExploreRadius: settings.setExploreRadius,
+        exploreRadialSamples,
+        setExploreRadialSamples: settings.setExploreRadialSamples,
+        exploreAzimuthalSamples,
+        setExploreAzimuthalSamples: settings.setExploreAzimuthalSamples,
+        exploreNMaxCombinatorial,
+        setExploreNMaxCombinatorial: settings.setExploreNMaxCombinatorial,
+        exploreColormapEnabled,
+        setExploreColormapEnabled: settings.setExploreColormapEnabled,
+        exploreColormapType,
+        setExploreColormapType: settings.setExploreColormapType
+      },
+      optimizeProps: {
+        joints: pylinkDoc.pylinkage.joints,
+        linkageDoc,
+        trajectoryData: animation.trajectoryData,
+        stretchingLinks: animation.stretchingLinks,
+        targetPaths,
+        setTargetPaths,
+        selectedPathId,
+        setSelectedPathId,
+        preprocessResult: optimization.preprocessResult,
+        isPreprocessing: optimization.isPreprocessing,
+        prepEnableSmooth: optimization.prepEnableSmooth,
+        setPrepEnableSmooth: optimization.setPrepEnableSmooth,
+        prepSmoothMethod: optimization.prepSmoothMethod as import('./builder/toolbars/OptimizationToolbar').SmoothMethod,
+        setPrepSmoothMethod: optimization.setPrepSmoothMethod,
+        prepSmoothWindow: optimization.prepSmoothWindow,
+        setPrepSmoothWindow: optimization.setPrepSmoothWindow,
+        prepSmoothPolyorder: optimization.prepSmoothPolyorder,
+        setPrepSmoothPolyorder: optimization.setPrepSmoothPolyorder,
+        prepEnableResample: optimization.prepEnableResample,
+        setPrepEnableResample: optimization.setPrepEnableResample,
+        prepTargetNSteps: optimization.prepTargetNSteps,
+        setPrepTargetNSteps: optimization.setPrepTargetNSteps,
+        prepResampleMethod: optimization.prepResampleMethod as import('./builder/toolbars/OptimizationToolbar').ResampleMethod,
+        setPrepResampleMethod: optimization.setPrepResampleMethod,
+        preprocessTrajectory: optimization.preprocessTrajectory,
+        simulationSteps,
+        simulationStepsInput,
+        setSimulationStepsInput,
+        optMethod: optimization.optMethod as import('./builder/toolbars/OptimizationToolbar').OptMethod,
+        setOptMethod: optimization.setOptMethod,
+        optNParticles: optimization.optNParticles,
+        setOptNParticles: optimization.setOptNParticles,
+        optIterations: optimization.optIterations,
+        setOptIterations: optimization.setOptIterations,
+        optMaxIterations: optimization.optMaxIterations,
+        setOptMaxIterations: optimization.setOptMaxIterations,
+        optTolerance: optimization.optTolerance,
+        setOptTolerance: optimization.setOptTolerance,
+        optInertia: optimization.optInertia,
+        setOptInertia: optimization.setOptInertia,
+        optC1: optimization.optC1,
+        setOptC1: optimization.setOptC1,
+        optC2: optimization.optC2,
+        setOptC2: optimization.setOptC2,
+        optDiscretizationSteps: optimization.optDiscretizationSteps,
+        setOptDiscretizationSteps: optimization.setOptDiscretizationSteps,
+        optTimeLimit: optimization.optTimeLimit,
+        setOptTimeLimit: optimization.setOptTimeLimit,
+        optGapLimit: optimization.optGapLimit,
+        setOptGapLimit: optimization.setOptGapLimit,
+        optBoundsFactor: optimization.optBoundsFactor,
+        setOptBoundsFactor: optimization.setOptBoundsFactor,
+        optMinLength: optimization.optMinLength,
+        setOptMinLength: optimization.setOptMinLength,
+        isOptimizing: optimization.isOptimizing,
+        runOptimization: (config?: Record<string, unknown>) => {
+          optimization.runOptimization(config ?? {}).catch(err => console.error('Optimization error:', err))
+        },
+        optimizationResult: optimization.optimizationResult,
+        preOptimizationDoc: optimization.preOptimizationDoc,
+        revertOptimization: optimization.revertOptimization,
+        syncToOptimizerResult: optimization.syncToOptimizerResult,
+        isSyncedToOptimizer: optimization.isSyncedToOptimizer,
+        dimensionInfo: optimization.dimensionInfo,
+        isLoadingDimensions: optimization.isLoadingDimensions,
+        dimensionInfoError: optimization.dimensionInfoError
+      }
+    }),
+    [
+      toolMode,
+      setToolMode,
+      hoveredTool,
+      setHoveredTool,
+      linkCreationState,
+      setLinkCreationState,
+      setPreviewLine,
+      animation.animationState.isAnimating,
+      animation.pauseAnimation,
+      pylinkDoc.meta.links,
+      linkageDoc,
+      selectedLinks,
+      setSelectedLinks,
+      setSelectedJoints,
+      hoveredLink,
+      setHoveredLink,
+      selectionColor,
+      getJointPosition,
+      openLinkEditModal,
+      pylinkDoc.pylinkage.joints,
+      selectedJoints,
+      setSelectedJoints,
+      hoveredJoint,
+      setHoveredJoint,
+      openJointEditModal,
+      loadDemo4Bar,
+      loadDemoLeg,
+      loadDemoWalker,
+      loadDemoComplex,
+      loadPylinkGraphLast,
+      handleLoadFileSelected,
+      savePylinkGraph,
+      suggestedSaveAsName,
+      handleSaveAs,
+      handleClearAll,
+      canvases,
+      setCanvases,
+      editingCanvasId,
+      setEditingCanvasId,
+      showStatus,
+      formPaddingUnits,
+      setFormPaddingUnits,
+      createRigidForms,
+      setCreateRigidForms,
+      createLinkForms,
+      setCreateLinkForms,
+      computeZLevelsAfterCreate,
+      setComputeZLevelsAfterCreate,
+      handleCreateForms,
+      handleComputeLinkZLevels,
+      drawnObjects.objects,
+      drawnObjects.selectedIds,
+      setDrawnObjects,
+      openFormEdit,
+      darkMode,
+      zLevelRows,
+      onZLevelColorChange,
+      onReorderForms,
+      onFormZLevelFixedChange,
+      setDarkMode,
+      showGrid,
+      setShowGrid,
+      showJointLabels,
+      setShowJointLabels,
+      showLinkLabels,
+      setShowLinkLabels,
+      simulationStepsInput,
+      setSimulationStepsInput,
+      autoSimulateDelayMs,
+      setAutoSimulateDelayMs,
+      trajectoryColorCycle,
+      setTrajectoryColorCycle,
+      animation.trajectoryData,
+      animation.autoSimulateEnabled,
+      animation.setAutoSimulateEnabled,
+      triggerMechanismChange,
+      jointMergeRadius,
+      setJointMergeRadius,
+      canvasBgColor,
+      setCanvasBgColor,
+      jointSize,
+      setJointSize,
+      jointOutline,
+      setJointOutline,
+      linkThickness,
+      setLinkThickness,
+      linkTransparency,
+      setLinkTransparency,
+      linkColorMode,
+      setLinkColorMode,
+      linkColorSingle,
+      setLinkColorSingle,
+      trajectoryDotSize,
+      setTrajectoryDotSize,
+      trajectoryDotOutline,
+      setTrajectoryDotOutline,
+      trajectoryDotOpacity,
+      setTrajectoryDotOpacity,
+      showTrajectoryStepNumbers,
+      setShowTrajectoryStepNumbers,
+      trajectoryStyle,
+      setTrajectoryStyle,
+      exploreRadius,
+      settings.setExploreRadius,
+      exploreRadialSamples,
+      settings.setExploreRadialSamples,
+      exploreAzimuthalSamples,
+      settings.setExploreAzimuthalSamples,
+      exploreNMaxCombinatorial,
+      settings.setExploreNMaxCombinatorial,
+      exploreColormapEnabled,
+      settings.setExploreColormapEnabled,
+      exploreColormapType,
+      settings.setExploreColormapType,
+      targetPaths,
+      setTargetPaths,
+      selectedPathId,
+      setSelectedPathId,
+      optimization.preprocessResult,
+      optimization.isPreprocessing,
+      optimization.prepEnableSmooth,
+      optimization.setPrepEnableSmooth,
+      optimization.prepSmoothMethod,
+      optimization.setPrepSmoothMethod,
+      optimization.prepSmoothWindow,
+      optimization.setPrepSmoothWindow,
+      optimization.prepSmoothPolyorder,
+      optimization.setPrepSmoothPolyorder,
+      optimization.prepEnableResample,
+      optimization.setPrepEnableResample,
+      optimization.prepTargetNSteps,
+      optimization.setPrepTargetNSteps,
+      optimization.prepResampleMethod,
+      optimization.setPrepResampleMethod,
+      optimization.preprocessTrajectory,
+      simulationSteps,
+      simulationStepsInput,
+      setSimulationStepsInput,
+      optimization.optMethod,
+      optimization.setOptMethod,
+      optimization.optNParticles,
+      optimization.setOptNParticles,
+      optimization.optIterations,
+      optimization.setOptIterations,
+      optimization.optMaxIterations,
+      optimization.setOptMaxIterations,
+      optimization.optTolerance,
+      optimization.setOptTolerance,
+      optimization.optInertia,
+      optimization.setOptInertia,
+      optimization.optC1,
+      optimization.setOptC1,
+      optimization.optC2,
+      optimization.setOptC2,
+      optimization.optDiscretizationSteps,
+      optimization.setOptDiscretizationSteps,
+      optimization.optTimeLimit,
+      optimization.setOptTimeLimit,
+      optimization.optGapLimit,
+      optimization.setOptGapLimit,
+      optimization.optBoundsFactor,
+      optimization.setOptBoundsFactor,
+      optimization.optMinLength,
+      optimization.setOptMinLength,
+      optimization.isOptimizing,
+      optimization.runOptimization,
+      optimization.optimizationResult,
+      optimization.preOptimizationDoc,
+      optimization.revertOptimization,
+      optimization.syncToOptimizerResult,
+      optimization.isSyncedToOptimizer,
+      optimization.dimensionInfo,
+      optimization.isLoadingDimensions,
+      optimization.dimensionInfoError
+    ]
+  )
+  const renderToolbarContent = useToolbarContent(toolbarContentParams)
 
   // Compose: container → canvas area (with toolbars) → animate toolbar → modals
   return (
@@ -2632,6 +3579,8 @@ const BuilderTab: React.FC = () => {
         selectedJoints={selectedJoints}
         selectedLinks={selectedLinks}
         statusMessage={statusMessage}
+        statusHistory={statusHistory}
+        clearStatusHistory={clearStatusHistory}
         linkCreationState={linkCreationState}
         polygonDrawState={polygonDrawState}
         measureState={measureState}
@@ -2657,21 +3606,19 @@ const BuilderTab: React.FC = () => {
         />
       </BuilderCanvasArea>
 
-      {/* Animation Toolbar - Centered at bottom */}
+      {/* Animation Toolbar - effectiveDisplayFrame so first paint after drag start shows 1/N */}
       <AnimateToolbar
         joints={pylinkDoc.pylinkage.joints}
-        animationState={animation.animationState}
+        animationState={{ ...animation.animationState, currentFrame: effectiveDisplayFrame }}
         playAnimation={animation.playAnimation}
         pauseAnimation={animation.pauseAnimation}
         stopAnimation={animation.stopAnimation}
-        setPlaybackSpeed={animation.setPlaybackSpeed}
+        setPlaybackFps={animation.setPlaybackFps}
         setPlaybackDirection={animation.setPlaybackDirection}
         setAnimatedPositions={animation.setAnimatedPositions}
-        setFrame={animation.setAnimationFrame}
+        setFrame={setAnimationFrameWithDisplay}
         isSimulating={animation.isSimulating}
         trajectoryData={animation.trajectoryData}
-        autoSimulateEnabled={animation.autoSimulateEnabled}
-        setAutoSimulateEnabled={animation.setAutoSimulateEnabled}
         runSimulation={animation.runSimulation}
         triggerMechanismChange={triggerMechanismChange}
         showTrajectory={showTrajectory}
@@ -2689,6 +3636,9 @@ const BuilderTab: React.FC = () => {
         onCloseJointEdit={() => setEditingJointData(null)}
         editingLinkData={editingLinkData}
         onCloseLinkEdit={() => setEditingLinkData(null)}
+        editingFormData={editingFormData}
+        onCloseFormEdit={() => setEditingFormData(null)}
+        onSaveForm={onSaveForm}
         renameJoint={renameJoint}
         renameLink={renameLink}
         updateJointProperty={updateJointProperty}
@@ -2699,6 +3649,7 @@ const BuilderTab: React.FC = () => {
         setEditingJointData={setEditingJointData}
         setEditingLinkData={setEditingLinkData}
         jointTypes={JOINT_TYPES}
+        getColorForZLevel={getColorForZLevel}
         darkMode={darkMode}
       />
     </Box>

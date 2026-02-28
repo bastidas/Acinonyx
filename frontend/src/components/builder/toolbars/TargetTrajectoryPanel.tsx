@@ -7,15 +7,18 @@
 
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react'
 import {
-  Box, Typography, Button, Tooltip, Divider, FormControl, Select, MenuItem,
+  Box, Typography, Button, Tooltip, Divider, FormControl, InputLabel, Select, MenuItem,
   TextField, FormControlLabel, Switch, IconButton, Dialog, DialogTitle,
-  DialogContent, DialogActions, Accordion, AccordionSummary, AccordionDetails, Stack
+  DialogContent, DialogActions, Accordion, AccordionSummary, AccordionDetails, Stack,
+  CircularProgress
 } from '@mui/material'
 import { Settings, Close, ExpandMore } from '@mui/icons-material'
 import { canSimulate, type TrajectoryData } from '../../AnimateSimulate'
 import type { PylinkJoint } from '../types'
 import { DimensionVariationConfig } from './DimensionVariationConfig'
 import { StaticJointMovementConfig } from './StaticJointMovementConfig'
+import { colors } from '../../../theme'
+import { MIN_SIMULATION_STEPS, MAX_SIMULATION_STEPS } from '../constants'
 
 // Types (avoid circular dependency by defining locally)
 export type SmoothMethod = 'savgol' | 'moving_avg' | 'gaussian'
@@ -93,6 +96,8 @@ export interface TargetTrajectoryPanelProps {
   setSelectedPathId: (id: string | null) => void
   targetJoint: string | null
   setTargetJoint: (joint: string | null) => void
+  /** When provided, user selection from the Target joint dropdown calls this (and sets lock in parent). Otherwise onChange calls setTargetJoint. */
+  onTargetJointChange?: (joint: string | null) => void
   allowAutoTargetJointSelection: boolean
 
   // Preprocessing
@@ -137,6 +142,7 @@ export const TargetTrajectoryPanel: React.FC<TargetTrajectoryPanelProps> = ({
   setSelectedPathId,
   targetJoint,
   setTargetJoint,
+  onTargetJointChange,
   allowAutoTargetJointSelection,
   preprocessResult,
   isPreprocessing,
@@ -199,6 +205,21 @@ export const TargetTrajectoryPanel: React.FC<TargetTrajectoryPanelProps> = ({
   const [showAchievableTargetConfigDialog, setShowAchievableTargetConfigDialog] = useState(false)
   const [dimensionSyncStates, setDimensionSyncStates] = useState<Record<string, boolean>>({})
 
+  // Resample target steps: same validation as Trajectory Simulation Steps (commit on blur/Enter)
+  const [localPrepTSteps, setLocalPrepTSteps] = useState(String(prepTargetNSteps))
+  const prepTStepsFocusedRef = useRef(false)
+  useEffect(() => {
+    if (!prepTStepsFocusedRef.current) setLocalPrepTSteps(String(prepTargetNSteps))
+  }, [prepTargetNSteps])
+  const commitPrepTSteps = useCallback(() => {
+    const val = parseInt(localPrepTSteps, 10)
+    if (!isNaN(val)) {
+      const clamped = Math.max(MIN_SIMULATION_STEPS, Math.min(MAX_SIMULATION_STEPS, val))
+      setPrepTargetNSteps(clamped)
+    }
+    prepTStepsFocusedRef.current = false
+  }, [localPrepTSteps, setPrepTargetNSteps])
+
   // Use dimension info from props (fetched by parent after trajectory computation)
   const dimensionInfo = dimensionInfoProp
   const isLoadingDimensions = isLoadingDimensionsProp
@@ -208,10 +229,10 @@ export const TargetTrajectoryPanel: React.FC<TargetTrajectoryPanelProps> = ({
   const mechanismKey = useMemo(() => {
     if (!linkageDoc) return null
     try {
-      const doc = linkageDoc as { name?: string; linkage?: { joints?: Record<string, unknown>; edges?: Record<string, unknown> } }
+      const doc = linkageDoc as { name?: string; linkage?: { nodes?: Record<string, unknown>; edges?: Record<string, unknown> } }
       const keyParts = {
         name: doc.name,
-        jointCount: Object.keys(doc.linkage?.joints || {}).length,
+        jointCount: Object.keys(doc.linkage?.nodes || {}).length,
         edgeCount: Object.keys(doc.linkage?.edges || {}).length
       }
       return JSON.stringify(keyParts)
@@ -223,7 +244,7 @@ export const TargetTrajectoryPanel: React.FC<TargetTrajectoryPanelProps> = ({
   // Track which mechanism we've already selected a target joint for
   const targetJointSelectedForRef = useRef<string | null>(null)
   const selectedPathRef = useRef(selectedPath)
-  
+
   useEffect(() => {
     selectedPathRef.current = selectedPath
   }, [selectedPath])
@@ -248,7 +269,6 @@ export const TargetTrajectoryPanel: React.FC<TargetTrajectoryPanelProps> = ({
     }
 
     const applySelection = (jointName: string) => {
-      console.log('[TargetTrajPanel] Auto-selecting joint:', jointName)
       targetJointSelectedForRef.current = mechanismKey
       setTargetJoint(jointName)
     }
@@ -305,29 +325,18 @@ export const TargetTrajectoryPanel: React.FC<TargetTrajectoryPanelProps> = ({
     targetJointSelectedForRef.current = null
   }, [mechanismKey])
 
-  // Select target joint only when trajectory is computed (mechanism is ready)
-  // Only run when mechanism changes, not when targetJoint changes
+  // Run target joint auto-selection only once after dimensions have been fetched (so dimension fetch runs first).
+  // Also re-run if targetJoint is null (recovery from Strict Mode remount or toolbar reset).
   useEffect(() => {
-    console.log('[TargetTrajPanel] Auto-select effect:', { allowAuto: allowAutoTargetJointSelection, mechanismKey, alreadySelected: targetJointSelectedForRef.current === mechanismKey })
-    
-    if (!allowAutoTargetJointSelection) {
-      console.log('[TargetTrajPanel] Skipping - auto-selection disabled')
-      return
-    }
+    if (!allowAutoTargetJointSelection || !mechanismKey || !joints.length) return
+    // Wait for dimension fetch to succeed so optimizer panel is "ready" before selecting a joint
+    if (!dimensionInfo) return
 
-    if (!mechanismKey || !joints.length) {
-      console.log('[TargetTrajPanel] Skipping - no mechanism or joints')
-      return
-    }
+    const alreadySelected = targetJointSelectedForRef.current === mechanismKey
+    if (alreadySelected && targetJoint != null) return
 
-    if (targetJointSelectedForRef.current === mechanismKey) {
-      console.log('[TargetTrajPanel] Skipping - already selected for this mechanism')
-      return
-    }
-
-    console.log('[TargetTrajPanel] Running auto-selection...')
     selectTargetJoint()
-  }, [allowAutoTargetJointSelection, mechanismKey, joints.length, selectTargetJoint])
+  }, [allowAutoTargetJointSelection, mechanismKey, joints.length, dimensionInfo, targetJoint, selectTargetJoint])
 
   useEffect(() => {
     setAchievableTargetConfig(prev => {
@@ -391,11 +400,56 @@ export const TargetTrajectoryPanel: React.FC<TargetTrajectoryPanelProps> = ({
     }
   }
 
+  const jointOptions = useMemo(() => {
+    const dedupe = (list: PylinkJoint[]) => {
+      const seen = new Set<string>()
+      return list.filter(j => {
+        if (seen.has(j.name)) return false
+        seen.add(j.name)
+        return true
+      })
+    }
+    const revolute = dedupe(joints.filter(j => j.type === 'Revolute'))
+    if (revolute.length > 0) return revolute
+    return dedupe(joints.filter(j => j.type === 'Crank'))
+  }, [joints])
+
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+      {/* Target joint: label left, selector right — compact row */}
+      <Stack direction="row" alignItems="center" gap={1.5} sx={{ minHeight: 40 }}>
+        <Typography variant="body2" sx={{ color: 'text.secondary', minWidth: 96, fontSize: '0.8rem' }}>
+          Target joint
+        </Typography>
+        <Tooltip title="Joint for path synthesis. Applies to the active target path, achievable target generation, and optimization." placement="top">
+          <FormControl size="small" sx={{ minWidth: 160, flex: 1 }}>
+            <Select
+              value={jointOptions.some(j => j.name === targetJoint) ? (targetJoint || '') : ''}
+              onChange={(e) => {
+                const v = e.target.value ? (e.target.value as string) : null
+                ;(onTargetJointChange ?? setTargetJoint)(v)
+              }}
+              displayEmpty
+              sx={{ fontSize: '0.85rem' }}
+            >
+              <MenuItem value="" sx={{ fontSize: '0.85rem' }}>
+                <em>Select joint...</em>
+              </MenuItem>
+              {jointOptions.map(j => (
+                <MenuItem key={j.name} value={j.name} sx={{ fontSize: '0.85rem' }}>
+                  {j.name} ({j.type})
+                </MenuItem>
+              ))}
+            </Select>
+          </FormControl>
+        </Tooltip>
+      </Stack>
+
+      <Divider />
+
       {/* Target Paths List */}
       <Box>
-        <Typography variant="subtitle2" sx={{ fontWeight: 700, color: '#e91e63', mb: 1, display: 'flex', alignItems: 'center', fontSize: '0.8rem' }}>
+        <Typography variant="subtitle2" sx={{ fontWeight: 700, color: colors.primary, mb: 1, display: 'flex', alignItems: 'center', fontSize: '0.8rem' }}>
           Target Paths
         </Typography>
 
@@ -413,11 +467,11 @@ export const TargetTrajectoryPanel: React.FC<TargetTrajectoryPanelProps> = ({
                   mb: 0.5,
                   borderRadius: 1,
                   cursor: 'pointer',
-                  bgcolor: selectedPathId === path.id ? 'rgba(233, 30, 99, 0.15)' : 'rgba(0,0,0,0.02)',
+                  bgcolor: selectedPathId === path.id ? `${colors.primary}20` : 'rgba(0,0,0,0.02)',
                   border: '2px solid',
-                  borderColor: selectedPathId === path.id ? '#e91e63' : 'transparent',
+                  borderColor: selectedPathId === path.id ? colors.primary : 'transparent',
                   transition: 'all 0.15s ease',
-                  '&:hover': { bgcolor: 'rgba(233, 30, 99, 0.08)' }
+                  '&:hover': { bgcolor: `${colors.primary}14`, borderColor: selectedPathId === path.id ? colors.primary : colors.primaryLight }
                 }}
               >
                 <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
@@ -439,7 +493,7 @@ export const TargetTrajectoryPanel: React.FC<TargetTrajectoryPanelProps> = ({
                     setTargetPaths(prev => prev.filter(p => p.id !== path.id))
                     if (selectedPathId === path.id) setSelectedPathId(null)
                   }}
-                  sx={{ width: 24, height: 24, color: '#999', '&:hover': { color: '#d32f2f' } }}
+                  sx={{ width: 24, height: 24, color: '#999', '&:hover': { color: colors.primaryDark } }}
                 >
                   ×
                 </IconButton>
@@ -520,28 +574,25 @@ export const TargetTrajectoryPanel: React.FC<TargetTrajectoryPanelProps> = ({
 
       <Divider />
 
-      {/* Path Preprocessing */}
+      {/* Path Preprocessing — compact with MUI label on controls */}
       {selectedPathId && selectedPath && (
         <Box>
-          <Typography variant="subtitle2" sx={{ fontWeight: 700, color: '#00897b', mb: 1, display: 'flex', alignItems: 'center', fontSize: '0.8rem' }}>
+          <Typography variant="subtitle2" sx={{ fontWeight: 700, color: '#00897b', mb: 0.5, fontSize: '0.8rem' }}>
             Path Preprocessing
+          </Typography>
+          <Typography variant="caption" sx={{ color: 'text.secondary', display: 'block', mb: 1 }}>
+            {selectedPath.points.length} points
+            {preprocessResult && ` (from ${preprocessResult.originalPoints})`}
           </Typography>
 
           <Box sx={{
-            p: 1.5,
+            p: 1,
             borderRadius: 1,
             bgcolor: 'rgba(0, 137, 123, 0.05)',
             border: '1px solid rgba(0, 137, 123, 0.2)'
           }}>
-              <Typography variant="caption" sx={{ color: 'text.secondary', display: 'block', mb: 1 }}>
-                Current path: <strong>{selectedPath.points.length} points</strong>
-                {preprocessResult && (
-                  <> - Processed from {preprocessResult.originalPoints} points</>
-                )}
-              </Typography>
-
-            {/* Smoothing Section */}
-            <Box sx={{ mb: 1.5 }}>
+            {/* Smoothing: FormControl with InputLabel for compact MUI look */}
+            <Box sx={{ mb: 1 }}>
               <FormControlLabel
                 control={
                   <Switch
@@ -551,83 +602,69 @@ export const TargetTrajectoryPanel: React.FC<TargetTrajectoryPanelProps> = ({
                     color="primary"
                   />
                 }
-                label={<Typography variant="caption" sx={{ fontWeight: 500 }}>Enable Smoothing</Typography>}
+                label={<Typography variant="caption" sx={{ fontWeight: 500 }}>Smoothing</Typography>}
               />
-
               {prepEnableSmooth && (
-                <Box sx={{ pl: 1, mt: 0.5 }}>
-                  <Box sx={{ display: 'flex', gap: 1, mb: 1 }}>
-                    <Box sx={{ flex: 1 }}>
-                      <Tooltip title="Smoothing filter type. Savgol preserves peaks, Moving Avg is aggressive, Gaussian is natural." placement="top">
-                        <Typography variant="caption" sx={{ color: 'text.secondary', display: 'block', mb: 0.25, cursor: 'help', fontSize: '0.65rem' }}>
-                          Method
-                        </Typography>
-                      </Tooltip>
+                <Stack direction="row" alignItems="center" gap={1} sx={{ mt: 0.5, flexWrap: 'wrap' }}>
+                  <Tooltip title="Smoothing filter type" placement="top">
+                    <FormControl size="small" sx={{ minWidth: 120 }}>
+                      <InputLabel id="prep-smooth-method-label">Method</InputLabel>
                       <Select
-                        size="small"
-                        fullWidth
+                        labelId="prep-smooth-method-label"
+                        label="Method"
                         value={prepSmoothMethod}
                         onChange={(e) => setPrepSmoothMethod(e.target.value as SmoothMethod)}
                         sx={{ fontSize: '0.75rem', '& .MuiSelect-select': { py: 0.5 } }}
                       >
                         <MenuItem value="savgol" sx={{ fontSize: '0.75rem' }}>Savitzky-Golay</MenuItem>
-                        <MenuItem value="moving_avg" sx={{ fontSize: '0.75rem' }}>Moving Average</MenuItem>
+                        <MenuItem value="moving_avg" sx={{ fontSize: '0.75rem' }}>Moving Avg</MenuItem>
                         <MenuItem value="gaussian" sx={{ fontSize: '0.75rem' }}>Gaussian</MenuItem>
                       </Select>
-                    </Box>
-                  </Box>
-
-                  <Box sx={{ display: 'flex', gap: 1 }}>
-                    <Box sx={{ flex: 1 }}>
-                      <Tooltip title="Window size. Larger = more smoothing. 2-4: light, 8-16: medium, 32+: heavy" placement="top">
-                        <Typography variant="caption" sx={{ color: 'text.secondary', display: 'block', mb: 0.25, cursor: 'help', fontSize: '0.65rem' }}>
-                          Window
-                        </Typography>
-                      </Tooltip>
+                    </FormControl>
+                  </Tooltip>
+                  <Tooltip title="Window size" placement="top">
+                    <FormControl size="small" sx={{ minWidth: 80 }}>
+                      <InputLabel id="prep-smooth-window-label">Window</InputLabel>
                       <Select
-                        size="small"
-                        fullWidth
+                        labelId="prep-smooth-window-label"
+                        label="Window"
                         value={prepSmoothWindow}
                         onChange={(e) => setPrepSmoothWindow(e.target.value as number)}
                         sx={{ fontSize: '0.75rem', '& .MuiSelect-select': { py: 0.5 } }}
                       >
-                        <MenuItem value={2} sx={{ fontSize: '0.75rem' }}>2 (Light)</MenuItem>
-                        <MenuItem value={4} sx={{ fontSize: '0.75rem' }}>4 (Default)</MenuItem>
-                        <MenuItem value={8} sx={{ fontSize: '0.75rem' }}>8 (Medium)</MenuItem>
+                        <MenuItem value={2} sx={{ fontSize: '0.75rem' }}>2</MenuItem>
+                        <MenuItem value={4} sx={{ fontSize: '0.75rem' }}>4</MenuItem>
+                        <MenuItem value={8} sx={{ fontSize: '0.75rem' }}>8</MenuItem>
                         <MenuItem value={16} sx={{ fontSize: '0.75rem' }}>16</MenuItem>
-                        <MenuItem value={32} sx={{ fontSize: '0.75rem' }}>32 (Heavy)</MenuItem>
-                        <MenuItem value={64} sx={{ fontSize: '0.75rem' }}>64 (Max)</MenuItem>
+                        <MenuItem value={32} sx={{ fontSize: '0.75rem' }}>32</MenuItem>
+                        <MenuItem value={64} sx={{ fontSize: '0.75rem' }}>64</MenuItem>
                       </Select>
-                    </Box>
-
-                    <Box sx={{ flex: 1 }}>
-                      <Tooltip title="Polynomial order for Savgol. Must be < window. Higher = preserves peaks better." placement="top">
-                        <Typography variant="caption" sx={{ color: 'text.secondary', display: 'block', mb: 0.25, cursor: 'help', fontSize: '0.65rem' }}>
-                          Polyorder
-                        </Typography>
-                      </Tooltip>
+                    </FormControl>
+                  </Tooltip>
+                  <Tooltip title="Polyorder (Savgol)" placement="top">
+                    <FormControl size="small" sx={{ minWidth: 80 }} disabled={prepSmoothMethod !== 'savgol'}>
+                      <InputLabel id="prep-polyorder-label">Poly</InputLabel>
                       <Select
-                        size="small"
-                        fullWidth
+                        labelId="prep-polyorder-label"
+                        label="Poly"
                         value={prepSmoothPolyorder}
                         onChange={(e) => setPrepSmoothPolyorder(e.target.value as number)}
-                        disabled={prepSmoothMethod !== 'savgol'}
                         sx={{ fontSize: '0.75rem', '& .MuiSelect-select': { py: 0.5 } }}
                       >
-                        <MenuItem value={1} sx={{ fontSize: '0.75rem' }}>1 (Linear)</MenuItem>
+                        <MenuItem value={1} sx={{ fontSize: '0.75rem' }}>1</MenuItem>
                         <MenuItem value={2} sx={{ fontSize: '0.75rem' }}>2</MenuItem>
-                        <MenuItem value={3} sx={{ fontSize: '0.75rem' }}>3 (Default)</MenuItem>
+                        <MenuItem value={3} sx={{ fontSize: '0.75rem' }}>3</MenuItem>
                         <MenuItem value={4} sx={{ fontSize: '0.75rem' }}>4</MenuItem>
                         <MenuItem value={5} sx={{ fontSize: '0.75rem' }}>5</MenuItem>
                       </Select>
-                    </Box>
-                  </Box>
-                </Box>
+                    </FormControl>
+                  </Tooltip>
+                </Stack>
               )}
             </Box>
 
-            {/* Resampling Section */}
-            <Box sx={{ mb: 1.5 }}>
+            {/* Resampling: TextField/FormControl with label */}
+            <Box sx={{ mb: 0 }}>
               <FormControlLabel
                 control={
                   <Switch
@@ -637,66 +674,48 @@ export const TargetTrajectoryPanel: React.FC<TargetTrajectoryPanelProps> = ({
                     color="primary"
                   />
                 }
-                label={<Typography variant="caption" sx={{ fontWeight: 500 }}>Enable Resampling</Typography>}
+                label={<Typography variant="caption" sx={{ fontWeight: 500 }}>Resampling</Typography>}
               />
-
               {prepEnableResample && (
-                <Box sx={{ pl: 1, mt: 0.5 }}>
-                  <Box sx={{ display: 'flex', gap: 1 }}>
-                    <Box sx={{ flex: 1 }}>
-                      <Tooltip title={`Target number of points. Uses current Simulation Steps (${simulationSteps}) for optimization consistency.`} placement="top">
-                        <Typography variant="caption" sx={{ color: 'text.secondary', display: 'block', mb: 0.25, cursor: 'help', fontSize: '0.65rem' }}>
-                          Target Points
-                        </Typography>
-                      </Tooltip>
-                      <TextField
-                        type="number"
-                        size="small"
-                        fullWidth
-                        value={prepTargetNSteps}
-                        onChange={(e) => {
-                          const val = parseInt(e.target.value)
-                          if (!isNaN(val) && val >= 4 && val <= 256) {
-                            setPrepTargetNSteps(val)
-                          }
-                        }}
-                        inputProps={{ min: 4, max: 256, step: 4 }}
-                        helperText={simulationSteps !== prepTargetNSteps ? `Sim uses ${simulationSteps}` : undefined}
-                        sx={{
-                          '& .MuiInputBase-input': { fontSize: '0.75rem', py: 0.5 },
-                          '& .MuiFormHelperText-root': { fontSize: '0.6rem', mt: 0.25, color: 'warning.main' }
-                        }}
-                      />
-                    </Box>
-
-                    <Box sx={{ flex: 1 }}>
-                      <Tooltip title="Interpolation method. Parametric is best for closed curves." placement="top">
-                        <Typography variant="caption" sx={{ color: 'text.secondary', display: 'block', mb: 0.25, cursor: 'help', fontSize: '0.65rem' }}>
-                          Method
-                        </Typography>
-                      </Tooltip>
-                      <Select
-                        size="small"
-                        fullWidth
-                        value={prepResampleMethod}
-                        onChange={(e) => setPrepResampleMethod(e.target.value as ResampleMethod)}
-                        sx={{ fontSize: '0.75rem', '& .MuiSelect-select': { py: 0.5 } }}
-                      >
-                        <MenuItem value="parametric" sx={{ fontSize: '0.75rem' }}>Parametric</MenuItem>
-                        <MenuItem value="cubic" sx={{ fontSize: '0.75rem' }}>Cubic</MenuItem>
-                        <MenuItem value="linear" sx={{ fontSize: '0.75rem' }}>Linear</MenuItem>
-                      </Select>
-                    </Box>
-                  </Box>
-                </Box>
+                <Stack direction="row" alignItems="center" gap={1} sx={{ mt: 0.5, flexWrap: 'wrap' }}>
+                  <Tooltip title={`Target points (${MIN_SIMULATION_STEPS}–${MAX_SIMULATION_STEPS}). Blur or Enter to apply.`} placement="top">
+                    <TextField
+                      size="small"
+                      type="number"
+                      label="Target points"
+                      value={localPrepTSteps}
+                      onChange={(e) => setLocalPrepTSteps(e.target.value)}
+                      onFocus={() => { prepTStepsFocusedRef.current = true }}
+                      onBlur={commitPrepTSteps}
+                      onKeyDown={(e) => { if (e.key === 'Enter') commitPrepTSteps() }}
+                      inputProps={{ min: MIN_SIMULATION_STEPS, max: MAX_SIMULATION_STEPS, step: 4 }}
+                      sx={{ width: 100, '& .MuiInputBase-input': { fontSize: '0.75rem', py: 0.5 } }}
+                    />
+                  </Tooltip>
+                  <FormControl size="small" sx={{ minWidth: 100 }}>
+                    <InputLabel id="prep-resample-method-label">Method</InputLabel>
+                    <Select
+                      labelId="prep-resample-method-label"
+                      label="Method"
+                      value={prepResampleMethod}
+                      onChange={(e) => setPrepResampleMethod(e.target.value as ResampleMethod)}
+                      sx={{ fontSize: '0.75rem', '& .MuiSelect-select': { py: 0.5 } }}
+                    >
+                      <MenuItem value="parametric" sx={{ fontSize: '0.75rem' }}>Parametric</MenuItem>
+                      <MenuItem value="cubic" sx={{ fontSize: '0.75rem' }}>Cubic</MenuItem>
+                      <MenuItem value="linear" sx={{ fontSize: '0.75rem' }}>Linear</MenuItem>
+                    </Select>
+                  </FormControl>
+                </Stack>
               )}
             </Box>
 
-            {/* Preprocess Button */}
+            {/* Preprocess Button — MUI loading icon when processing */}
             <Button
               variant="outlined"
               fullWidth
               size="small"
+              startIcon={isPreprocessing ? <CircularProgress size={16} color="inherit" /> : null}
               onClick={preprocessTrajectory}
               disabled={isPreprocessing || (!prepEnableSmooth && !prepEnableResample)}
               sx={{
@@ -711,7 +730,7 @@ export const TargetTrajectoryPanel: React.FC<TargetTrajectoryPanelProps> = ({
                 '&.Mui-disabled': { borderColor: '#ccc' }
               }}
             >
-              {isPreprocessing ? 'Processing...' : 'Apply Preprocessing'}
+              {isPreprocessing ? 'Processing…' : 'Apply Preprocessing'}
             </Button>
 
             {/* Preprocessing Result */}

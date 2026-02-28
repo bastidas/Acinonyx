@@ -110,6 +110,9 @@ export type { OptimizerSyncResult } from './optimizerSyncStatus'
 export { exploreRegion, getExploreRegionOptionsForMaxPoints, getCombinatorialSecondOptions } from './exploreRegion'
 export type { ExploreRegionPoint, ExploreRegionOptions, ExploreRegionOptionsForMaxPoints } from './exploreRegion'
 
+// Drag-end sync: build synced document after single-node drop (trajectory hop fix)
+export { buildSyncedDocAfterDrop } from './dragEndSync'
+
 // Exploration colormap (angle/radius color for explore node trajectories)
 export {
   getExplorationColormapColor,

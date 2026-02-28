@@ -5,6 +5,7 @@ Contains dataclasses used throughout the optimization module:
   - DimensionBoundsSpec: Concrete specification of optimizable dimensions with absolute bounds
   - TargetTrajectory: Target positions for optimization
   - OptimizationResult: Result of an optimization run
+  - TopologyVariationSpec: Constraints for topology optimization (add/remove links)
   - Solution: Single solution from multi-solution optimization
   - MultiSolutionResult: Container for multiple distinct solutions
 
@@ -132,7 +133,7 @@ class DimensionBoundsSpec:
     @property
     def weights_array(self) -> np.ndarray:
         """Weights as numpy array (cached)."""
-        return self._get_cached('weights', self.weights)
+        return self._get_cached('weights', self.weights or [])
 
     def get_bounds_tuple(self) -> tuple[tuple[float, ...], tuple[float, ...]]:
         """Return bounds in pylinkage format: ((lower...), (upper...))"""
@@ -343,6 +344,8 @@ class OptimizationResult:
         iterations: Number of iterations/evaluations performed
         convergence_history: Optional list of error values over iterations
         error: Error message if success=False
+        invalid_topologies: Optional list of {topology_id, reason} for skipped topologies
+        best_topology_id: Optional canonical topology id of the best solution
     """
     success: bool
     optimized_dimensions: dict[str, float]
@@ -354,6 +357,8 @@ class OptimizationResult:
     iterations: int = 0
     convergence_history: list[float] | None = None
     error: str | None = None
+    invalid_topologies: list[dict] | None = None
+    best_topology_id: str | None = None
 
     def to_dict(self) -> dict:
         """
@@ -361,7 +366,7 @@ class OptimizationResult:
 
         Converts Mechanism to dict only for JSON serialization (API boundary).
         """
-        return {
+        out = {
             'success': self.success,
             'optimized_dimensions': self.optimized_dimensions,
             'optimized_pylink_data': self.optimized_mechanism.to_dict() if self.optimized_mechanism else None,
@@ -373,11 +378,92 @@ class OptimizationResult:
             'convergence_history': self.convergence_history,
             'error': self.error,
         }
+        if self.invalid_topologies is not None:
+            out['invalid_topologies'] = self.invalid_topologies
+        if self.best_topology_id is not None:
+            out['best_topology_id'] = self.best_topology_id
+        return out
 
 
-# =============================================================================
-# MULTI-SOLUTION TYPES
-# =============================================================================
+@dataclass
+class TopologyVariationSpec:
+    """
+    Constraints for topology optimization: what is allowed when adding/removing
+    links to better achieve a target trajectory.
+
+    Used by optimizers (e.g. SCIP) that support mixed discrete topology
+    + continuous or discretized dimensions. Edges and joints follow the
+    mechanism dict format (linkage.edges, linkage.nodes).
+
+    Attributes:
+        min_links: Minimum number of links (edges) in the mechanism.
+        max_links: Maximum number of links (edges).
+        new_link_length_min: Minimum length of any newly added link.
+        new_link_length_max: Maximum length of any newly added link.
+        allow_attach_to_edges: Edge IDs that may have a new link attached.
+            None = all edges allowed.
+        forbid_attach_to_edges: Edge IDs that must not have new links attached
+            (takes precedence over allow_attach_to_edges).
+        allow_attach_to_joints: Joint IDs that may have a new link attached.
+            None = all joints allowed.
+        forbid_attach_to_joints: Joint IDs that must not have new links attached.
+        allowed_new_joint_types: Joint types allowed for new links
+            (e.g. ["revolute", "fixed"]).
+        preserve_crank: If True, do not remove or alter the crank (driver).
+        min_nodes: Minimum number of nodes (joints) allowed; None = no lower bound.
+        max_nodes: Maximum number of nodes (joints) allowed; None = no upper bound.
+    """
+    min_links: int = 4
+    max_links: int = 32
+    min_nodes: int = 4
+    max_nodes: int = 32
+    new_link_length_min: float = 1.0
+    new_link_length_max: float = 500.0
+    allow_attach_to_edges: list[str] | None = None
+    forbid_attach_to_edges: list[str] = field(default_factory=list)
+    allow_attach_to_joints: list[str] | None = None
+    forbid_attach_to_joints: list[str] = field(default_factory=list)
+    allowed_new_joint_types: list[Literal['revolute', 'fixed']] = field(
+        default_factory=lambda: ['revolute'],
+    )
+    preserve_crank: bool = True
+
+    def to_dict(self) -> dict:
+        """Serialize to dictionary for JSON/API."""
+        return {
+            'min_links': self.min_links,
+            'max_links': self.max_links,
+            'new_link_length_min': self.new_link_length_min,
+            'new_link_length_max': self.new_link_length_max,
+            'allow_attach_to_edges': self.allow_attach_to_edges,
+            'forbid_attach_to_edges': self.forbid_attach_to_edges,
+            'allow_attach_to_joints': self.allow_attach_to_joints,
+            'forbid_attach_to_joints': self.forbid_attach_to_joints,
+            'allowed_new_joint_types': list(self.allowed_new_joint_types),
+            'preserve_crank': self.preserve_crank,
+            'min_nodes': self.min_nodes,
+            'max_nodes': self.max_nodes,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> TopologyVariationSpec:
+        """Create from dictionary (e.g. from JSON/API request)."""
+        return cls(
+            min_links=data.get('min_links', 3),
+            max_links=data.get('max_links', 32),
+            new_link_length_min=data.get('new_link_length_min', 1.0),
+            new_link_length_max=data.get('new_link_length_max', 500.0),
+            allow_attach_to_edges=data.get('allow_attach_to_edges'),
+            forbid_attach_to_edges=data.get('forbid_attach_to_edges', []),
+            allow_attach_to_joints=data.get('allow_attach_to_joints'),
+            forbid_attach_to_joints=data.get('forbid_attach_to_joints', []),
+            allowed_new_joint_types=list(
+                data.get('allowed_new_joint_types', ['revolute']),
+            ),
+            preserve_crank=data.get('preserve_crank', True),
+            min_nodes=data.get('min_nodes', 4),
+            max_nodes=data.get('max_nodes', 32),
+        )
 
 
 @dataclass

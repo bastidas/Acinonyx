@@ -11,7 +11,9 @@ Uses unified styling from viz_styling module.
 """
 from __future__ import annotations
 
+import logging
 from pathlib import Path
+from typing import Any
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -19,10 +21,13 @@ import seaborn as sns
 
 from pylink_tools.mechanism import Mechanism
 from pylink_tools.optimization_types import DimensionBoundsSpec
+from pylink_tools.optimization_types import OptimizationResult
 from pylink_tools.optimization_types import TargetTrajectory
 from viz_tools.viz_styling import _save_or_show
 from viz_tools.viz_styling import DEFAULT_STYLE
 from viz_tools.viz_styling import OptVizStyle
+
+logger = logging.getLogger(__name__)
 
 
 # =============================================================================
@@ -217,7 +222,7 @@ def plot_trajectory_overlay(
 
         # Get style for this trajectory
         if name in traj_styles:
-            ts = traj_styles[name]
+            ts: dict[str, Any] = traj_styles[name]
         else:
             # Use solver style (cycling through available styles)
             ts = solver_styles[solver_idx % len(solver_styles)]
@@ -228,7 +233,7 @@ def plot_trajectory_overlay(
         marker = ts.get('marker', 'o')
         marker_fill = ts.get('marker_fill', 'full')
         linewidth = ts.get('linewidth', style.current_linewidth)
-        zorder_base = ts.get('zorder', 3 + i * 2)
+        zorder_base = int(ts.get('zorder', 3 + i * 2))
 
         ax.plot(
             traj_arr[:, 0], traj_arr[:, 1],
@@ -1038,7 +1043,16 @@ def create_optimization_animation(
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
     if out_path.suffix == '.gif':
-        anim.save(out_path, writer='pillow', fps=fps)
+        try:
+            anim.save(out_path, writer='pillow', fps=fps)
+        except ImportError as e:
+            logger.error(
+                "pillow is required for GIF export. Install with: pip install -e '.[all]'. %s",
+                e,
+            )
+            raise ImportError(
+                "pillow is required for GIF export. Install with: pip install -e '.[all]'",
+            ) from e
     else:
         anim.save(out_path, fps=fps)
 

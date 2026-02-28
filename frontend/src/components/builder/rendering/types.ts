@@ -44,6 +44,8 @@ export interface JointRenderData {
 export interface JointsRendererProps {
   joints: JointRenderData[]
   jointSize: number
+  /** Joint outline width in px (0 = none, 10 = max). */
+  jointOutline: number
   jointColors: JointColors
   darkMode: boolean
   showJointLabels: boolean
@@ -80,6 +82,8 @@ export interface LinkRenderData {
 export interface LinksRendererProps {
   links: LinkRenderData[]
   linkThickness: number
+  /** Link opacity as percentage 10–100. */
+  linkTransparency: number
   darkMode: boolean
   showLinkLabels: boolean
   moveGroupIsActive: boolean
@@ -122,6 +126,8 @@ export interface TrajectoriesRendererProps {
   trajectoryDotSize: number
   trajectoryDotOutline: boolean
   trajectoryDotOpacity: number
+  /** When true, show step numbers (1..N) next to trajectory dots. Default false. */
+  showTrajectoryStepNumbers?: boolean
   trajectoryStyle: TrajectoryStyle
   trajectoryColorCycle: ColorCycleType
   jointColors: JointColors
@@ -215,6 +221,16 @@ export interface DrawnObject {
   fillOpacity: number
   /** If set, polygon is merged to this link (for merge-mode styling: unmerge candidate). */
   mergedLinkName?: string
+  /** All link IDs contained in the polygon. */
+  contained_links?: string[]
+  /** When false, at least one contained link has endpoints outside the polygon (e.g. after drag). */
+  contained_links_valid?: boolean
+  /** Z-level (layer) for rendering order. */
+  z_level?: number
+  /** When true, this form's z-level is pinned during recompute (e.g. after drag). */
+  z_level_fixed?: boolean
+  /** Preferred z when recomputing (soft pin). */
+  target_z_level?: number
 }
 
 export interface DrawnObjectsRendererProps {
@@ -239,6 +255,8 @@ export interface DrawnObjectsRendererProps {
   onMergePolygonHover?: (polygonId: string | null) => void
   /** Called when user clicks a polygon in merge mode (objId, isUnmerge). */
   onMergePolygonClick?: (objId: string, isUnmerge: boolean) => void
+  /** When true (e.g. draw_polygon mode), polygon paths use pointer-events: none so clicks pass through to canvas. */
+  pointerEventsNoneForDrawPolygon?: boolean
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -257,6 +275,10 @@ export interface TargetPathsRendererProps {
   selectedPathId: string | null
   unitsToPixels: (units: number) => number
   onPathClick: (id: string | null) => void
+  /** Match visualization settings for other trajectories (dot size, opacity, outline) */
+  trajectoryDotSize?: number
+  trajectoryDotOpacity?: number
+  trajectoryDotOutline?: boolean
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════

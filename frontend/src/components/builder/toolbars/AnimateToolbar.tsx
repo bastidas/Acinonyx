@@ -4,14 +4,14 @@
  */
 import React from 'react'
 import { Box, IconButton, Slider, Tooltip, Typography } from '@mui/material'
-import { canSimulate, type TrajectoryData } from '../../AnimateSimulate'
+import { canSimulate, type TrajectoryData, getMinPlaybackFps, getMaxPlaybackFps } from '../../AnimateSimulate'
 import cheetahGif from '../../../assets/cheetah_run.gif'
 
 export interface AnimationState {
   isAnimating: boolean
   currentFrame: number
   totalFrames: number
-  playbackSpeed: number
+  playbackFps: number
   loop: boolean
   playbackDirection: 1 | -1
 }
@@ -25,7 +25,7 @@ export interface AnimateToolbarProps {
   playAnimation: () => void
   pauseAnimation: () => void
   stopAnimation: () => void
-  setPlaybackSpeed: (speed: number) => void
+  setPlaybackFps: (fps: number) => void
   setPlaybackDirection: (direction: 1 | -1) => void
   setAnimatedPositions: (positions: null) => void
   setFrame: (frame: number) => void
@@ -33,8 +33,6 @@ export interface AnimateToolbarProps {
   // Simulation state & controls
   isSimulating: boolean
   trajectoryData: TrajectoryData | null
-  autoSimulateEnabled: boolean
-  setAutoSimulateEnabled: (enabled: boolean) => void
   runSimulation: () => Promise<void>
   triggerMechanismChange: () => void
 
@@ -58,14 +56,12 @@ export const AnimateToolbar: React.FC<AnimateToolbarProps> = ({
   playAnimation,
   pauseAnimation,
   stopAnimation,
-  setPlaybackSpeed,
+  setPlaybackFps,
   setPlaybackDirection,
   setAnimatedPositions,
   setFrame,
   isSimulating,
   trajectoryData,
-  autoSimulateEnabled,
-  setAutoSimulateEnabled,
   runSimulation,
   triggerMechanismChange,
   showTrajectory,
@@ -153,29 +149,19 @@ export const AnimateToolbar: React.FC<AnimateToolbarProps> = ({
     }
   }
 
-  // Handle reset
+  // Handle reset: stop playback and go to frame 0 (AnimationController will set positions to trajectory[0])
   const handleReset = () => {
     stopAnimation()
-    setAnimatedPositions(null)
   }
 
-  // Handle speed slider change
-  const handleSpeedChange = (_event: Event, value: number | number[]) => {
-    setPlaybackSpeed(value as number)
-  }
-
-  // Toggle continuous simulation
-  const toggleContinuousSimulation = () => {
-    if (autoSimulateEnabled) {
-      setAutoSimulateEnabled(false)
-    } else {
-      setAutoSimulateEnabled(true)
-      triggerMechanismChange()
-    }
+  // Handle playback speed slider change
+  const handleFpsChange = (_event: Event, value: number | number[]) => {
+    setPlaybackFps(value as number)
   }
 
   return (
     <Box
+      className="animate-toolbar"
       sx={{
         position: 'fixed',
         top: 101,  // Align with canvas start (header ~46px + 12px margin)
@@ -243,47 +229,39 @@ export const AnimateToolbar: React.FC<AnimateToolbarProps> = ({
       </Tooltip>
 
       {/* ═══════════════════════════════════════════════════════════════════════
-          FURTHER LEFT: Continuous Simulation Button
+          FURTHER LEFT: Reverse direction
           ═══════════════════════════════════════════════════════════════════════ */}
-      <Tooltip
-        title={
-          <Box sx={{ p: 0.5 }}>
-            <Typography variant="body2" sx={{ fontWeight: 600 }}>
-              {autoSimulateEnabled ? 'Disable' : 'Enable'} Continuous Simulation
-            </Typography>
-            <Typography variant="caption" sx={{ opacity: 0.8, display: 'block', mt: 0.5 }}>
-              When enabled, the trajectory is automatically recomputed whenever
-              you modify the mechanism (move joints, change links, etc).
-            </Typography>
-            <Typography variant="caption" sx={{ opacity: 0.6, display: 'block', mt: 0.25 }}>
-              Disable for complex mechanisms to improve editing performance.
-            </Typography>
-          </Box>
-        }
-        placement="top"
-        arrow
-      >
+      <Tooltip title="Reverse playback direction" placement="top" arrow>
         <span>
           <IconButton
-            onClick={toggleContinuousSimulation}
-            disabled={isSimulating || !hasCrank}
+            onClick={() => setPlaybackDirection(animationState.playbackDirection === 1 ? -1 : 1)}
+            disabled={!canAnimate}
             sx={{
-              width: 44,  // 10% bigger
+              width: 44,
               height: 44,
-              backgroundColor: autoSimulateEnabled ? colors.simActive.bg : colors.buttonBg,
-              color: autoSimulateEnabled ? colors.simActive.color : colors.textMuted,
+              color: animationState.playbackDirection === -1
+                ? (isDark ? 'rgba(255, 255, 255, 0.9)' : colors.sliderColor)
+                : colors.textMuted,
+              backgroundColor: animationState.playbackDirection === -1
+                ? (isDark ? 'rgba(250, 129, 18, 0.18)' : 'rgba(250, 129, 18, 0.15)')
+                : colors.buttonBg,
+              border: animationState.playbackDirection === -1
+                ? (isDark ? '1px solid rgba(250, 129, 18, 0.35)' : '1px solid rgba(250, 129, 18, 0.3)')
+                : '1px solid transparent',
               '&:hover': {
-                backgroundColor: autoSimulateEnabled
-                  ? (isDark ? 'rgba(33, 150, 243, 0.35)' : 'rgba(33, 150, 243, 0.25)')
+                backgroundColor: animationState.playbackDirection === -1
+                  ? (isDark ? 'rgba(250, 129, 18, 0.28)' : 'rgba(250, 129, 18, 0.22)')
                   : colors.buttonHover,
+                color: colors.text,
               },
               '&.Mui-disabled': {
                 color: colors.disabled,
+                backgroundColor: 'transparent',
+                border: '1px solid transparent',
               },
-              transition: 'all 0.2s ease',
             }}
           >
-            <Typography sx={{ fontSize: '1.1rem' }}>∞</Typography>
+            <Typography sx={{ fontSize: '1.1rem' }}>⇄</Typography>
           </IconButton>
         </span>
       </Tooltip>
@@ -327,9 +305,9 @@ export const AnimateToolbar: React.FC<AnimateToolbarProps> = ({
       </Tooltip>
 
       {/* ═══════════════════════════════════════════════════════════════════════
-          CENTER: Play Button with Cheetah Animation
+          CENTER: Play Button with Cheetah Animation (vertically centered with frame counter)
           ═══════════════════════════════════════════════════════════════════════ */}
-      <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
+      <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', marginTop: '10px' }}>
         <Tooltip
           title={
             <Box sx={{ p: 0.5 }}>
@@ -412,15 +390,15 @@ export const AnimateToolbar: React.FC<AnimateToolbarProps> = ({
           </span>
         </Tooltip>
 
-        {/* Frame Counter + Reverse direction */}
-        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.25, mt: 0.3 }}>
+        {/* Frame counter - compact */}
+        <Box className="animate-toolbar-frame-counter" sx={{ mt: 0.25, color: colors.text }}>
           <Typography
             variant="caption"
             sx={{
-              color: colors.textMuted,
+              color: 'inherit',
               fontFamily: 'monospace',
-              fontSize: '0.75rem',
-              letterSpacing: '0.05em',
+              fontSize: '0.65rem',
+              letterSpacing: '0.03em',
             }}
           >
             {canAnimate
@@ -428,31 +406,6 @@ export const AnimateToolbar: React.FC<AnimateToolbarProps> = ({
               : '--/--'
             }
           </Typography>
-          <Tooltip title="Reverse playback direction" placement="top" arrow>
-            <span>
-              <IconButton
-                size="small"
-                onClick={() => setPlaybackDirection(animationState.playbackDirection === 1 ? -1 : 1)}
-                disabled={!canAnimate}
-                sx={{
-                  width: 28,
-                  height: 28,
-                  padding: 0,
-                  color: animationState.playbackDirection === -1 ? colors.sliderColor : colors.textMuted,
-                  backgroundColor: 'transparent',
-                  '&:hover': {
-                    backgroundColor: colors.buttonHover,
-                    color: colors.text,
-                  },
-                  '&.Mui-disabled': {
-                    color: colors.disabled,
-                  },
-                }}
-              >
-                <Typography sx={{ fontSize: '0.95rem' }}>⇄</Typography>
-              </IconButton>
-            </span>
-          </Tooltip>
         </Box>
       </Box>
 
@@ -533,17 +486,22 @@ export const AnimateToolbar: React.FC<AnimateToolbarProps> = ({
       </Tooltip>
 
       {/* ═══════════════════════════════════════════════════════════════════════
-          SPEED SLIDER - Compact version
+          Playback speed slider - range proportional to simulation steps
           ═══════════════════════════════════════════════════════════════════════ */}
+      {(() => {
+        const totalFrames = animationState.totalFrames || 0
+        const minFps = getMinPlaybackFps(totalFrames)
+        const maxFps = getMaxPlaybackFps(totalFrames)
+        const clampedFps = Math.min(maxFps, Math.max(minFps, animationState.playbackFps))
+        return (
       <Tooltip
         title={
           <Box sx={{ p: 0.5 }}>
             <Typography variant="body2" sx={{ fontWeight: 600 }}>
-              Playback Speed: {animationState.playbackSpeed}×
+              Playback speed: {animationState.playbackFps}
             </Typography>
             <Typography variant="caption" sx={{ opacity: 0.8, display: 'block', mt: 0.5 }}>
-              Adjust how fast the animation plays.
-              Range: 0.1× (slow-mo) to 10× (fast-forward).
+              Range {minFps}–{maxFps} for {totalFrames || '--'} steps.
             </Typography>
           </Box>
         }
@@ -554,22 +512,22 @@ export const AnimateToolbar: React.FC<AnimateToolbarProps> = ({
           sx={{
             display: 'flex',
             alignItems: 'center',
-            width: 77,  // 10% bigger
+            width: 77,
           }}
         >
           <Slider
-            value={animationState.playbackSpeed}
-            onChange={handleSpeedChange}
-            min={0.1}
-            max={10}
-            step={0.1}
+            value={clampedFps}
+            onChange={handleFpsChange}
+            min={minFps}
+            max={maxFps}
+            step={1}
             valueLabelDisplay="auto"
-            valueLabelFormat={(value) => `${value}×`}
+            valueLabelFormat={(value) => `${value}`}
             sx={{
               width: '100%',
               color: colors.sliderColor,
               '& .MuiSlider-thumb': {
-                width: 15,  // Slightly bigger
+                width: 15,
                 height: 15,
                 backgroundColor: colors.sliderThumb,
                 '&:hover': {
@@ -592,6 +550,8 @@ export const AnimateToolbar: React.FC<AnimateToolbarProps> = ({
           />
         </Box>
       </Tooltip>
+        )
+      })()}
     </Box>
   )
 }

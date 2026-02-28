@@ -68,6 +68,8 @@ export interface BuilderCanvasAreaProps {
   selectedJoints: string[]
   selectedLinks: string[]
   statusMessage: StatusMessage | null
+  statusHistory?: StatusMessage[]
+  clearStatusHistory?: () => void
   linkCreationState: LinkCreationState
   polygonDrawState?: PolygonDrawState
   measureState?: MeasureState
@@ -119,6 +121,8 @@ export function BuilderCanvasArea({
   selectedJoints,
   selectedLinks,
   statusMessage,
+  statusHistory,
+  clearStatusHistory,
   linkCreationState,
   polygonDrawState,
   measureState,
@@ -144,6 +148,8 @@ export function BuilderCanvasArea({
         bottom: '5px',
         width: '100%',
         overflow: 'hidden',
+        userSelect: 'none',
+        WebkitUserSelect: 'none',
         backgroundColor:
           canvasBgColor === 'default'
             ? 'var(--color-canvas-bg)'
@@ -234,6 +240,10 @@ export function BuilderCanvasArea({
         selectedJoints={selectedJoints}
         selectedLinks={selectedLinks}
         statusMessage={statusMessage}
+        statusHistory={statusHistory}
+        clearStatusHistory={clearStatusHistory}
+        openToolbars={openToolbars}
+        onToggleToolbar={onToggleToolbar}
         linkCreationState={linkCreationState}
         polygonDrawState={polygonDrawState}
         measureState={measureState}

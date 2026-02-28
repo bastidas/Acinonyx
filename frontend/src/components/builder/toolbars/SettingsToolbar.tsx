@@ -6,12 +6,44 @@ import {
   Box, Typography, FormControlLabel, Switch, TextField, Select,
   MenuItem, FormControl, Divider, Slider
 } from '@mui/material'
+import type { SliderProps } from '@mui/material/Slider'
 import type { ColorCycleType } from '../../../theme'
+
+/**
+ * Wrapper that keeps local state while dragging so the parent doesn't re-render on every
+ * mouse move. Commits to parent only on release (onChangeCommitted), giving smooth thumb drag
+ * like the MUI docs: https://mui.com/material-ui/react-slider/
+ */
+function SmoothSlider({
+  value,
+  onChange,
+  ...rest
+}: SliderProps & { value: number; onChange: (value: number) => void }) {
+  const [local, setLocal] = useState(value)
+  const isDragging = useRef(false)
+  useEffect(() => {
+    if (!isDragging.current) setLocal(value)
+  }, [value])
+  return (
+    <Slider
+      {...rest}
+      value={local}
+      onChange={(_, v) => {
+        isDragging.current = true
+        setLocal(v as number)
+      }}
+      onChangeCommitted={(_, v) => {
+        isDragging.current = false
+        const n = v as number
+        setLocal(n)
+        onChange(n)
+      }}
+    />
+  )
+}
 import {
   MIN_SIMULATION_STEPS,
   MAX_SIMULATION_STEPS,
-  DEFAULT_AUTO_SIMULATE_DELAY_MS,
-  DEFAULT_JOINT_MERGE_RADIUS,
   EXPLORE_RADIUS_MIN,
   EXPLORE_RADIUS_MAX,
   EXPLORE_RADIAL_SAMPLES_MIN,
@@ -25,6 +57,7 @@ import {
 export type CanvasBgColor = 'default' | 'white' | 'cream' | 'dark'
 export type TrajectoryStyle = 'dots' | 'line' | 'both'
 export type SelectionHighlightColor = 'blue' | 'orange' | 'green' | 'purple'
+export type LinkColorMode = 'various' | 'z-level' | 'single'
 
 export interface SettingsToolbarProps {
   // Appearance
@@ -46,6 +79,7 @@ export interface SettingsToolbarProps {
   setTrajectoryColorCycle: (cycle: ColorCycleType) => void
   trajectoryData: unknown
   autoSimulateEnabled: boolean
+  setAutoSimulateEnabled: (enabled: boolean) => void
   triggerMechanismChange: () => void
 
   // Interaction
@@ -56,19 +90,29 @@ export interface SettingsToolbarProps {
   canvasBgColor: CanvasBgColor
   setCanvasBgColor: (color: CanvasBgColor) => void
 
-  // Visualization
+  // Mechanism visualization
   jointSize: number
   setJointSize: (size: number) => void
+  jointOutline: number
+  setJointOutline: (size: number) => void
   linkThickness: number
   setLinkThickness: (thickness: number) => void
+  linkTransparency: number
+  setLinkTransparency: (pct: number) => void
+  linkColorMode: LinkColorMode
+  setLinkColorMode: (mode: LinkColorMode) => void
+  linkColorSingle: string
+  setLinkColorSingle: (color: string) => void
+
+  // Trajectory visualization
   trajectoryDotSize: number
   setTrajectoryDotSize: (size: number) => void
   trajectoryDotOutline: boolean
   setTrajectoryDotOutline: (show: boolean) => void
   trajectoryDotOpacity: number
   setTrajectoryDotOpacity: (opacity: number) => void
-
-  // Animation
+  showTrajectoryStepNumbers: boolean
+  setShowTrajectoryStepNumbers: (show: boolean) => void
   trajectoryStyle: TrajectoryStyle
   setTrajectoryStyle: (style: TrajectoryStyle) => void
 
@@ -95,14 +139,19 @@ export const SettingsToolbar: React.FC<SettingsToolbarProps> = ({
   simulationStepsInput, setSimulationStepsInput,
   autoSimulateDelayMs, setAutoSimulateDelayMs,
   trajectoryColorCycle, setTrajectoryColorCycle,
-  trajectoryData, autoSimulateEnabled, triggerMechanismChange,
+  trajectoryData, autoSimulateEnabled, setAutoSimulateEnabled, triggerMechanismChange,
   jointMergeRadius, setJointMergeRadius,
   canvasBgColor, setCanvasBgColor,
   jointSize, setJointSize,
+  jointOutline, setJointOutline,
   linkThickness, setLinkThickness,
+  linkTransparency, setLinkTransparency,
+  linkColorMode, setLinkColorMode,
+  linkColorSingle, setLinkColorSingle,
   trajectoryDotSize, setTrajectoryDotSize,
   trajectoryDotOutline, setTrajectoryDotOutline,
   trajectoryDotOpacity, setTrajectoryDotOpacity,
+  showTrajectoryStepNumbers, setShowTrajectoryStepNumbers,
   trajectoryStyle, setTrajectoryStyle,
   exploreRadius, setExploreRadius,
   exploreRadialSamples, setExploreRadialSamples,
@@ -116,6 +165,8 @@ export const SettingsToolbar: React.FC<SettingsToolbarProps> = ({
   const label = { color: 'text.secondary', fontSize: '0.75rem', flexShrink: 0, minWidth: 115 }
   const control = { minWidth: 0, flex: 1 }
   const divider = { my: 0.75 }
+  // Shared slider layout; Slider color="primary" uses theme (cheetah orange)
+  const sliderSx = { ...control }
   // Compact dropdown: minimal list and item padding
   const menuItemSx = { minHeight: 28, py: 0, px: 1, fontSize: '0.8rem', lineHeight: 1.2 }
   const selectMenuProps = {
@@ -131,10 +182,8 @@ export const SettingsToolbar: React.FC<SettingsToolbarProps> = ({
   // Number fields: commit only on Enter or blur (no live parent updates while typing)
   const [localSteps, setLocalSteps] = useState(simulationStepsInput)
   const [localDelay, setLocalDelay] = useState(String(autoSimulateDelayMs))
-  const [localMergeRadius, setLocalMergeRadius] = useState(String(jointMergeRadius))
   const stepsFocused = useRef(false)
   const delayFocused = useRef(false)
-  const mergeFocused = useRef(false)
 
   useEffect(() => {
     if (!stepsFocused.current) setLocalSteps(simulationStepsInput)
@@ -142,9 +191,6 @@ export const SettingsToolbar: React.FC<SettingsToolbarProps> = ({
   useEffect(() => {
     if (!delayFocused.current) setLocalDelay(String(autoSimulateDelayMs))
   }, [autoSimulateDelayMs])
-  useEffect(() => {
-    if (!mergeFocused.current) setLocalMergeRadius(String(jointMergeRadius))
-  }, [jointMergeRadius])
 
   const commitSteps = () => {
     const val = parseInt(localSteps, 10)
@@ -159,34 +205,12 @@ export const SettingsToolbar: React.FC<SettingsToolbarProps> = ({
     if (!isNaN(val)) setAutoSimulateDelayMs(Math.max(0, Math.min(1000, val)))
     delayFocused.current = false
   }
-  const commitMergeRadius = () => {
-    const val = parseFloat(localMergeRadius)
-    if (!isNaN(val)) setJointMergeRadius(Math.max(0.5, Math.min(20, val)))
-    mergeFocused.current = false
-  }
 
   const inputSx = { '& .MuiInputBase-input': { fontSize: '0.8rem', py: 0.5 } }
 
   return (
     <Box sx={{ p: 1, minWidth: 260 }}>
-      {/* APPEARANCE */}
-      <Typography variant="caption" sx={sectionTitle}>Appearance</Typography>
-      <Box sx={row}>
-        <Typography sx={label}>{darkMode ? '🌙' : '☀️'} Dark Mode</Typography>
-        <Box sx={control}><Switch checked={darkMode} onChange={(e) => setDarkMode(e.target.checked)} size="small" /></Box>
-      </Box>
-      <Box sx={row}>
-        <Typography sx={label}>Joint Labels</Typography>
-        <Box sx={control}><Switch checked={showJointLabels} onChange={(e) => setShowJointLabels(e.target.checked)} size="small" /></Box>
-      </Box>
-      <Box sx={row}>
-        <Typography sx={label}>Link Labels</Typography>
-        <Box sx={control}><Switch checked={showLinkLabels} onChange={(e) => setShowLinkLabels(e.target.checked)} size="small" /></Box>
-      </Box>
-
-      <Divider sx={divider} />
-
-      {/* SIMULATION */}
+      {/* SIMULATION (top) */}
       <Typography variant="caption" sx={sectionTitle}>Simulation</Typography>
       <Box sx={row}>
         <Typography sx={label}>Steps (N)</Typography>
@@ -219,6 +243,20 @@ export const SettingsToolbar: React.FC<SettingsToolbarProps> = ({
         />
       </Box>
       <Box sx={row}>
+        <Typography sx={label}>Continuous simulation</Typography>
+        <Box sx={control}>
+          <Switch
+            size="small"
+            checked={autoSimulateEnabled}
+            onChange={(e) => {
+              const enabled = e.target.checked
+              setAutoSimulateEnabled(enabled)
+              if (enabled) triggerMechanismChange()
+            }}
+          />
+        </Box>
+      </Box>
+      <Box sx={row}>
         <Typography sx={label}>Trajectory color</Typography>
         <FormControl size="small" sx={control}>
           <Select
@@ -241,26 +279,38 @@ export const SettingsToolbar: React.FC<SettingsToolbarProps> = ({
 
       <Divider sx={divider} />
 
+      {/* APPEARANCE */}
+      <Typography variant="caption" sx={sectionTitle}>Appearance</Typography>
+      <Box sx={row}>
+        <Typography sx={label}>{darkMode ? '🌙' : '☀️'} Dark Mode</Typography>
+        <Box sx={control}><Switch checked={darkMode} onChange={(e) => setDarkMode(e.target.checked)} size="small" /></Box>
+      </Box>
+
+      <Divider sx={divider} />
+
       {/* INTERACTION */}
       <Typography variant="caption" sx={sectionTitle}>Interaction</Typography>
       <Box sx={row}>
         <Typography sx={label}>Merge radius</Typography>
-        <TextField
+        <SmoothSlider
+          color="primary"
           size="small"
-          type="number"
-          value={localMergeRadius}
-          onChange={(e) => setLocalMergeRadius(e.target.value)}
-          onFocus={() => { mergeFocused.current = true }}
-          onBlur={commitMergeRadius}
-          onKeyDown={(e) => { if (e.key === 'Enter') commitMergeRadius() }}
-          inputProps={{ min: 0.5, max: 20, step: 0.5 }}
-          sx={{ ...control, ...inputSx }}
+          aria-label="Merge radius"
+          value={jointMergeRadius}
+          onChange={setJointMergeRadius}
+          min={1}
+          max={10}
+          step={1}
+          shiftStep={2}
+          valueLabelDisplay="auto"
+          getAriaValueText={(v) => String(v)}
+          sx={sliderSx}
         />
       </Box>
 
       <Divider sx={divider} />
 
-      {/* CANVAS/GRID */}
+      {/* CANVAS / GRID */}
       <Typography variant="caption" sx={sectionTitle}>Canvas / Grid</Typography>
       <Box sx={row}>
         <Typography sx={label}>Show Grid</Typography>
@@ -277,40 +327,170 @@ export const SettingsToolbar: React.FC<SettingsToolbarProps> = ({
           </Select>
         </FormControl>
       </Box>
-      <Box sx={{ ...row, opacity: 0.5 }}>
-        <Typography sx={{ ...label, color: 'text.disabled' }}>Grid spacing (TODO)</Typography>
-        <FormControl size="small" sx={control} disabled>
-          <Select value={20} sx={selectTriggerSx} MenuProps={selectMenuProps}><MenuItem value={20} sx={menuItemSx}>20</MenuItem></Select>
+
+      <Divider sx={divider} />
+
+      {/* MECHANISM VISUALIZATION */}
+      <Typography variant="caption" sx={sectionTitle}>Mechanism visualization</Typography>
+      <Box sx={row}>
+        <Typography sx={label}>Link labels</Typography>
+        <Box sx={control}><Switch checked={showLinkLabels} onChange={(e) => setShowLinkLabels(e.target.checked)} size="small" /></Box>
+      </Box>
+      <Box sx={row}>
+        <Typography sx={label}>Link thickness</Typography>
+        <SmoothSlider
+          color="primary"
+          size="small"
+          aria-label="Link thickness (pixels)"
+          value={linkThickness}
+          onChange={setLinkThickness}
+          min={1}
+          max={16}
+          step={1}
+          shiftStep={5}
+          valueLabelDisplay="auto"
+          getAriaValueText={(v) => `${v}px`}
+          sx={sliderSx}
+        />
+      </Box>
+      <Box sx={row}>
+        <Typography sx={label}>Link transparency</Typography>
+        <SmoothSlider
+          color="primary"
+          size="small"
+          aria-label="Link transparency"
+          value={linkTransparency}
+          onChange={setLinkTransparency}
+          min={10}
+          max={100}
+          step={5}
+          shiftStep={25}
+          valueLabelDisplay="auto"
+          valueLabelFormat={(v) => `${v}%`}
+          getAriaValueText={(v) => `${v}%`}
+          sx={sliderSx}
+        />
+      </Box>
+      <Box sx={row}>
+        <Typography sx={label}>Link colors</Typography>
+        <FormControl size="small" sx={control}>
+          <Select value={linkColorMode} onChange={(e) => setLinkColorMode(e.target.value as LinkColorMode)} sx={selectTriggerSx} MenuProps={selectMenuProps}>
+            <MenuItem value="various" sx={menuItemSx}>Various (per link)</MenuItem>
+            <MenuItem value="z-level" sx={menuItemSx}>Z-level</MenuItem>
+            <MenuItem value="single" sx={menuItemSx}>Single color</MenuItem>
+          </Select>
         </FormControl>
       </Box>
-      <Box sx={{ ...row, opacity: 0.5 }}>
-        <Typography sx={{ ...label, color: 'text.disabled' }}>Snap to Grid (TODO)</Typography>
-        <Box sx={control}><Switch size="small" disabled /></Box>
+      {linkColorMode === 'single' && (
+        <Box sx={row}>
+          <Typography sx={label}>Single color</Typography>
+          <Box sx={{ ...control, display: 'flex', alignItems: 'center', gap: 1 }}>
+            <input
+              type="color"
+              value={linkColorSingle}
+              onChange={(e) => setLinkColorSingle(e.target.value)}
+              style={{ width: 28, height: 28, padding: 0, border: '1px solid var(--color-border)', borderRadius: 4, cursor: 'pointer' }}
+              aria-label="Link color"
+            />
+            <Typography component="span" sx={{ fontSize: '0.75rem', color: 'text.secondary' }}>{linkColorSingle}</Typography>
+          </Box>
+        </Box>
+      )}
+      <Box sx={row}>
+        <Typography sx={label}>Joint labels</Typography>
+        <Box sx={control}><Switch checked={showJointLabels} onChange={(e) => setShowJointLabels(e.target.checked)} size="small" /></Box>
+      </Box>
+      <Box sx={row}>
+        <Typography sx={label}>Joint size</Typography>
+        <SmoothSlider
+          color="primary"
+          size="small"
+          aria-label="Joint size (pixels)"
+          value={jointSize}
+          onChange={setJointSize}
+          min={1}
+          max={16}
+          step={1}
+          shiftStep={5}
+          valueLabelDisplay="auto"
+          getAriaValueText={(v) => `${v}px`}
+          sx={sliderSx}
+        />
+      </Box>
+      <Box sx={row}>
+        <Typography sx={label}>Joint outline</Typography>
+        <SmoothSlider
+          color="primary"
+          size="small"
+          aria-label="Joint outline (px)"
+          value={jointOutline}
+          onChange={setJointOutline}
+          min={0}
+          max={10}
+          step={1}
+          shiftStep={2}
+          valueLabelDisplay="auto"
+          getAriaValueText={(v) => `${v}px`}
+          sx={sliderSx}
+        />
       </Box>
 
       <Divider sx={divider} />
 
-      {/* VISUALIZATION */}
-      <Typography variant="caption" sx={sectionTitle}>Visualization</Typography>
+      {/* TRAJECTORY VISUALIZATION */}
+      <Typography variant="caption" sx={sectionTitle}>Trajectory visualization</Typography>
       <Box sx={row}>
-        <Typography sx={label}>Joint {jointSize}px</Typography>
-        <Slider size="small" value={jointSize} onChange={(_, v) => setJointSize(v as number)} min={3} max={16} step={1} valueLabelDisplay="auto" sx={{ ...control, color: '#FA8112' }}/>
+        <Typography sx={label}>Trajectory style</Typography>
+        <FormControl size="small" sx={control}>
+          <Select value={trajectoryStyle} onChange={(e) => setTrajectoryStyle(e.target.value as TrajectoryStyle)} sx={selectTriggerSx} MenuProps={selectMenuProps}>
+            <MenuItem value="dots" sx={menuItemSx}>Dots only</MenuItem>
+            <MenuItem value="line" sx={menuItemSx}>Line only</MenuItem>
+            <MenuItem value="both" sx={menuItemSx}>Dots + Line</MenuItem>
+          </Select>
+        </FormControl>
       </Box>
       <Box sx={row}>
-        <Typography sx={label}>Link {linkThickness}px</Typography>
-        <Slider size="small" value={linkThickness} onChange={(_, v) => setLinkThickness(v as number)} min={1} max={16} step={1} valueLabelDisplay="auto" sx={{ ...control, color: '#FA8112' }}/>
-      </Box>
-      <Box sx={row}>
-        <Typography sx={label}>Dot size {trajectoryDotSize}px</Typography>
-        <Slider size="small" value={trajectoryDotSize} onChange={(_, v) => setTrajectoryDotSize(v as number)} min={2} max={8} step={1} valueLabelDisplay="auto" sx={{ ...control, color: '#FA8112' }}/>
+        <Typography sx={label}>Dot size</Typography>
+        <SmoothSlider
+          color="primary"
+          size="small"
+          aria-label="Trajectory dot size (pixels)"
+          value={trajectoryDotSize}
+          onChange={setTrajectoryDotSize}
+          min={2}
+          max={8}
+          step={1}
+          shiftStep={3}
+          valueLabelDisplay="auto"
+          getAriaValueText={(v) => `${v}px`}
+          sx={sliderSx}
+        />
       </Box>
       <Box sx={row}>
         <Typography sx={label}>Dot outline</Typography>
         <Box sx={control}><Switch checked={trajectoryDotOutline} onChange={(e) => setTrajectoryDotOutline(e.target.checked)} size="small" /></Box>
       </Box>
       <Box sx={row}>
-        <Typography sx={label}>Dot opacity {Math.round(trajectoryDotOpacity * 100)}%</Typography>
-        <Slider size="small" value={trajectoryDotOpacity * 100} onChange={(_, v) => setTrajectoryDotOpacity((v as number) / 100)} min={50} max={100} step={1} valueLabelDisplay="auto" valueLabelFormat={(v) => `${v}%`} sx={{ ...control, color: '#FA8112' }}/>
+        <Typography sx={label}>Dot opacity</Typography>
+        <SmoothSlider
+          color="primary"
+          size="small"
+          aria-label="Trajectory dot opacity"
+          value={Math.round(trajectoryDotOpacity * 100)}
+          onChange={(v) => setTrajectoryDotOpacity(v / 100)}
+          min={10}
+          max={100}
+          step={5}
+          shiftStep={25}
+          valueLabelDisplay="auto"
+          valueLabelFormat={(v) => `${v}%`}
+          getAriaValueText={(v) => `${v}%`}
+          sx={sliderSx}
+        />
+      </Box>
+      <Box sx={row}>
+        <Typography sx={label}>Show simulation #</Typography>
+        <Box sx={control}><Switch checked={showTrajectoryStepNumbers} onChange={(e) => setShowTrajectoryStepNumbers(e.target.checked)} size="small" /></Box>
       </Box>
 
       <Divider sx={divider} />
@@ -319,54 +499,70 @@ export const SettingsToolbar: React.FC<SettingsToolbarProps> = ({
       <Typography variant="caption" sx={sectionTitle}>Trajectory exploration</Typography>
       <Box sx={row}>
         <Typography sx={label}>Explore radius</Typography>
-        <Slider
+        <SmoothSlider
+          color="primary"
           size="small"
+          aria-label="Explore radius"
           value={exploreRadius}
-          onChange={(_, v) => setExploreRadius(v as number)}
+          onChange={setExploreRadius}
           min={EXPLORE_RADIUS_MIN}
           max={EXPLORE_RADIUS_MAX}
           step={1}
+          shiftStep={5}
           valueLabelDisplay="auto"
-          sx={{ ...control, color: '#FA8112' }}
+          getAriaValueText={(v) => String(v)}
+          sx={sliderSx}
         />
       </Box>
       <Box sx={row}>
         <Typography sx={label}>Radial samples</Typography>
-        <Slider
+        <SmoothSlider
+          color="primary"
           size="small"
+          aria-label="Radial samples"
           value={exploreRadialSamples}
-          onChange={(_, v) => setExploreRadialSamples(v as number)}
+          onChange={setExploreRadialSamples}
           min={EXPLORE_RADIAL_SAMPLES_MIN}
           max={EXPLORE_RADIAL_SAMPLES_MAX}
           step={1}
+          shiftStep={5}
           valueLabelDisplay="auto"
-          sx={{ ...control, color: '#FA8112' }}
+          getAriaValueText={(v) => String(v)}
+          sx={sliderSx}
         />
       </Box>
       <Box sx={row}>
         <Typography sx={label}>Azimuthal samples</Typography>
-        <Slider
+        <SmoothSlider
+          color="primary"
           size="small"
+          aria-label="Azimuthal samples"
           value={exploreAzimuthalSamples}
-          onChange={(_, v) => setExploreAzimuthalSamples(v as number)}
+          onChange={setExploreAzimuthalSamples}
           min={EXPLORE_AZIMUTHAL_SAMPLES_MIN}
           max={EXPLORE_AZIMUTHAL_SAMPLES_MAX}
           step={1}
+          shiftStep={5}
           valueLabelDisplay="auto"
-          sx={{ ...control, color: '#FA8112' }}
+          getAriaValueText={(v) => String(v)}
+          sx={sliderSx}
         />
       </Box>
       <Box sx={row}>
         <Typography sx={label}>Max combinatorics (N₁×N₂)</Typography>
-        <Slider
+        <SmoothSlider
+          color="primary"
           size="small"
+          aria-label="Max combinatorics"
           value={exploreNMaxCombinatorial}
-          onChange={(_, v) => setExploreNMaxCombinatorial(v as number)}
+          onChange={setExploreNMaxCombinatorial}
           min={EXPLORE_NMAX_COMBINATORIAL_MIN}
           max={EXPLORE_NMAX_COMBINATORIAL_MAX}
           step={64}
+          shiftStep={320}
           valueLabelDisplay="auto"
-          sx={{ ...control, color: '#FA8112' }}
+          getAriaValueText={(v) => String(v)}
+          sx={sliderSx}
         />
       </Box>
       <Box sx={row}>
@@ -385,21 +581,6 @@ export const SettingsToolbar: React.FC<SettingsToolbarProps> = ({
           </FormControl>
         </Box>
       )}
-
-      <Divider sx={divider} />
-
-      {/* ANIMATION */}
-      <Typography variant="caption" sx={sectionTitle}>Animation</Typography>
-      <Box sx={row}>
-        <Typography sx={label}>Trajectory style</Typography>
-        <FormControl size="small" sx={control}>
-          <Select value={trajectoryStyle} onChange={(e) => setTrajectoryStyle(e.target.value as TrajectoryStyle)} sx={selectTriggerSx} MenuProps={selectMenuProps}>
-            <MenuItem value="dots" sx={menuItemSx}>Dots only</MenuItem>
-            <MenuItem value="line" sx={menuItemSx}>Line only</MenuItem>
-            <MenuItem value="both" sx={menuItemSx}>Dots + Line</MenuItem>
-          </Select>
-        </FormControl>
-      </Box>
     </Box>
   )
 }

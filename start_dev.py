@@ -33,15 +33,17 @@ def start_frontend():
     if not os.path.exists(os.path.join(frontend_dir, 'node_modules')):
         print('📦 Installing frontend dependencies (first run)...')
         install_process = subprocess.run(
-            ['npm', 'install'],
+            'npm install',
             cwd=frontend_dir,
             shell=True,  # Required on Windows for npm.cmd
         )
         if install_process.returncode != 0:
             raise RuntimeError('Failed to install frontend dependencies')
 
+    # Use a single string with shell=True so the full command runs (list form
+    # would pass only the first token to the shell on Unix).
     frontend_process = subprocess.Popen(
-        ['npm', 'run', 'dev'],
+        'npm run dev',
         cwd=frontend_dir,
         shell=True,  # Required on Windows for npm.cmd
     )

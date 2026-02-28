@@ -3,10 +3,13 @@ from __future__ import annotations
 import json
 import logging
 import math
+import os
 import time
 import traceback
 from dataclasses import asdict
 from datetime import datetime
+from typing import Any
+from typing import cast
 
 import numpy as np
 from fastapi import FastAPI
@@ -15,11 +18,13 @@ from pylinkage.joints import Crank
 from pylinkage.joints import Static
 
 from configs.appconfig import GRAPHS_DIR
+from configs.logging_config import setup_logging
 from demo.helpers import create_mechanism_from_dict
 from multi.dim_tools import reduce_dimensions
 from pylink_tools.hypergraph_adapter import sync_hypergraph_distances
 from pylink_tools.optimization_types import DimensionBoundsSpec
 from pylink_tools.optimization_types import TargetTrajectory
+from pylink_tools.optimization_types import TopologyVariationSpec
 from pylink_tools.optimize import optimize_trajectory
 from pylink_tools.trajectory_utils import analyze_trajectory
 from pylink_tools.trajectory_utils import resample_trajectory
@@ -33,6 +38,17 @@ from target_gen.variation_config import DimensionVariationConfig
 from target_gen.variation_config import MechVariationConfig
 from target_gen.variation_config import StaticJointMovementConfig
 from target_gen.variation_config import TopologyChangeConfig
+
+# Configure logging when this module is loaded (e.g. by uvicorn worker with --reload).
+# Ensures backend.log and console get logs from this process; run_server.py only runs in the launcher process.
+_log_level = os.getenv('LOG_LEVEL', 'DEBUG').upper()
+_level_map = {
+    'DEBUG': logging.DEBUG,
+    'INFO': logging.INFO,
+    'WARNING': logging.WARNING,
+    'ERROR': logging.ERROR,
+}
+setup_logging(level=_level_map.get(_log_level, logging.DEBUG))
 
 logger = logging.getLogger(__name__)
 
@@ -86,6 +102,57 @@ def sanitize_for_json(obj):
             return None
         return val
     return obj
+
+
+def _build_trajectory_with_initial(
+    trajectory_array: np.ndarray,
+    initial_row: np.ndarray,
+    n_steps: int,
+    *,
+    check_closed: bool = True,
+    rtol: float = 1e-5,
+    atol: float = 1e-8,
+) -> tuple[np.ndarray, bool]:
+    """
+    Build trajectory of exactly n_steps rows with frame 0 = doc state (initial).
+
+    Uses one allocation and no concat: when closed, shifts last row to first;
+    when not closed, sets row 0 = initial and rows 1..n_steps-1 = trajectory[0..n_steps-2].
+    step_fast(iterations=n_steps) returns rows [after_1, ..., after_n_steps]; last row
+    equals initial when the loop closes.
+
+    Args:
+        trajectory_array: Shape (n_steps, n_joints, 2) from mechanism.simulate().
+        initial_row: Shape (1, n_joints, 2), e.g. mechanism._initial_positions.reshape(1, -1, 2).
+        n_steps: Requested number of steps (must match trajectory_array.shape[0]).
+        check_closed: If True, run allclose(initial, trajectory[-1]) and set
+            trajectory_did_not_close when not closed. If False, skip the check (faster, for batch).
+        rtol, atol: Tolerances for allclose when check_closed=True.
+
+    Returns:
+        (result_array, trajectory_did_not_close): result_array shape (n_steps, n_joints, 2).
+    """
+    n_joints = trajectory_array.shape[1]
+    result = np.empty((n_steps, n_joints, 2), dtype=np.float64)
+    trajectory_did_not_close = False
+
+    if n_steps < 2:
+        result[0] = initial_row[0]
+        return result, False
+
+    if check_closed and np.allclose(
+        initial_row[0], trajectory_array[n_steps - 1], rtol=rtol, atol=atol
+    ):
+        # Closed: use last row as first (avoid reading initial), then trajectory[0..n_steps-2]
+        result[0] = trajectory_array[n_steps - 1]
+        result[1:] = trajectory_array[: n_steps - 1]
+    else:
+        if check_closed:
+            trajectory_did_not_close = True
+        result[0] = initial_row[0]
+        result[1:] = trajectory_array[: n_steps - 1]
+
+    return result, trajectory_did_not_close
 
 
 def create_mechanism_from_request(request: dict, n_steps: int | None = None):
@@ -432,10 +499,8 @@ def get_demo_target_joint(request: dict):
             "target_joint": str | null  # Target joint name
         }
     """
-    import time
     import uuid
     request_id = str(uuid.uuid4())[:8]
-    start_time = time.time()
 
     try:
         pylink_data = request.get('pylink_data', {})
@@ -654,12 +719,18 @@ def compute_pylink_trajectory(request: dict):
                 'trajectories': None,  # Don't return invalid trajectories
             }
 
+        # Build exactly n_steps with frame 0 = doc state; check closure and set trajectory_did_not_close when not closed.
+        initial_row = np.asarray(mechanism._initial_positions, dtype=float).reshape(1, -1, 2)
+        trajectory_array, trajectory_did_not_close = _build_trajectory_with_initial(
+            trajectory_array, initial_row, n_steps, check_closed=True
+        )
+
         # Mechanism is solvable - convert array to dict format
         # Build trajectories dict from the already-computed trajectory_array
         trajectories = {}
         for i, joint_name in enumerate(mechanism._joint_names):
             converted_positions = []
-            for step in range(mechanism._n_steps):
+            for step in range(n_steps):
                 x, y = trajectory_array[step, i, 0], trajectory_array[step, i, 1]
                 # Ensure we have Python floats, not numpy types
                 converted_positions.append([float(x), float(y)])
@@ -685,6 +756,7 @@ def compute_pylink_trajectory(request: dict):
             'n_steps': n_steps,
             'execution_time_ms': execution_time_ms,
             'joint_types': joint_types,
+            'trajectory_did_not_close': bool(trajectory_did_not_close),
         }
 
         # Sanitize to handle any edge cases (though we've already validated)
@@ -725,7 +797,7 @@ def compute_pylink_trajectories_batch(request: dict):
         requests_list = request.get('requests', [])
         if not isinstance(requests_list, list):
             return {'status': 'error', 'message': 'Missing or invalid "requests" array'}
-        results = []
+        results: list[dict[str, Any]] = []
         for i, req in enumerate(requests_list):
             try:
                 n_steps = req.get('n_steps', 12)
@@ -740,10 +812,14 @@ def compute_pylink_trajectories_batch(request: dict):
                         'trajectories': None,
                     })
                     continue
+                initial_row = np.asarray(mechanism._initial_positions, dtype=float).reshape(1, -1, 2)
+                trajectory_array, _ = _build_trajectory_with_initial(
+                    trajectory_array, initial_row, n_steps, check_closed=False
+                )
                 trajectories = {}
                 for j, joint_name in enumerate(mechanism._joint_names):
                     positions = []
-                    for step in range(mechanism._n_steps):
+                    for step in range(n_steps):
                         x, y = trajectory_array[step, j, 0], trajectory_array[step, j, 1]
                         positions.append([float(x), float(y)])
                     trajectories[joint_name] = positions
@@ -776,6 +852,632 @@ def compute_pylink_trajectories_batch(request: dict):
             'message': str(e),
             'results': None,
         })
+
+
+@app.post('/compute-link-z-levels')
+def compute_link_z_levels_endpoint(request: dict):
+    """
+    Compute integer z-levels for each link (layer assignment).
+
+    Request body: current document with linkage (and optional meta, n_steps,
+    drawn_objects / drawnObjects for polygon-aware z-levels).
+    Returns: { "status": "success", "assignments": [ { linkId: zLevel, ... } ], "n_steps": int,
+    "polygon_z_levels": { polygonId: zLevel } (when drawn_objects provided) }
+    or { "status": "error", "message": "..." }.
+    """
+    try:
+        from form_tools import compute_link_z_levels
+        from form_tools.z_level import config_from_request
+        from form_tools import polygon_utils as _polygon_utils
+
+        n_steps_raw = request.get('n_steps', 32)
+        n_steps: int = 32 if n_steps_raw is None else int(n_steps_raw)
+        drawn_objects = request.get('drawn_objects') or request.get('drawnObjects') or []
+        polygons_for_z = [
+            o for o in drawn_objects
+            if o.get('type') == 'polygon' and o.get('id') and (o.get('contained_links') or [])
+        ]
+        trajectories = request.get('trajectories')
+        if isinstance(trajectories, dict) and trajectories:
+            trajectories = {
+                str(k): [[float(p[0]), float(p[1])] for p in v] if isinstance(v, (list, tuple)) else v
+                for k, v in trajectories.items()
+            }
+        else:
+            trajectories = None
+
+        fixed_entity_z_levels = request.get('fixed_entity_z_levels')
+        if isinstance(fixed_entity_z_levels, dict):
+            fixed_entity_z_levels = {str(k): int(v) for k, v in fixed_entity_z_levels.items()}
+        else:
+            fixed_entity_z_levels = None
+
+        z_level_config = config_from_request(request.get('z_level_config'))
+
+        extra_entity_conflict_pairs = []
+        linkage_for_z = request.get('linkage')
+        if not linkage_for_z and isinstance(request.get('pylink_data'), dict):
+            linkage_for_z = request.get('pylink_data', {}).get('linkage')
+        if polygons_for_z and trajectories and len(polygons_for_z) >= 2 and isinstance(linkage_for_z, dict):
+            try:
+                margin_units = request.get('margin_units')
+                if margin_units is not None:
+                    margin_units = float(margin_units)
+                extra_entity_conflict_pairs = _polygon_utils.build_polygon_entity_conflict_pairs(
+                    polygons_for_z, linkage_for_z, trajectories,
+                    margin_fraction=0.05,
+                    margin_units=margin_units,
+                )
+                if extra_entity_conflict_pairs:
+                    logger.info(
+                        'compute-link-z-levels: added %d polygon-aware conflict pair(s)',
+                        len(extra_entity_conflict_pairs),
+                    )
+            except Exception:
+                pass
+
+        result = compute_link_z_levels(
+            mechanism=None,
+            path=None,
+            pylink_data=request,
+            n_steps=n_steps,
+            use_trajectory_conflicts=True,
+            max_assignments=1,
+            drawn_objects=polygons_for_z if polygons_for_z else None,
+            trajectories=trajectories,
+            extra_entity_conflict_pairs=extra_entity_conflict_pairs if extra_entity_conflict_pairs else None,
+            fixed_entity_z_levels=fixed_entity_z_levels,
+            z_level_config=z_level_config,
+        )
+        if isinstance(result, tuple):
+            assignments, polygon_z_levels = result
+            return sanitize_for_json({
+                'status': 'success',
+                'assignments': assignments,
+                'n_steps': n_steps,
+                'polygon_z_levels': polygon_z_levels,
+            })
+        return sanitize_for_json({
+            'status': 'success',
+            'assignments': result,
+            'n_steps': n_steps,
+        })
+    except Exception as e:
+        logger.error(f'Error in compute-link-z-levels: {e}')
+        traceback.print_exc()
+        return sanitize_for_json({
+            'status': 'error',
+            'message': str(e),
+            'assignments': None,
+        })
+
+
+@app.post('/create-polygons-from-rigid-groups')
+def create_polygons_from_rigid_groups_endpoint(request: dict):
+    """
+    Compute bounding polygons and z-levels for the frontend to create drawn objects.
+
+    Request body: linkage, meta, n_steps; optional trajectories (joint_name -> [[x,y],...])
+    and n_steps (effective step count). If trajectories is provided, it is used instead of
+    re-simulating so polygons match the frontend's displayed trajectory exactly.
+    Optional: mode = "rigid_groups" (default) or "per_link"; margin_fraction, margin_units.
+
+    mode "rigid_groups": Detect rigid groups, one polygon per group.
+    mode "per_link": One polygon per link (bounding polygon around that link only).
+
+    Returns: {
+        "status": "success",
+        "assignments": { linkId: zLevel },
+        "polygon_z_levels": { polygonId: zLevel },
+        "suggested_polygons": [ { "polygon_id", "points", "contained_links", "z_level" }, ... ]
+    }
+    """
+    try:
+        from form_tools import polygon_utils
+        from form_tools import compute_link_z_levels
+        from form_tools.z_level import config_from_request
+
+        pylink_data = request.get('pylink_data', request)
+        linkage = pylink_data.get('linkage') if isinstance(pylink_data, dict) else None
+        if not linkage:
+            return sanitize_for_json({
+                'status': 'error',
+                'message': 'Missing linkage in request.',
+                'assignments': None,
+                'suggested_polygons': None,
+            })
+
+        mode = request.get('mode', 'rigid_groups')
+        if mode not in ('rigid_groups', 'per_link'):
+            mode = 'rigid_groups'
+
+        # Use frontend trajectory when provided so polygons match displayed trajectory
+        trajectories_in = request.get('trajectories')
+        n_steps_effective = request.get('n_steps')
+        trajectories: dict[str, list[list[float]]] | None = None
+        if isinstance(trajectories_in, dict) and isinstance(n_steps_effective, int) and n_steps_effective > 0:
+            trajectories = {}
+            for jname, positions in trajectories_in.items():
+                if not isinstance(positions, (list, tuple)) or len(positions) < n_steps_effective:
+                    trajectories = None
+                    break
+                trajectories[str(jname)] = [
+                    [float(p[0]), float(p[1])] for p in positions[:n_steps_effective]
+                ]
+            if trajectories:
+                n_steps = n_steps_effective
+        else:
+            trajectories = None
+
+        if trajectories is None:
+            n_steps = request.get('n_steps', 32)
+            mechanism = create_mechanism_from_request(request, n_steps=n_steps)
+            trajectory_array = mechanism.simulate()
+
+            has_nan = np.isnan(trajectory_array).any()
+            has_inf = np.isinf(trajectory_array).any()
+            if has_nan or has_inf:
+                return sanitize_for_json({
+                    'status': 'error',
+                    'message': 'Unsolvable mechanism (NaN or infinite values in trajectory).',
+                    'assignments': None,
+                    'suggested_polygons': None,
+                })
+
+            initial_row = np.asarray(mechanism._initial_positions, dtype=float).reshape(1, -1, 2)
+            trajectory_array, _ = _build_trajectory_with_initial(
+                trajectory_array, initial_row, n_steps, check_closed=False
+            )
+            n_steps_effective = n_steps
+
+            # Build trajectory_dict: joint_name -> list of [x, y]
+            trajectories = {}
+            for i, joint_name in enumerate(mechanism._joint_names):
+                positions = []
+                for step in range(n_steps_effective):
+                    x, y = trajectory_array[step, i, 0], trajectory_array[step, i, 1]
+                    positions.append([float(x), float(y)])
+                trajectories[joint_name] = positions
+
+        margin_fraction = float(request.get('margin_fraction', 0.05))
+        margin_units = request.get('margin_units')
+        if margin_units is not None:
+            margin_units = float(margin_units)
+        initial_step = 0
+        n_steps_int: int = n_steps_effective if isinstance(n_steps_effective, int) else 32
+        z_level_config = config_from_request(request.get('z_level_config'))
+        skip_existing_forms = request.get('skip_existing_forms', True)
+        existing_drawn = request.get('existing_drawn_objects') or []
+        covered_link_ids: set[str] = set()
+        if skip_existing_forms and existing_drawn:
+            for o in existing_drawn:
+                if isinstance(o, dict) and o.get('type') == 'polygon':
+                    for lid in o.get('contained_links') or []:
+                        covered_link_ids.add(str(lid))
+
+        if mode == 'per_link':
+            edges = linkage.get('edges') or {}
+            link_ids = list(edges.keys())
+            if skip_existing_forms and covered_link_ids:
+                link_ids = [lid for lid in link_ids if lid not in covered_link_ids]
+            if not link_ids:
+                return sanitize_for_json({
+                    'status': 'success',
+                    'assignments': {},
+                    'polygon_z_levels': {},
+                    'suggested_polygons': [],
+                })
+
+            def _link_form_id(lid: str) -> str:
+                return f'link_form_{lid[6:]}' if lid.startswith('link_') else f'link_form_{lid}'
+
+            suggested_drawn = [
+                {'id': _link_form_id(lid), 'type': 'polygon', 'contained_links': [lid]}
+                for lid in link_ids
+            ]
+            result = compute_link_z_levels(
+                pylink_data=request,
+                n_steps=n_steps_int,
+                use_trajectory_conflicts=True,
+                max_assignments=1,
+                drawn_objects=suggested_drawn,
+                trajectories=trajectories,
+                z_level_config=z_level_config,
+            )
+            if not isinstance(result, tuple) or len(result) != 2:
+                return sanitize_for_json({
+                    'status': 'error',
+                    'message': 'Z-level computation failed for per-link polygons.',
+                    'assignments': None,
+                    'suggested_polygons': None,
+                })
+            assignments, polygon_z_levels = result
+            suggested_polygons = []
+            for lid in link_ids:
+                pid = _link_form_id(lid)
+                points = polygon_utils.bounding_polygon_for_links(
+                    [lid], linkage,
+                    cast(dict[str, list[list[float] | tuple[float, float]]], trajectories),
+                    margin_fraction=margin_fraction,
+                    margin_units=margin_units,
+                    step=initial_step,
+                )
+                if len(points) >= 3:
+                    z_level = polygon_z_levels.get(pid, 0)
+                    suggested_polygons.append({
+                        'polygon_id': pid,
+                        'points': points,
+                        'contained_links': [lid],
+                        'z_level': z_level,
+                    })
+            return sanitize_for_json({
+                'status': 'success',
+                'assignments': assignments,
+                'polygon_z_levels': polygon_z_levels,
+                'suggested_polygons': suggested_polygons,
+            })
+
+        # mode == 'rigid_groups'
+        rigid_groups = polygon_utils.detect_rigid_groups(
+            linkage, cast(dict[str, list[list[float] | tuple[float, float]]], trajectories),
+        )
+        if not rigid_groups:
+            return sanitize_for_json({
+                'status': 'success',
+                'assignments': {},
+                'polygon_z_levels': {},
+                'suggested_polygons': [],
+            })
+        if skip_existing_forms and covered_link_ids:
+            rigid_groups = [g for g in rigid_groups if not (set(g) <= covered_link_ids)]
+        if not rigid_groups:
+            return sanitize_for_json({
+                'status': 'success',
+                'assignments': {},
+                'polygon_z_levels': {},
+                'suggested_polygons': [],
+            })
+
+        suggested_drawn = [
+            {'id': f'rigid_group_{i}', 'type': 'polygon', 'contained_links': list(g)}
+            for i, g in enumerate(rigid_groups)
+        ]
+        result = compute_link_z_levels(
+            pylink_data=request,
+            n_steps=n_steps_int,
+            use_trajectory_conflicts=True,
+            max_assignments=1,
+            drawn_objects=suggested_drawn,
+            trajectories=trajectories,
+            z_level_config=z_level_config,
+        )
+        if not isinstance(result, tuple) or len(result) != 2:
+            return sanitize_for_json({
+                'status': 'error',
+                'message': 'Z-level computation failed for rigid groups.',
+                'assignments': None,
+                'suggested_polygons': None,
+            })
+        assignments, polygon_z_levels = result
+
+        suggested_polygons = []
+        for i, group in enumerate(rigid_groups):
+            pid = f'rigid_group_{i}'
+            points = polygon_utils.bounding_polygon_for_links(
+                list(group), linkage,
+                cast(dict[str, list[list[float] | tuple[float, float]]], trajectories),
+                margin_fraction=margin_fraction,
+                margin_units=margin_units,
+                step=initial_step,
+            )
+            z_level = polygon_z_levels.get(pid, 0)
+            suggested_polygons.append({
+                'polygon_id': pid,
+                'points': points,
+                'contained_links': list(group),
+                'z_level': z_level,
+            })
+
+        return sanitize_for_json({
+            'status': 'success',
+            'assignments': assignments,
+            'polygon_z_levels': polygon_z_levels,
+            'suggested_polygons': suggested_polygons,
+        })
+    except Exception as e:
+        logger.error(f'Error in create-polygons-from-rigid-groups: {e}')
+        traceback.print_exc()
+        return sanitize_for_json({
+            'status': 'error',
+            'message': str(e),
+            'assignments': None,
+            'suggested_polygons': None,
+        })
+
+
+def _pylink_from_request(request: dict) -> tuple[dict, dict]:
+    """Extract linkage and meta from request (pylink_data or flat)."""
+    pylink_data = request.get('pylink_data', request)
+    if not isinstance(pylink_data, dict):
+        raise ValueError('Invalid request: expected dict with linkage or pylink_data')
+    linkage = pylink_data.get('linkage')
+    if not isinstance(linkage, dict):
+        raise ValueError('Invalid request: missing or invalid linkage')
+    meta = pylink_data.get('meta') or {}
+    return linkage, meta
+
+
+@app.post('/merge-polygon')
+def merge_polygon_endpoint(request: dict):
+    """
+    Create/update polygon association from geometry: find all links whose endpoints
+    lie inside the polygon, set primary link (first contained), return polygon payload.
+
+    Containment uses linkage.nodes positions only (document / initial step 0). Caller
+    must pass polygon_points and linkage at the same configuration (e.g. step 0) so
+    create-polygons-from-rigid-groups and merge stay consistent.
+
+    Request: pylink_data (or flat) with linkage, meta; polygon_id; polygon_points (list of [x,y]);
+    optional selected_link_name (if user had selected a link before clicking polygon);
+    optional restrict_to_links (list of link IDs): if set, contained_links is restricted to this set only (e.g. rigid group).
+    Returns: { status, polygon: { contained_links, mergedLinkName, ..., selected_link_fully_inside? } }
+    """
+    logger.info('merge-polygon: request received polygon_id=%s', request.get('polygon_id'))
+    try:
+        from form_tools import polygon_utils
+        linkage, meta = _pylink_from_request(request)
+        polygon_id = request.get('polygon_id')
+        selected_link_name = request.get('selected_link_name')
+        polygon_points = request.get('polygon_points')
+        drawn_objects = request.get('drawn_objects') or request.get('drawnObjects')
+        if polygon_points is None and drawn_objects and polygon_id:
+            for obj in drawn_objects:
+                if obj.get('id') == polygon_id and obj.get('type') == 'polygon':
+                    polygon_points = obj.get('points')
+                    break
+        if not polygon_id:
+            logger.warning('merge-polygon: missing polygon_id')
+            return sanitize_for_json({'status': 'error', 'message': 'missing polygon_id', 'polygon': None})
+        if not polygon_points or len(polygon_points) < 3:
+            logger.warning('merge-polygon: invalid polygon_points for polygon_id=%s', polygon_id)
+            return sanitize_for_json({'status': 'error', 'message': 'invalid or missing polygon_points', 'polygon': None})
+
+        logger.info('merge-polygon: polygon_id=%s, points=%d', polygon_id, len(polygon_points))
+        restrict_to_links = request.get('restrict_to_links')
+        if restrict_to_links is not None and not isinstance(restrict_to_links, list):
+            restrict_to_links = None
+        contained = polygon_utils.contained_links(linkage, polygon_points)
+        if restrict_to_links is not None:
+            allowed = set(restrict_to_links)
+            contained = [lid for lid in contained if lid in allowed]
+        if not contained:
+            logger.info('merge-polygon: no fully bounded links in polygon_id=%s', polygon_id)
+            return sanitize_for_json({
+                'status': 'success',
+                'polygon': {
+                    'polygon_id': polygon_id,
+                    'contained_links': [],
+                    'mergedLinkName': None,
+                    'mergedLinkOriginalStart': None,
+                    'mergedLinkOriginalEnd': None,
+                    'fill_color': None,
+                    'stroke_color': None,
+                    'selected_link_fully_inside': None if not selected_link_name else False,
+                },
+            })
+
+        if selected_link_name and selected_link_name not in contained:
+            logger.warning(
+                'merge-polygon: selected_link_name=%s is not fully inside polygon_id=%s; contained_links=%s',
+                selected_link_name, polygon_id, contained,
+            )
+
+        primary = contained[0]
+        endpoints = polygon_utils.get_link_endpoints(linkage, primary)
+        if not endpoints:
+            logger.error('merge-polygon: could not get endpoints for primary link %s', primary)
+            return sanitize_for_json({'status': 'error', 'message': f'primary link {primary} has no positions', 'polygon': None})
+        start_pt, end_pt = endpoints
+        meta_edges = meta.get('edges') or {}
+        link_meta = meta_edges.get(primary) or {}
+        fill_color = link_meta.get('color') or '#2ca02c'
+        stroke_color = fill_color
+
+        selected_link_fully_inside = (selected_link_name in contained) if selected_link_name else None
+        out = {
+            'status': 'success',
+            'polygon': {
+                'polygon_id': polygon_id,
+                'contained_links': contained,
+                'mergedLinkName': primary,
+                'mergedLinkOriginalStart': list(start_pt),
+                'mergedLinkOriginalEnd': list(end_pt),
+                'fill_color': fill_color,
+                'stroke_color': stroke_color,
+                'selected_link_fully_inside': selected_link_fully_inside,
+            },
+        }
+        logger.info(
+            'merge-polygon: polygon_id=%s contained_links=%s primary=%s selected_link_fully_inside=%s',
+            polygon_id, len(contained), primary, selected_link_fully_inside,
+        )
+        return sanitize_for_json(out)
+    except ValueError as e:
+        logger.warning('merge-polygon: invalid request: %s', e)
+        return sanitize_for_json({'status': 'error', 'message': str(e), 'polygon': None})
+    except Exception as e:
+        logger.error('merge-polygon: %s', e)
+        traceback.print_exc()
+        return sanitize_for_json({'status': 'error', 'message': str(e), 'polygon': None})
+
+
+@app.post('/merge-two-polygons')
+def merge_two_polygons_endpoint(request: dict):
+    """
+    Merge two polygons into one outer bounding polygon (union geometry).
+    Interior boundaries between the two are removed; result is a single polygon
+    that perfectly bounds both. Uses first polygon's id for the result.
+
+    Request: pylink_data (or flat) with linkage, meta;
+             polygon_id_a, polygon_points_a (first polygon - keep its id);
+             polygon_id_b, polygon_points_b (second polygon - removed by frontend).
+    Returns: { status, merged_polygon: { polygon_id, points, contained_links } }
+    Frontend applies first polygon's z_level and color to the result.
+    """
+    logger.info(
+        'merge-two-polygons: request polygon_id_a=%s polygon_id_b=%s',
+        request.get('polygon_id_a'),
+        request.get('polygon_id_b'),
+    )
+    try:
+        from form_tools import polygon_utils
+        linkage, _meta = _pylink_from_request(request)
+        polygon_id_a = request.get('polygon_id_a')
+        polygon_id_b = request.get('polygon_id_b')
+        points_a = request.get('polygon_points_a')
+        points_b = request.get('polygon_points_b')
+        if not polygon_id_a or not points_a or len(points_a) < 3:
+            return sanitize_for_json({
+                'status': 'error',
+                'message': 'missing or invalid polygon_id_a / polygon_points_a',
+                'merged_polygon': None,
+            })
+        if not polygon_id_b or not points_b or len(points_b) < 3:
+            return sanitize_for_json({
+                'status': 'error',
+                'message': 'missing or invalid polygon_id_b / polygon_points_b',
+                'merged_polygon': None,
+            })
+        pts_a = [(float(p[0]), float(p[1])) for p in points_a]
+        pts_b = [(float(p[0]), float(p[1])) for p in points_b]
+        merged_points = polygon_utils.merge_two_polygons_geometry(pts_a, pts_b)
+        if not merged_points:
+            return sanitize_for_json({
+                'status': 'error',
+                'message': 'could not compute merged polygon geometry',
+                'merged_polygon': None,
+            })
+        contained = polygon_utils.contained_links(linkage, merged_points)
+        out = {
+            'status': 'success',
+            'merged_polygon': {
+                'polygon_id': polygon_id_a,
+                'points': [list(p) for p in merged_points],
+                'contained_links': contained,
+            },
+        }
+        logger.info(
+            'merge-two-polygons: merged polygon_id=%s points=%d contained_links=%d',
+            polygon_id_a,
+            len(merged_points),
+            len(contained),
+        )
+        return sanitize_for_json(out)
+    except ValueError as e:
+        logger.warning('merge-two-polygons: invalid request: %s', e)
+        return sanitize_for_json({
+            'status': 'error',
+            'message': str(e),
+            'merged_polygon': None,
+        })
+    except Exception as e:
+        logger.error('merge-two-polygons: %s', e)
+        traceback.print_exc()
+        return sanitize_for_json({
+            'status': 'error',
+            'message': str(e),
+            'merged_polygon': None,
+        })
+
+
+@app.post('/find-associated-polygons')
+def find_associated_polygons_endpoint(request: dict):
+    """
+    Recompute containment for current positions (e.g. after drag).
+    Request: pylink_data (or flat) with linkage, meta; drawn_objects (list of polygons with points).
+    Returns: { status, polygons: { polygon_id: { contained_links: [...], all_inside: bool } } }
+    """
+    drawn_objects = request.get('drawn_objects') or request.get('drawnObjects') or []
+    polygons_in = [o for o in drawn_objects if o.get('type') == 'polygon' and o.get('points') and len(o.get('points', [])) >= 3]
+    logger.info('find-associated-polygons: request received n_polygons=%d', len(polygons_in))
+    try:
+        from form_tools import polygon_utils
+        linkage, _meta = _pylink_from_request(request)
+        result = {}
+        for obj in polygons_in:
+            pid = obj.get('id')
+            if not pid:
+                continue
+            points = obj.get('points') or []
+            poly_tuples = [(float(p[0]), float(p[1])) for p in points]
+            contained = polygon_utils.contained_links(linkage, points)
+            all_inside = True
+            existing = obj.get('contained_links')
+            if not existing and obj.get('mergedLinkName'):
+                existing = [obj.get('mergedLinkName')]
+            for link_id in (existing or contained):
+                ep = polygon_utils.get_link_endpoints(linkage, link_id)
+                if not ep:
+                    all_inside = False
+                    break
+                if not polygon_utils.is_point_in_polygon(ep[0], poly_tuples) or not polygon_utils.is_point_in_polygon(ep[1], poly_tuples):
+                    all_inside = False
+                    break
+            result[pid] = {'contained_links': contained, 'all_inside': all_inside}
+            if not all_inside:
+                logger.info('find-associated-polygons: polygon_id=%s all_inside=False (link endpoints outside)', pid)
+        logger.info('find-associated-polygons: processed %d polygons', len(result))
+        return sanitize_for_json({'status': 'success', 'polygons': result})
+    except ValueError as e:
+        logger.warning('find-associated-polygons: invalid request: %s', e)
+        return sanitize_for_json({'status': 'error', 'message': str(e), 'polygons': {}})
+    except Exception as e:
+        logger.error('find-associated-polygons: %s', e)
+        traceback.print_exc()
+        return sanitize_for_json({'status': 'error', 'message': str(e), 'polygons': {}})
+
+
+@app.post('/validate-polygon-rigidity')
+def validate_polygon_rigidity_endpoint(request: dict):
+    """
+    Validate that each polygon's contained links form a rigid body (relative angles
+    at shared joints constant over time). Uses precomputed trajectory; no simulation.
+
+    Request: trajectories (joint_name -> [[x,y], ...]), linkage (nodes, edges),
+             drawn_objects (list of polygons with id, contained_links).
+    Returns: { status, polygons: { polygon_id: { rigid_valid: bool, message?: str } } }
+    """
+    trajectories = request.get('trajectories')
+    linkage = request.get('linkage')
+    drawn_objects = request.get('drawn_objects') or request.get('drawnObjects') or []
+    if not trajectories or not isinstance(trajectories, dict):
+        return sanitize_for_json({
+            'status': 'error',
+            'message': 'missing or invalid trajectories (expected dict joint_name -> list of [x,y])',
+            'polygons': {},
+        })
+    if not linkage or not isinstance(linkage, dict):
+        return sanitize_for_json({
+            'status': 'error',
+            'message': 'missing or invalid linkage',
+            'polygons': {},
+        })
+    from form_tools import polygon_utils
+    result: dict[str, dict[str, Any]] = {}
+    polygons_in = [o for o in drawn_objects if o.get('type') == 'polygon' and o.get('id')]
+    for obj in polygons_in:
+        pid = obj.get('id')
+        contained = obj.get('contained_links') or []
+        if len(contained) < 2:
+            result[pid] = {'rigid_valid': True}
+            continue
+        rigid_valid, message = polygon_utils.validate_polygon_rigidity(
+            linkage, contained, trajectories,
+        )
+        result[pid] = {'rigid_valid': rigid_valid}
+        if message:
+            result[pid]['message'] = message
+    return sanitize_for_json({'status': 'success', 'polygons': result})
 
 
 @app.post('/validate-mechanism')
@@ -827,21 +1529,6 @@ def validate_mechanism_endpoint(request: dict):
 
 @app.post('/optimize-trajectory')
 def optimize_trajectory_endpoint(request: dict):
-    # #region agent log
-    # with open('/Users/abf/projects/Acinonyx/.cursor/debug.log', 'a') as f:
-    #     f.write(json.dumps({
-    #         'location': 'acinonyx_api.py:788', 'message': 'optimize_trajectory_endpoint called',
-    #         'data': {
-    #             'hasRequest': request is not None,
-    #             'hasOptimizationOptions': 'optimization_options' in request if request else False,
-    #             'hasMechVariationConfig': 'mech_variation_config' in (
-    #                 request.get('optimization_options', {}) if request else {}
-    #             ),
-    #         },
-    #         'timestamp': int(time.time() * 1000), 'sessionId': 'debug-session',
-    #         'runId': 'run6', 'hypothesisId': 'C',
-    #     }) + '\n')
-    # #endregion
     """
     Optimize linkage dimensions to fit a target trajectory.
 
@@ -926,20 +1613,13 @@ def optimize_trajectory_endpoint(request: dict):
         original_hierarchy = pylink_data.get('hierarchy')
         original_saved_at = pylink_data.get('savedAt')
 
-        logger.info('=== OPTIMIZE TRAJECTORY ===')
-        logger.info(f'Target joint: {target_joint}')
-        logger.info(f'Target points: {len(target_positions)}')
-        logger.info(f'Method: {method}')
-
         # Convert ONCE at API boundary
         n_steps = len(target_positions)
         mechanism = create_mechanism_from_request(request, n_steps=n_steps)
 
         # Validate the mechanism by running a reference simulation
-        logger.info('Validating mechanism...')
         try:
             mechanism.simulate()  # Quick validation
-            logger.info('Mechanism validation successful')
         except Exception as e:
             return sanitize_for_json({
                 'status': 'error',
@@ -1004,30 +1684,6 @@ def optimize_trajectory_endpoint(request: dict):
 
                     # Now instantiate MechVariationConfig with properly converted nested dataclasses
                     mech_variation_config = MechVariationConfig(**config_dict)
-
-                    # Log all properties of MechVariationConfig for debugging
-                    if verbose:
-                        logger.info('Instantiating MechVariationConfig:')
-                        logger.info(f'  Type: {type(mech_variation_config)}')
-                        logger.info(f'  Has dimension_variation: {hasattr(mech_variation_config, "dimension_variation")}')
-                        if hasattr(mech_variation_config, 'dimension_variation'):
-                            dim_var = mech_variation_config.dimension_variation
-                            logger.info(f'    dimension_variation type: {type(dim_var)}')
-                            logger.info(f'    default_variation_range: {getattr(dim_var, "default_variation_range", "MISSING")}')
-                            logger.info(f'    default_enabled: {getattr(dim_var, "default_enabled", "MISSING")}')
-                            logger.info(f'    dimension_overrides: {len(getattr(dim_var, "dimension_overrides", {}))} overrides')
-                            logger.info(f'    exclude_dimensions: {len(getattr(dim_var, "exclude_dimensions", []))} excluded')
-                        logger.info(f'  Has static_joint_movement: {hasattr(mech_variation_config, "static_joint_movement")}')
-                        if hasattr(mech_variation_config, 'static_joint_movement'):
-                            static_joint = mech_variation_config.static_joint_movement
-                            logger.info(f'    static_joint_movement type: {type(static_joint)}')
-                            logger.info(f'    enabled: {getattr(static_joint, "enabled", "MISSING")}')
-                            logger.info(f'    max_x_movement: {getattr(static_joint, "max_x_movement", "MISSING")}')
-                            logger.info(f'    max_y_movement: {getattr(static_joint, "max_y_movement", "MISSING")}')
-                        logger.info(f'  Has topology_changes: {hasattr(mech_variation_config, "topology_changes")}')
-                        logger.info(f'  Has max_attempts: {hasattr(mech_variation_config, "max_attempts")}')
-                        logger.info(f'  Has fallback_ranges: {hasattr(mech_variation_config, "fallback_ranges")}')
-                        logger.info(f'  Has random_seed: {hasattr(mech_variation_config, "random_seed")}')
             except Exception as e:
                 logger.error(f'Failed to create MechVariationConfig: {e}')
                 traceback.print_exc()
@@ -1055,37 +1711,23 @@ def optimize_trajectory_endpoint(request: dict):
         if mech_variation_config:
             dim_spec = DimensionBoundsSpec.from_mechanism(mechanism, mech_variation_config)
 
-        # Log dimension spec table
-        if verbose:
-            logger.info('DimensionBoundsSpec details:')
-            logger.info(f'  {"Dimension Name":<35} {"Initial":>10} {"Min Bound":>12} {"Max Bound":>12} {"Range":>12}')
-            logger.info(f'  {"-"*35} {"-"*10} {"-"*12} {"-"*12} {"-"*12}')
-            for i, name in enumerate(dim_spec.names):
-                initial = dim_spec.initial_values[i]
-                min_bound, max_bound = dim_spec.bounds[i]
-                range_val = max_bound - min_bound
-                logger.info(f'  {name:<35} {initial:>10.4f} {min_bound:>12.4f} {max_bound:>12.4f} {range_val:>12.4f}')
-            logger.info(f'  {"-"*35} {"-"*10} {"-"*12} {"-"*12} {"-"*12}')
-
-        # Log config stats if provided
-        if mech_variation_config and verbose:
-            logger.info('MechVariationConfig:')
-            dim_var = mech_variation_config.dimension_variation
-            logger.info('  DimensionVariationConfig:')
-            logger.info(f'    default_variation_range: {dim_var.default_variation_range}')
-            logger.info(f'    default_enabled: {dim_var.default_enabled}')
-            logger.info(f'    dimension_overrides: {len(dim_var.dimension_overrides)} overrides')
-            logger.info(f'    exclude_dimensions: {len(dim_var.exclude_dimensions)} excluded')
-
-            static_joint = mech_variation_config.static_joint_movement
-            logger.info('  StaticJointMovementConfig:')
-            logger.info(f'    enabled: {static_joint.enabled}')
-
         # Create target trajectory
         target = TargetTrajectory(
             joint_name=target_joint,
             positions=target_positions,
         )
+
+        # Optional topology variation spec (for SCIP topology optimization)
+        topology_variation_spec = None
+        if 'topology_variation_spec' in optimization_options:
+            try:
+                topo_input = optimization_options['topology_variation_spec']
+                if isinstance(topo_input, dict):
+                    topology_variation_spec = TopologyVariationSpec.from_dict(topo_input)
+                else:
+                    topology_variation_spec = topo_input
+            except Exception as e:
+                logger.warning(f'Invalid topology_variation_spec: {e}')
 
         # Build kwargs based on method
         opt_kwargs = {
@@ -1093,17 +1735,31 @@ def optimize_trajectory_endpoint(request: dict):
             'target': target,
             'dimension_bounds_spec': dim_spec,
             'mech_variation_config': mech_variation_config,  # Pass config for optimizer
+            'topology_variation_spec': topology_variation_spec,
             'method': method,
             'verbose': verbose,
         }
 
         # Add method-specific parameters
-        if method in ('pso', 'pylinkage'):
+        if method == 'pylinkage':
             opt_kwargs['n_particles'] = n_particles
             opt_kwargs['iterations'] = iterations
+            w = optimization_options.get('w')
+            if w is not None:
+                opt_kwargs['w'] = w
+            c1 = optimization_options.get('c1')
+            if c1 is not None:
+                opt_kwargs['c1'] = c1
+            c2 = optimization_options.get('c2')
+            if c2 is not None:
+                opt_kwargs['c2'] = c2
         elif method in ('scipy', 'powell', 'nelder-mead'):
             opt_kwargs['max_iterations'] = max_iterations
             opt_kwargs['tolerance'] = tolerance
+        elif method == 'scip':
+            opt_kwargs['discretization_steps'] = optimization_options.get('discretization_steps', 20)
+            opt_kwargs['time_limit'] = optimization_options.get('time_limit', 300.0)
+            opt_kwargs['gap_limit'] = optimization_options.get('gap_limit', 0.01)
 
         # Run optimization (modifies mechanism in place)
         # Wrap in try-catch to gracefully handle any exceptions
@@ -1131,8 +1787,20 @@ def optimize_trajectory_endpoint(request: dict):
                 'execution_time_ms': (time.perf_counter() - start_time) * 1000,
             }
 
-        # Get optimized mechanism from result (optimizer returns it)
-        optimized_mechanism = result.optimized_mechanism
+        # When optimization reports failure (e.g. unknown method), return error immediately
+        # with a user-friendly message so the frontend does not expect optimized_pylink_data.
+        if not result.success:
+            end_time = time.perf_counter()
+            execution_time_ms = (end_time - start_time) * 1000
+            message = result.error if result.error else 'Optimization failed'
+            if 'Unknown optimization method' in (result.error or ''):
+                message = f"Optimization failed: Unknown method '{method}'"
+            logger.warning(f'Optimization failed: {result.error}')
+            return sanitize_for_json({
+                'status': 'error',
+                'message': message,
+                'execution_time_ms': execution_time_ms,
+            })
 
         end_time = time.perf_counter()
         execution_time_ms = (end_time - start_time) * 1000
@@ -1261,9 +1929,9 @@ def optimize_trajectory_endpoint(request: dict):
                     # RAISE EXCEPTION if there are mismatches - this is a critical bug
                     if mismatches:
                         error_msg = (
-                            f'CRITICAL BUG: optimized_dimensions do not match edge distances in returned mechanism!\n'
+                            'CRITICAL BUG: optimized_dimensions do not match edge distances in returned mechanism!\n'
                             'Mismatches:\n' + '\n'.join(f'  - {m}' for m in mismatches) + '\n'
-                            f'This indicates a fundamental bug in Mechanism.to_dict() or dimension mapping.\n'
+                            'This indicates a fundamental bug in Mechanism.to_dict() or dimension mapping.\n'
                             f'optimized_dimensions: {optimized_dimensions}\n'
                             f"edge_distances: {dict((eid, e.get('distance')) for eid, e in edges.items())}"
                         )
@@ -1475,11 +2143,11 @@ def get_optimizable_dimensions(request: dict):
 
         # Convert ONCE at API boundary
         mechanism = create_mechanism_from_request(request)
-        mechanism_name = getattr(mechanism, 'name', 'unknown')
+        # mechanism_name = getattr(mechanism, 'name', 'unknown')
 
         # Get dimension spec from Mechanism
         dim_spec = mechanism.get_dimension_bounds_spec()
-        initial_dim_count = len(dim_spec.names) if dim_spec else 0
+        # initial_dim_count = len(dim_spec.names) if dim_spec else 0
 
         # Check for configs and apply filtering if provided
         config_applied: dict[str, str | dict[str, object] | None] = {'type': 'none', 'config': None}
@@ -1597,7 +2265,6 @@ def get_optimizable_dimensions(request: dict):
                 }
 
         # Use DimensionBoundsSpec.to_dict() for proper serialization
-        final_dim_count = len(dim_spec.names) if dim_spec else 0
         elapsed = (time.time() - start_time) * 1000
 
         return {

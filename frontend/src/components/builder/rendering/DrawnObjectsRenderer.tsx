@@ -28,7 +28,8 @@ function renderDrawnObject(
     onObjectClick,
     mergeMode = false,
     hoveredPolygonId = null,
-    onMergePolygonClick
+    onMergePolygonClick,
+    pointerEventsNoneForDrawPolygon = false
   } = props
 
   if (obj.type !== 'polygon' || obj.points.length < 3) {
@@ -44,6 +45,7 @@ function renderDrawnObject(
   const isMerged = !!obj.mergedLinkName
   const isMergeHighlighted = mergeMode && hoveredPolygonId === obj.id
   const isUnmergeCandidate = mergeMode && isMerged
+  const isBroken = isMerged && obj.contained_links_valid === false
 
   // Determine highlight type for glow effect
   const polygonHighlightType: HighlightType = isInMoveGroup
@@ -56,15 +58,19 @@ function renderDrawnObject(
   const polygonHighlightStyle = getHighlightStyle('polygon', polygonHighlightType, obj.strokeColor, obj.strokeWidth)
 
   // Merge-mode styling: stroke/fill for hover (red = unmerge, green = merge)
+  // Broken: merged polygon with a contained link now outside (e.g. after drag)
   const strokeWidth = mergeMode && isMergeHighlighted
     ? Math.max(polygonHighlightStyle.strokeWidth, 4)
     : polygonHighlightStyle.strokeWidth
-  const strokeColor = mergeMode && isMergeHighlighted
-    ? (isUnmergeCandidate ? '#f44336' : '#4caf50')
-    : obj.strokeColor
+  const strokeColor = isBroken
+    ? '#d32f2f'
+    : (mergeMode && isMergeHighlighted
+      ? (isUnmergeCandidate ? '#f44336' : '#4caf50')
+      : obj.strokeColor)
   const fillOpacity = mergeMode && isMergeHighlighted
     ? Math.min(obj.fillOpacity + 0.15, 0.6)
     : obj.fillOpacity
+  const strokeDasharray = isBroken ? '4 2' : undefined
 
   const handleClick = (e: React.MouseEvent) => {
     if (mergeMode && onMergePolygonClick) {
@@ -83,9 +89,13 @@ function renderDrawnObject(
         fill={obj.fillColor}
         stroke={strokeColor}
         strokeWidth={strokeWidth}
+        strokeDasharray={strokeDasharray}
         fillOpacity={fillOpacity}
         filter={polygonHighlightStyle.filter}
-        style={{ cursor: moveGroupIsActive ? 'move' : 'pointer', pointerEvents: 'all' }}
+        style={{
+          cursor: moveGroupIsActive ? 'move' : 'pointer',
+          pointerEvents: pointerEventsNoneForDrawPolygon ? 'none' : 'all'
+        }}
         onMouseEnter={mergeMode ? () => props.onMergePolygonHover?.(obj.id) : undefined}
         onMouseLeave={mergeMode ? () => props.onMergePolygonHover?.(null) : undefined}
         onClick={handleClick}

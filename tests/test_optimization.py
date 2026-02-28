@@ -23,6 +23,7 @@ from optimizers.scipy_optimizer import run_scipy_optimization
 from pylink_tools.mechanism import create_mechanism_fitness
 from pylink_tools.optimization_types import OptimizationResult
 from pylink_tools.optimization_types import TargetTrajectory
+from pylink_tools.optimization_types import TopologyVariationSpec
 from pylink_tools.optimize import optimize_trajectory
 from pylink_tools.trajectory_scoring import score_trajectory
 from target_gen.achievable_target import create_achievable_target
@@ -515,6 +516,225 @@ class TestTargetTrajectory:
 
         assert target.joint_name == 'coupler'
         assert target.n_steps == 2
+
+
+# =============================================================================
+# Test: TopologyVariationSpec
+# =============================================================================
+
+class TestTopologyVariationSpec:
+    """Tests for TopologyVariationSpec (topology optimization constraints)."""
+
+    def test_defaults(self):
+        """Default TopologyVariationSpec has expected values."""
+        spec = TopologyVariationSpec()
+        assert spec.min_links == 4
+        assert spec.max_links == 32
+        assert spec.min_nodes == 4
+        assert spec.max_nodes == 32
+        assert spec.new_link_length_min == 1.0
+        assert spec.new_link_length_max == 500.0
+        assert spec.allowed_new_joint_types == ['revolute']
+        assert spec.preserve_crank is True
+        assert spec.allow_attach_to_edges is None
+        assert spec.forbid_attach_to_edges == []
+
+    def test_to_dict_from_dict_roundtrip(self):
+        """to_dict and from_dict roundtrip."""
+        spec = TopologyVariationSpec(
+            min_links=4,
+            max_links=16,
+            new_link_length_min=5.0,
+            new_link_length_max=200.0,
+            allow_attach_to_edges=['e1', 'e2'],
+            forbid_attach_to_joints=['ground'],
+            allowed_new_joint_types=['revolute', 'fixed'],
+            preserve_crank=False,
+        )
+        data = spec.to_dict()
+        restored = TopologyVariationSpec.from_dict(data)
+        assert restored.min_links == spec.min_links
+        assert restored.max_links == spec.max_links
+        assert restored.new_link_length_min == spec.new_link_length_min
+        assert restored.new_link_length_max == spec.new_link_length_max
+        assert restored.allow_attach_to_edges == spec.allow_attach_to_edges
+        assert restored.forbid_attach_to_joints == spec.forbid_attach_to_joints
+        assert restored.allowed_new_joint_types == spec.allowed_new_joint_types
+        assert restored.preserve_crank == spec.preserve_crank
+
+
+# =============================================================================
+# Test: SCIP optimizer (discretized dimension-only)
+# =============================================================================
+
+class TestSCIPOptimizer:
+    """Tests for SCIP discretized optimization."""
+
+    def test_scip_returns_result_structure(self, fourbar_mechanism):
+        """SCIP returns OptimizationResult with expected fields (may be mock if pyscipopt missing)."""
+        target_joint = 'coupler_rocker_joint'
+        trajectory = fourbar_mechanism.get_trajectory(target_joint)
+        if trajectory is None or len(trajectory) == 0:
+            pytest.skip('Could not compute trajectory from mechanism')
+
+        target = TargetTrajectory(
+            joint_name=target_joint,
+            positions=[[float(x), float(y)] for x, y in trajectory],
+        )
+        mechanism_copy = fourbar_mechanism.copy()
+
+        result = optimize_trajectory(
+            mechanism_copy,
+            target,
+            method='scip',
+            discretization_steps=4,
+            verbose=False,
+        )
+
+        assert hasattr(result, 'success')
+        assert hasattr(result, 'optimized_dimensions')
+        assert hasattr(result, 'initial_error')
+        assert hasattr(result, 'final_error')
+        assert isinstance(result.optimized_dimensions, dict)
+
+    def test_scip_with_small_grid_improves_or_holds(self, fourbar_mechanism):
+        """When pyscipopt is available, SCIP with small grid runs and improves or holds error."""
+        try:
+            from pyscipopt import Model  # noqa: F401
+        except ImportError:
+            pytest.skip('pyscipopt not installed')
+
+        target_joint = 'coupler_rocker_joint'
+        trajectory = fourbar_mechanism.get_trajectory(target_joint)
+        if trajectory is None or len(trajectory) == 0:
+            pytest.skip('Could not compute trajectory from mechanism')
+
+        target = TargetTrajectory(
+            joint_name=target_joint,
+            positions=[[float(x), float(y)] for x, y in trajectory],
+        )
+        mechanism_copy = fourbar_mechanism.copy()
+
+        result = optimize_trajectory(
+            mechanism_copy,
+            target,
+            method='scip',
+            discretization_steps=4,
+            verbose=False,
+        )
+
+        assert result.success
+        assert result.final_error <= result.initial_error + 1e-9
+        assert result.iterations >= 1
+        assert result.convergence_history is not None
+        assert len(result.optimized_dimensions) >= 1
+
+    def test_scip_accepts_topology_variation_spec(self, fourbar_mechanism):
+        """Passing topology_variation_spec does not raise; SCIP runs dimension-only for now."""
+        try:
+            from pyscipopt import Model  # noqa: F401
+        except ImportError:
+            pytest.skip('pyscipopt not installed')
+
+        target_joint = 'coupler_rocker_joint'
+        trajectory = fourbar_mechanism.get_trajectory(target_joint)
+        if trajectory is None or len(trajectory) == 0:
+            pytest.skip('Could not compute trajectory from mechanism')
+
+        target = TargetTrajectory(
+            joint_name=target_joint,
+            positions=[[float(x), float(y)] for x, y in trajectory],
+        )
+        mechanism_copy = fourbar_mechanism.copy()
+        topo_spec = TopologyVariationSpec(min_links=4, max_links=8)
+
+        result = optimize_trajectory(
+            mechanism_copy,
+            target,
+            method='scip',
+            topology_variation_spec=topo_spec,
+            discretization_steps=4,
+            verbose=False,
+        )
+
+        assert result.success
+        assert result.best_topology_id is not None
+
+
+# =============================================================================
+# Test: Topology validity (topology_id, BadTopologyCache, Grashof)
+# =============================================================================
+
+class TestTopologyValidity:
+    """Tests for topology_validity module."""
+
+    def test_topology_id_from_edges(self):
+        """topology_id_from_edges returns canonical frozenset of node pairs."""
+        from pylink_tools.topology_validity import topology_id_from_edges
+
+        edges1 = {
+            'e1': {'source': 'A', 'target': 'B', 'distance': 10},
+            'e2': {'source': 'B', 'target': 'C', 'distance': 20},
+        }
+        edges2 = {
+            'x': {'source': 'B', 'target': 'A', 'distance': 5},
+            'y': {'source': 'C', 'target': 'B', 'distance': 15},
+        }
+        id1 = topology_id_from_edges(edges1)
+        id2 = topology_id_from_edges(edges2)
+        assert id1 == id2
+        assert len(id1) == 2
+        assert ('A', 'B') in id1
+        assert ('B', 'C') in id1
+
+    def test_bad_topology_cache(self):
+        """BadTopologyCache add_bad, is_bad, get_reason, to_report_list."""
+        from pylink_tools.topology_validity import BadTopologyCache, topology_id_from_edges
+
+        cache = BadTopologyCache()
+        tid = frozenset({('A', 'B'), ('B', 'C')})
+        assert not cache.is_bad(tid)
+        assert cache.get_reason(tid) is None
+
+        cache.add_bad(tid, 'non_grashof')
+        assert cache.is_bad(tid)
+        assert cache.get_reason(tid) == 'non_grashof'
+        assert len(cache) == 1
+        report = cache.to_report_list()
+        assert len(report) == 1
+        assert report[0]['reason'] == 'non_grashof'
+        assert 'topology_id' in report[0]
+
+    def test_is_grashof_compliant(self):
+        """Grashof: s + l <= p + q for four-bar."""
+        from pylink_tools.topology_validity import is_grashof_compliant
+
+        assert is_grashof_compliant([10.0, 20.0, 30.0, 40.0]) is True   # 10+40 <= 20+30
+        assert is_grashof_compliant([10.0, 20.0, 20.0, 40.0]) is False  # 10+40=50 > 20+20=40
+        assert is_grashof_compliant([1, 2, 3, 4]) is True
+        assert is_grashof_compliant([1, 2, 3]) is True  # not 4-bar: no reject
+
+    def test_check_mechanism_validity_uses_cache(self, fourbar_mechanism):
+        """check_mechanism_validity marks bad topology in cache when invalid."""
+        from pylink_tools.topology_validity import (
+            BadTopologyCache,
+            check_mechanism_validity,
+            topology_id_from_edges,
+        )
+
+        doc = fourbar_mechanism.to_dict()
+        edges = doc.get('linkage', {}).get('edges', {})
+        tid = topology_id_from_edges(edges)
+        cache = BadTopologyCache()
+        mech_copy = fourbar_mechanism.copy()
+        valid, reason = check_mechanism_validity(mech_copy, tid, cache, check_grashof=True)
+        # Four-bar with default lengths is typically Grashof and simulates
+        if valid:
+            assert reason is None
+            assert not cache.is_bad(tid)
+        else:
+            assert cache.is_bad(tid)
+            assert cache.get_reason(tid) in ('non_grashof', 'simulation_failed')
 
 
 if __name__ == '__main__':

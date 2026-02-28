@@ -21,9 +21,10 @@ export {
   getDistance,
   hasMovement,
   isValidPosition,
-  generatePathData
+  generatePathData,
+  filterTrajectoriesForRendering
 } from './utils'
-export type { HighlightStyle } from './utils'
+export type { HighlightStyle, TrajectoryDataForFilter, JointMetaForTrajectory } from './utils'
 
 // SVG Filters (should be included in <defs> section)
 export { SVGFilters } from './SVGFilters'

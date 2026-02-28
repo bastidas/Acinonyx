@@ -25,6 +25,8 @@ export const selectToolHandler: ToolHandler = {
     })
     context.setSelectedJoints([nearestJoint.name])
     context.setSelectedLinks([])
+    // Pause only: keep current frame (X/N) so mechanism does not jump to 1/N or N/N
+    context.pauseAnimation()
     context.showStatus(`Dragging ${nearestJoint.name}`, 'action')
     return true
   },

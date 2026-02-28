@@ -19,6 +19,7 @@ function renderTrajectory(
     trajectoryDotSize,
     trajectoryDotOutline,
     trajectoryDotOpacity,
+    showTrajectoryStepNumbers = false,
     trajectoryStyle,
     trajectoryColorCycle,
     jointColors,
@@ -82,20 +83,40 @@ function renderTrajectory(
           )}
 
           {/* Draw dots at each timestep (if trajectoryStyle includes dots) */}
-          {(trajectoryStyle === 'dots' || trajectoryStyle === 'both') && validPositions.map((pos, stepIndex) => (
-            <circle
-              key={`${jointName}-step-${stepIndex}`}
-              cx={unitsToPixels(pos[0])}
-              cy={unitsToPixels(pos[1])}
-              r={trajectoryDotSize}
-              fill={getTrajectoryColor(stepIndex, validPositions.length)}
-              stroke={trajectoryDotOutline ? '#fff' : 'none'}
-              strokeWidth={trajectoryDotOutline ? 1 : 0}
-              opacity={trajectoryDotOpacity}
-            >
-              <title>{`${jointName} step ${stepIndex + 1}/${validPositions.length}: (${pos[0]?.toFixed(1) ?? '?'}, ${pos[1]?.toFixed(1) ?? '?'})`}</title>
-            </circle>
-          ))}
+          {(trajectoryStyle === 'dots' || trajectoryStyle === 'both') && validPositions.map((pos, stepIndex) => {
+            const cx = unitsToPixels(pos[0])
+            const cy = unitsToPixels(pos[1])
+            const label = stepIndex + 1
+            return (
+              <g key={`${jointName}-step-${stepIndex}`}>
+                <circle
+                  cx={cx}
+                  cy={cy}
+                  r={trajectoryDotSize}
+                  fill={getTrajectoryColor(stepIndex, validPositions.length)}
+                  stroke={trajectoryDotOutline ? '#fff' : 'none'}
+                  strokeWidth={trajectoryDotOutline ? 1 : 0}
+                  opacity={trajectoryDotOpacity}
+                >
+                  <title>{`${jointName} step ${label}/${validPositions.length}: (${pos[0]?.toFixed(1) ?? '?'}, ${pos[1]?.toFixed(1) ?? '?'})`}</title>
+                </circle>
+                {showTrajectoryStepNumbers && (
+                  <text
+                    x={cx}
+                    y={cy - trajectoryDotSize - 4}
+                    textAnchor="middle"
+                    fontSize={10}
+                    fill="rgba(0,0,0,0.75)"
+                    stroke="rgba(255,255,255,0.9)"
+                    strokeWidth={1.5}
+                    paintOrder="stroke"
+                  >
+                    {label}
+                  </text>
+                )}
+              </g>
+            )
+          })}
         </>
       ) : (
         /* Non-moving joint: show a stationary indicator ring */

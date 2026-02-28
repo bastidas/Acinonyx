@@ -19,6 +19,7 @@ function renderLink(
 ): JSX.Element {
   const {
     linkThickness,
+    linkTransparency,
     darkMode,
     showLinkLabels,
     moveGroupIsActive,
@@ -65,8 +66,8 @@ function renderLink(
   const linkHighlightStyle = getHighlightStyle('link', linkHighlightType, baseLinkColor, linkThickness)
 
   // Use base stroke width - the glow filter handles the visual effect without changing line width
-  // This ensures ground links don't shrink on hover
   const effectiveStrokeWidth = linkThickness
+  const strokeOpacity = linkTransparency / 100
 
   // Calculate midpoint for label
   const midX = (position0[0] + position1[0]) / 2
@@ -98,6 +99,50 @@ function renderLink(
 
   const lineStyle = { cursor: moveGroupIsActive ? 'move' : 'pointer' as const }
 
+  // When using a glow filter, wrap the line in a group with an invisible rect so the filter
+  // region has a non-zero bounding box (vertical/horizontal lines have zero bbox and get clipped).
+  const GLOW_PAD_PX = 12
+  const MIN_BOX_PX = 24
+  const hasGlow = linkHighlightStyle.filter != null
+  const glowWrapper =
+    hasGlow &&
+    (() => {
+      const minX = Math.min(x1, x2) - GLOW_PAD_PX
+      const minY = Math.min(y1, y2) - GLOW_PAD_PX
+      const w = Math.max(Math.abs(x2 - x1) + 2 * GLOW_PAD_PX, MIN_BOX_PX)
+      const h = Math.max(Math.abs(y2 - y1) + 2 * GLOW_PAD_PX, MIN_BOX_PX)
+      return (
+        <g filter={linkHighlightStyle.filter} style={{ pointerEvents: 'none' }}>
+          <rect x={minX} y={minY} width={w} height={h} fill="none" visibility="hidden" aria-hidden />
+          <line
+            x1={x1}
+            y1={y1}
+            x2={x2}
+            y2={y2}
+            stroke={baseLinkColor}
+            strokeWidth={effectiveStrokeWidth}
+            strokeOpacity={strokeOpacity}
+            strokeLinecap="round"
+          />
+        </g>
+      )
+    })()
+
+  const visibleLine = hasGlow ? null : (
+    <line
+      x1={x1}
+      y1={y1}
+      x2={x2}
+      y2={y2}
+      stroke={baseLinkColor}
+      strokeWidth={effectiveStrokeWidth}
+      strokeOpacity={strokeOpacity}
+      strokeLinecap="round"
+      style={hitAreaStrokeWidthPx != null ? { ...lineStyle, pointerEvents: 'none' } : lineStyle}
+      {...(hitAreaStrokeWidthPx == null ? eventHandlers : {})}
+    />
+  )
+
   return (
     <g key={name}>
       {hitAreaStrokeWidthPx != null && (
@@ -113,18 +158,8 @@ function renderLink(
           {...eventHandlers}
         />
       )}
-      <line
-        x1={x1}
-        y1={y1}
-        x2={x2}
-        y2={y2}
-        stroke={baseLinkColor}
-        strokeWidth={effectiveStrokeWidth}
-        strokeLinecap="round"
-        filter={linkHighlightStyle.filter}
-        style={hitAreaStrokeWidthPx != null ? { ...lineStyle, pointerEvents: 'none' } : lineStyle}
-        {...(hitAreaStrokeWidthPx == null ? eventHandlers : {})}
-      />
+      {glowWrapper}
+      {visibleLine}
 
       {/* Link label - show on hover/selected, or when showLinkLabels is enabled */}
       {(showLinkLabels || isHovered || isSelected) && (

@@ -41,7 +41,7 @@ export interface OptimizationResult {
   message?: string
 }
 
-export type OptMethod = 'pso' | 'pylinkage' | 'scipy' | 'powell' | 'nelder-mead'
+export type OptMethod = 'pylinkage' | 'scipy' | 'powell' | 'nelder-mead' | 'scip'
 export type SmoothMethod = 'savgol' | 'moving_avg' | 'gaussian'
 export type ResampleMethod = 'parametric' | 'cubic' | 'linear'
 
@@ -112,6 +112,22 @@ export interface OptimizationToolbarProps {
   optTolerance: number
   setOptTolerance: (tol: number) => void
 
+  // PSO (pylinkage) extra parameters
+  optInertia: number
+  setOptInertia: (n: number) => void
+  optC1: number
+  setOptC1: (n: number) => void
+  optC2: number
+  setOptC2: (n: number) => void
+
+  // SCIP parameters
+  optDiscretizationSteps: number
+  setOptDiscretizationSteps: (n: number) => void
+  optTimeLimit: number
+  setOptTimeLimit: (n: number) => void
+  optGapLimit: number
+  setOptGapLimit: (n: number) => void
+
   // Bounds (deprecated - use optimizationConfig instead)
   optBoundsFactor: number
   setOptBoundsFactor: (factor: number) => void
@@ -123,8 +139,6 @@ export interface OptimizationToolbarProps {
   setOptimizationConfig?: (config: Record<string, unknown>) => void
 
   // Verbose & run
-  optVerbose: boolean
-  setOptVerbose: (verbose: boolean) => void
   isOptimizing: boolean
   /** Called with optional config when Run is clicked (e.g. MechVariationConfig from OptimizationPanel) */
   runOptimization: (config?: Record<string, unknown>) => void
@@ -160,10 +174,10 @@ export const OptimizationToolbar: React.FC<OptimizationToolbarProps> = (props) =
   const mechanismKey = useMemo(() => {
     if (!props.linkageDoc) return null
     try {
-      const doc = props.linkageDoc as { name?: string; linkage?: { joints?: Record<string, unknown>; edges?: Record<string, unknown> } }
+      const doc = props.linkageDoc as { name?: string; linkage?: { nodes?: Record<string, unknown>; edges?: Record<string, unknown> } }
       const keyParts = {
         name: doc.name,
-        jointCount: Object.keys(doc.linkage?.joints || {}).length,
+        jointCount: Object.keys(doc.linkage?.nodes || {}).length,
         edgeCount: Object.keys(doc.linkage?.edges || {}).length
       }
       return JSON.stringify(keyParts)
@@ -172,22 +186,34 @@ export const OptimizationToolbar: React.FC<OptimizationToolbarProps> = (props) =
     }
   }, [props.linkageDoc])
 
+  const prevMechanismKeyRef = useRef<string | null>(null)
   useEffect(() => {
-    setIsUserTargetJointLocked(false)
-    isUserTargetJointLockedRef.current = false
-    setTargetJointState(null)
+    // Only clear target joint when mechanism actually changed (user loaded different mechanism), not on first mount
+    const mechanismChanged = prevMechanismKeyRef.current !== null && prevMechanismKeyRef.current !== mechanismKey
+    prevMechanismKeyRef.current = mechanismKey
+    if (mechanismChanged) {
+      setIsUserTargetJointLocked(false)
+      isUserTargetJointLockedRef.current = false
+      setTargetJointState(null)
+    }
   }, [mechanismKey])
 
-  const updateSelectedPathTargetJoint = useCallback((joint: string | null) => {
-    if (!selectedPath) {
-      console.log('[OptToolbar] Not updating path - no path selected')
-      return
+  // Clear targetJoint when it's not in the current mechanism's joints (e.g. after load/switch) to avoid MUI Select out-of-range
+  const jointNames = useMemo(() => new Set(props.joints.map(j => j.name)), [props.joints])
+  useEffect(() => {
+    if (targetJoint != null && !jointNames.has(targetJoint)) {
+      setTargetJointState(null)
+      setIsUserTargetJointLocked(false)
+      isUserTargetJointLockedRef.current = false
     }
+  }, [targetJoint, jointNames])
+
+  const updateSelectedPathTargetJoint = useCallback((joint: string | null) => {
+    if (!selectedPath) return
     const normalized = joint || undefined
     if (selectedPath.targetJoint === normalized) {
       return
     }
-    console.log('[OptToolbar] Updating path targetJoint:', normalized)
     props.setTargetPaths(prev => prev.map(path =>
       path.id === selectedPath.id ? { ...path, targetJoint: normalized } : path
     ))
@@ -196,15 +222,8 @@ export const OptimizationToolbar: React.FC<OptimizationToolbarProps> = (props) =
   const selectedPathTargetJoint = selectedPath?.targetJoint ?? null
 
   useEffect(() => {
-    console.log('[OptToolbar] Sync effect:', { selectedPathId, selectedPathTargetJoint, targetJoint, locked: isUserTargetJointLockedRef.current })
-    
     if (!selectedPathId) {
-      // Don't clear if user manually set a joint (locked)
-      if (targetJoint !== null && !isUserTargetJointLockedRef.current) {
-        console.log('[OptToolbar] Clearing joint (no path selected, not locked)')
-        setTargetJointState(null)
-      }
-      // Keep user lock state when no path selected (user might be setting joint before drawing path)
+      // When no path is selected, leave targetJoint as-is (user selection or auto-select both stick)
       return
     }
 
@@ -212,18 +231,24 @@ export const OptimizationToolbar: React.FC<OptimizationToolbarProps> = (props) =
       return
     }
 
+    // Path has no joint but toolbar shows one: always apply toolbar to path so the visible
+    // selection applies to the current path (e.g. after drawing a new trajectory). Do this
+    // regardless of "user locked" so preprocessing/optimization use the visible joint.
+    const jointNames = new Set(props.joints.map(j => j.name))
+    if (selectedPathTargetJoint == null && targetJoint != null && jointNames.has(targetJoint)) {
+      updateSelectedPathTargetJoint(targetJoint)
+      return
+    }
+
     if (selectedPathTargetJoint !== targetJoint) {
       if (isUserTargetJointLockedRef.current) {
-        console.log('[OptToolbar] Skipping sync - user locked')
         return
       }
-      console.log('[OptToolbar] Syncing to path:', selectedPathTargetJoint)
       setTargetJointState(selectedPathTargetJoint)
     }
-  }, [selectedPathId, selectedPath, selectedPathTargetJoint, targetJoint])
+  }, [selectedPathId, selectedPath, selectedPathTargetJoint, targetJoint, props.joints, updateSelectedPathTargetJoint])
 
   const setTargetJointFromSystem = useCallback((joint: string | null) => {
-    console.log('[OptToolbar] System setting joint:', joint)
     setIsUserTargetJointLocked(false)
     isUserTargetJointLockedRef.current = false
     setTargetJointState(joint)
@@ -231,7 +256,6 @@ export const OptimizationToolbar: React.FC<OptimizationToolbarProps> = (props) =
   }, [updateSelectedPathTargetJoint])
 
   const handleTargetJointChange = useCallback((joint: string | null) => {
-    console.log('[OptToolbar] USER changing joint:', joint, 'locked:', Boolean(joint))
     const locked = Boolean(joint)
     setIsUserTargetJointLocked(locked)
     isUserTargetJointLockedRef.current = locked
@@ -275,6 +299,7 @@ export const OptimizationToolbar: React.FC<OptimizationToolbarProps> = (props) =
           dimensionInfoError={dimensionInfoError}
           targetJoint={targetJoint}
           setTargetJoint={setTargetJointFromSystem}
+          onTargetJointChange={handleTargetJointChange}
           allowAutoTargetJointSelection={!isUserTargetJointLocked}
         />
       </Box>
@@ -305,8 +330,18 @@ export const OptimizationToolbar: React.FC<OptimizationToolbarProps> = (props) =
           setOptMaxIterations={props.setOptMaxIterations}
           optTolerance={props.optTolerance}
           setOptTolerance={props.setOptTolerance}
-          optVerbose={props.optVerbose}
-          setOptVerbose={props.setOptVerbose}
+          optInertia={props.optInertia}
+          setOptInertia={props.setOptInertia}
+          optC1={props.optC1}
+          setOptC1={props.setOptC1}
+          optC2={props.optC2}
+          setOptC2={props.setOptC2}
+          optDiscretizationSteps={props.optDiscretizationSteps}
+          setOptDiscretizationSteps={props.setOptDiscretizationSteps}
+          optTimeLimit={props.optTimeLimit}
+          setOptTimeLimit={props.setOptTimeLimit}
+          optGapLimit={props.optGapLimit}
+          setOptGapLimit={props.setOptGapLimit}
           isOptimizing={props.isOptimizing}
           runOptimization={props.runOptimization}
           optimizationResult={props.optimizationResult}

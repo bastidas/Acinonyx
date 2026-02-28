@@ -287,10 +287,10 @@ html, body {
   color: #999 !important;
 }
 
-/* Footer toolbar logo */
+/* Footer toolbar logo (cheetah) - hover scale via parent IconButton */
 .footer-logo {
   opacity: 0.7;
-  transition: opacity 0.2s ease;
+  transition: opacity 0.2s ease, transform 0.2s ease;
 }
 
 .footer-logo:hover {
@@ -383,6 +383,12 @@ html, body {
 .dark-mode .animate-toolbar {
   background-color: rgba(30, 30, 30, 0.95) !important;
   border-color: rgba(255, 255, 255, 0.15) !important;
+}
+
+/* Frame counter (01/N) must be light in dark mode - override any inherited color */
+.dark-mode .animate-toolbar .animate-toolbar-frame-counter,
+.dark-mode .animate-toolbar .animate-toolbar-frame-counter .MuiTypography-root {
+  color: #ffffff !important;
 }
 
 /* =============================================================================

@@ -25,11 +25,25 @@ from typing import Literal
 from typing import TYPE_CHECKING
 
 import numpy as np
-import pyswarms.backend as P
-from pyswarms.backend.handlers import BoundaryHandler
-from pyswarms.backend.handlers import VelocityHandler
-from pyswarms.backend.topology.base import Topology
 from scipy.spatial.distance import pdist
+
+try:
+    import pyswarms.backend as P
+    from pyswarms.backend.handlers import BoundaryHandler
+    from pyswarms.backend.handlers import VelocityHandler
+    from pyswarms.backend.topology.base import Topology
+    _pyswarms_available = True
+except ImportError as e:
+    logger = logging.getLogger(__name__)
+    logger.error(
+        "pyswarms not installed (required for PSO niching). Install with: pip install -e '.[all]'. %s",
+        e,
+    )
+    P = None
+    BoundaryHandler = None  # type: ignore[misc, assignment]
+    VelocityHandler = None  # type: ignore[misc, assignment]
+    Topology = object  # type: ignore[misc, assignment]  # fallback so NichingTopology can be defined
+    _pyswarms_available = False
 from scipy.spatial.distance import squareform
 from sklearn.cluster import DBSCAN
 
@@ -864,7 +878,7 @@ def initialize_swarm_positions(
                 seed=seed,
             )
             samples = result.samples
-            logger.info(f'Viable initialization: {len(samples)}/{n_particles} from {result.n_generated} attempts')
+            logger.debug(f'Viable initialization: {len(samples)}/{n_particles} from {result.n_generated} attempts')
 
             if len(samples) < n_particles:
                 n_fill = n_particles - len(samples)
@@ -917,7 +931,7 @@ def initialize_swarm_positions(
                     sorted_indices = valid_indices[np.argsort(result.scores[valid_indices])[:n_particles]]
                     samples = result.samples[sorted_indices]
                     scores = result.scores[sorted_indices]
-                    logger.info(f'Fitness initialization: best score = {scores[0]:.4f}')
+                    logger.debug(f'Fitness initialization: best score = {scores[0]:.4f}')
                 else:
                     samples = result.samples[:n_particles]
                     scores = None
@@ -983,6 +997,14 @@ def run_pso_niching_multi(
     Returns:
         MultiSolutionResult with one solution per stable species
     """
+    if not _pyswarms_available:
+        logger.error(
+            "pyswarms is required for PSO niching. Install with: pip install -e '.[all]'",
+        )
+        raise ImportError(
+            "pyswarms is required for PSO niching. Install with: pip install -e '.[all]'",
+        )
+
     from pylink_tools.mechanism import Mechanism as MechanismType, create_mechanism_fitness
 
     # Validate mechanism type
@@ -1048,16 +1070,6 @@ def run_pso_niching_multi(
     initial_values = np.array(dimension_bounds_spec.initial_values)
     initial_error = fitness_func(tuple(initial_values))
 
-    if verbose:
-        logger.info('Starting PSO Niching multi-solution optimization')
-        logger.info(f'  Dimensions: {n_dims}')
-        logger.info(f'  Particles: {config.n_particles}')
-        logger.info(f'  Iterations: {config.n_iterations}')
-        logger.info(f'  Species radius: {config.species_radius}')
-        logger.info(f'  Speciation method: {config.speciation_method}')
-        logger.info(f'  Init mode: {config.init_mode}')
-        logger.info(f'  Initial error: {initial_error:.6f}')
-
     # Initialize swarm positions
     # TODO: Refactor initialize_swarm_positions to take Mechanism directly
     pylink_data_for_init = mechanism.to_dict()
@@ -1115,25 +1127,11 @@ def run_pso_niching_multi(
 
         convergence_history.append(float(swarm.best_cost))
 
-        if verbose and (iteration + 1) % 20 == 0:
-            info = topology.get_species_info()
-            logger.info(
-                f'  Iteration {iteration + 1}/{config.n_iterations}: '
-                f'best={swarm.best_cost:.6f}, species={info["n_species"]}',
-            )
-
         swarm.velocity = topology.compute_velocity(swarm, vh=vh, bounds=bounds)
         swarm.position = topology.compute_position(swarm, bounds=bounds, bh=bh)
 
     # Final species update
     topology.compute_gbest(swarm)
-
-    if verbose:
-        info = topology.get_species_info()
-        logger.info('PSO Niching completed')
-        logger.info(f'  Total evaluations: {total_evaluations}')
-        logger.info(f'  Final species: {info["n_species"]}')
-        logger.info(f'  Best error: {swarm.best_cost:.6f}')
 
     # Extract solutions
     solutions = []

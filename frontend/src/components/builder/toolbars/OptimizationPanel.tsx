@@ -10,9 +10,10 @@ import {
   Box, Typography, Button, Tooltip, Divider, FormControl, Select, MenuItem,
   TextField, FormControlLabel, Switch, Dialog, DialogTitle, DialogContent,
   DialogActions, Accordion, AccordionSummary, AccordionDetails, Stack,
-  IconButton
+  IconButton, CircularProgress
 } from '@mui/material'
 import { Settings, Close, ExpandMore } from '@mui/icons-material'
+import { colors } from '../../../theme'
 import { canSimulate, type TrajectoryData } from '../../AnimateSimulate'
 import type { PylinkJoint } from '../types'
 import { MIN_SIMULATION_STEPS, MAX_SIMULATION_STEPS } from '../constants'
@@ -23,7 +24,7 @@ import { StaticJointMovementConfig } from './StaticJointMovementConfig'
 // Removed module-level state - using React.memo instead to prevent remounting
 
 // Types (avoid circular dependency by defining locally)
-export type OptMethod = 'pso' | 'pylinkage' | 'scipy' | 'powell' | 'nelder-mead'
+export type OptMethod = 'pylinkage' | 'scipy' | 'powell' | 'nelder-mead' | 'scip'
 
 export interface TargetPath {
   id: string
@@ -120,10 +121,20 @@ export interface OptimizationPanelProps {
   setOptMaxIterations: (n: number) => void
   optTolerance: number
   setOptTolerance: (tol: number) => void
+  optInertia: number
+  setOptInertia: (n: number) => void
+  optC1: number
+  setOptC1: (n: number) => void
+  optC2: number
+  setOptC2: (n: number) => void
+  optDiscretizationSteps: number
+  setOptDiscretizationSteps: (n: number) => void
+  optTimeLimit: number
+  setOptTimeLimit: (n: number) => void
+  optGapLimit: number
+  setOptGapLimit: (n: number) => void
 
   // Execution
-  optVerbose: boolean
-  setOptVerbose: (verbose: boolean) => void
   isOptimizing: boolean
   runOptimization: (config: MechVariationConfig) => void
   optimizationResult: OptimizationResult | null
@@ -133,37 +144,37 @@ export interface OptimizationPanelProps {
   isSyncedToOptimizer?: boolean
 }
 
-// Method descriptions
-const methodDescriptions: Record<string, { name: string; description: string; pros: string; cons: string }> = {
-  'pso': {
-    name: 'Particle Swarm Optimization',
-    description: 'Bio-inspired algorithm where particles explore the solution space, sharing information about good solutions.',
-    pros: 'Robust, handles non-convex problems well, good at avoiding local minima',
-    cons: 'Slower than gradient methods, requires tuning particles/iterations'
-  },
+// Method descriptions: compact tooltip with class, scope, and what it does
+const methodDescriptions: Record<string, { name: string; class: string; scope: string; summary: string }> = {
   'pylinkage': {
-    name: 'Pylinkage PSO',
-    description: 'Native PSO implementation from the pylinkage library, optimized for linkage mechanisms.',
-    pros: 'Designed specifically for linkages, well-tested',
-    cons: 'Similar tradeoffs to standard PSO'
+    name: 'Particle Swarm',
+    class: 'Swarm / population-based',
+    scope: 'Global',
+    summary: 'Particles explore the space and share best positions. Good for non-convex and linkage-specific tuning.'
   },
   'scipy': {
     name: 'L-BFGS-B (SciPy)',
-    description: 'Quasi-Newton method with bounded constraints. Uses gradient approximation for fast convergence.',
-    pros: 'Very fast convergence for smooth problems',
-    cons: 'Can get stuck in local minima, requires good initial guess'
+    class: 'Gradient-based (quasi-Newton)',
+    scope: 'Local',
+    summary: 'Bounded quasi-Newton. Fast convergence when the landscape is smooth and a good initial guess is available.'
   },
   'powell': {
     name: "Powell's Method",
-    description: 'Direction-set method that minimizes along each coordinate direction sequentially.',
-    pros: 'Gradient-free, good for noisy functions',
-    cons: 'Slower than gradient methods, may not find global optimum'
+    class: 'Gradient-free (direction set)',
+    scope: 'Local',
+    summary: 'Minimizes along coordinate directions in sequence. No derivatives; good when gradients are noisy or unavailable.'
   },
   'nelder-mead': {
     name: 'Nelder-Mead Simplex',
-    description: 'Direct search method using a simplex of N+1 points that adapts to the function landscape.',
-    pros: 'Very robust, no gradients needed, handles discontinuities',
-    cons: 'Slow for high dimensions, local optimizer only'
+    class: 'Gradient-free (simplex)',
+    scope: 'Local',
+    summary: 'Direct search with a simplex of points. Robust, no gradients; can handle discontinuities.'
+  },
+  'scip': {
+    name: 'SCIP',
+    class: 'Grid / discrete',
+    scope: 'Global (over grid)',
+    summary: 'Discretized grid search over bounds. Suited to discrete or heavily constrained dimensions; grid size limits apply.'
   }
 }
 
@@ -193,8 +204,18 @@ export const OptimizationPanel: React.FC<OptimizationPanelProps> = ({
   setOptMaxIterations,
   optTolerance,
   setOptTolerance,
-  optVerbose,
-  setOptVerbose,
+  optInertia,
+  setOptInertia,
+  optC1,
+  setOptC1,
+  optC2,
+  setOptC2,
+  optDiscretizationSteps,
+  setOptDiscretizationSteps,
+  optTimeLimit,
+  setOptTimeLimit,
+  optGapLimit,
+  setOptGapLimit,
   isOptimizing,
   runOptimization,
   optimizationResult,
@@ -210,25 +231,6 @@ export const OptimizationPanel: React.FC<OptimizationPanelProps> = ({
   const selectedPath = targetPaths.find(p => p.id === selectedPathId)
   const canOptimize = Boolean(selectedPath && targetJoint && hasCrank && !isOptimizing)
   const currentMethodInfo = methodDescriptions[optMethod]
-  const jointOptions = useMemo(() => {
-    const dedupe = (list: PylinkJoint[]) => {
-      const seen = new Set<string>()
-      return list.filter(j => {
-        if (seen.has(j.name)) {
-          return false
-        }
-        seen.add(j.name)
-        return true
-      })
-    }
-
-    const revoluteJoints = dedupe(joints.filter(j => j.type === 'Revolute'))
-    if (revoluteJoints.length > 0) {
-      return revoluteJoints
-    }
-
-    return dedupe(joints.filter(j => j.type === 'Crank'))
-  }, [joints])
 
   // Dialog state
   const [showOptimizationBoundsDialog, setShowOptimizationBoundsDialog] = useState(false)
@@ -266,258 +268,255 @@ export const OptimizationPanel: React.FC<OptimizationPanelProps> = ({
 
   const [optimizationConfig, setOptimizationConfig] = useState<MechVariationConfig>(defaultOptimizationConfig)
 
+  const labelWidth = 140
+
   return (
-    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-      {/* Target Joint Selector */}
-      <Box>
-        <Typography variant="subtitle2" sx={{ fontWeight: 700, color: '#1976d2', mb: 1, fontSize: '0.8rem' }}>
-          Target Joint
-        </Typography>
-        <FormControl size="small" fullWidth>
-          <Select
-            value={targetJoint || ''}
-            onChange={(e) => onTargetJointChange(e.target.value ? (e.target.value as string) : null)}
-            displayEmpty
-            sx={{ fontSize: '0.85rem' }}
-          >
-            <MenuItem value="" sx={{ fontSize: '0.85rem' }}>
-              <em>Select joint...</em>
-            </MenuItem>
-            {jointOptions.map(j => (
-              <MenuItem key={j.name} value={j.name} sx={{ fontSize: '0.85rem' }}>
-                {j.name} ({j.type})
-              </MenuItem>
-            ))}
-          </Select>
-        </FormControl>
-        <Typography variant="caption" sx={{ color: 'text.secondary', display: 'block', mt: 0.5 }}>
-          Applies to the active target path, achievable target generation, and optimization.
-        </Typography>
-      </Box>
-
-      <Divider />
-
-      {/* Optimization Bounds - Button to open dialog */}
-      <Box>
-        <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 1 }}>
-          <Typography variant="subtitle2" sx={{ fontWeight: 700, color: '#1976d2', display: 'flex', alignItems: 'center', gap: 1, fontSize: '0.8rem' }}>
-            Optimization Bounds
+    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5 }}>
+      {/* Right column: N_STEPS first (label left, control right) */}
+      <Stack direction="row" alignItems="center" gap={1.5} sx={{ minHeight: 40 }}>
+        <Tooltip title="Number of trajectory points for simulation and optimization. Should match preprocessed trajectory points." placement="top">
+          <Typography variant="body2" sx={{ color: 'text.secondary', minWidth: labelWidth, cursor: 'help', fontSize: '0.8rem' }}>
+            Trajectory steps
           </Typography>
-          <Button
-            size="small"
-            variant="outlined"
-            startIcon={<Settings />}
-            onClick={() => setShowOptimizationBoundsDialog(true)}
-            sx={{ fontSize: '0.75rem', textTransform: 'none' }}
-          >
-            Configure Optimization Bounds
-          </Button>
-        </Box>
-        <Typography variant="caption" sx={{ color: 'text.secondary', fontStyle: 'italic', display: 'block', mt: 0.5 }}>
-          Click "Configure Optimization Bounds" to set dimension variation and static joint movement settings
-        </Typography>
-      </Box>
-
-      <Divider />
-
-      {/* Simulation Steps */}
-      <Box>
-        <Typography variant="subtitle2" sx={{ fontWeight: 700, color: '#6a1b9a', mb: 1, display: 'flex', alignItems: 'center', fontSize: '0.8rem' }}>
-          Simulation Steps
-        </Typography>
-        <Tooltip title="Number of trajectory points for simulation and optimization. Higher = more precision but slower. Should match preprocessed trajectory points." placement="right">
-          <TextField
-            type="number"
-            size="small"
-            fullWidth
-            label="N_STEPS"
-            value={simulationStepsInput}
-            onChange={(e) => setSimulationStepsInput(e.target.value)}
-            inputProps={{ min: MIN_SIMULATION_STEPS, max: MAX_SIMULATION_STEPS, step: 4 }}
-            helperText={`Range: ${MIN_SIMULATION_STEPS}-${MAX_SIMULATION_STEPS}. Current: ${simulationSteps}`}
-            sx={{ '& .MuiInputBase-input': { fontSize: '0.85rem' } }}
-          />
         </Tooltip>
-      </Box>
+        <TextField
+          type="number"
+          size="small"
+          value={simulationStepsInput}
+          onChange={(e) => setSimulationStepsInput(e.target.value)}
+          inputProps={{ min: MIN_SIMULATION_STEPS, max: MAX_SIMULATION_STEPS, step: 4 }}
+          sx={{ width: 96, '& .MuiInputBase-input': { fontSize: '0.85rem' } }}
+        />
+        <Typography variant="caption" sx={{ color: 'text.secondary', fontSize: '0.75rem' }}>
+          {MIN_SIMULATION_STEPS}–{MAX_SIMULATION_STEPS}
+        </Typography>
+      </Stack>
+
+      {/* Configure Optimization Bounds — button only, no section label */}
+      <Button
+        size="small"
+        variant="outlined"
+        startIcon={<Settings />}
+        onClick={() => setShowOptimizationBoundsDialog(true)}
+        sx={{ fontSize: '0.75rem', textTransform: 'none', alignSelf: 'flex-start' }}
+      >
+        Configure Optimization Bounds
+      </Button>
 
       <Divider />
 
-      {/* Optimization Method */}
-      <Box>
-        <Typography variant="subtitle2" sx={{ fontWeight: 700, color: '#1976d2', mb: 1, display: 'flex', alignItems: 'center', fontSize: '0.8rem' }}>
+      {/* Method: label left, selector right */}
+      <Stack direction="row" alignItems="center" gap={1.5} sx={{ minHeight: 40 }}>
+        <Typography variant="body2" sx={{ color: 'text.secondary', minWidth: labelWidth, fontSize: '0.8rem' }}>
           Method
         </Typography>
-
-        <FormControl size="small" fullWidth sx={{ mb: 1 }}>
-          <Select
-            value={optMethod}
-            onChange={(e) => setOptMethod(e.target.value as OptMethod)}
-            sx={{ fontSize: '0.85rem' }}
-          >
-            <MenuItem value="pso">Particle Swarm (PSO)</MenuItem>
-            <MenuItem value="pylinkage">Pylinkage PSO</MenuItem>
-            <MenuItem value="scipy">L-BFGS-B (SciPy)</MenuItem>
-            <MenuItem value="powell">Powell's Method</MenuItem>
-            <MenuItem value="nelder-mead">Nelder-Mead Simplex</MenuItem>
-          </Select>
-        </FormControl>
-
-        {/* Method description */}
-        <Box sx={{
-          p: 1.5,
-          mb: 2,
-          borderRadius: 1,
-          bgcolor: 'rgba(25, 118, 210, 0.05)',
-          border: '1px solid rgba(25, 118, 210, 0.2)'
-        }}>
-          <Typography variant="caption" sx={{ fontWeight: 600, color: '#1976d2', display: 'block' }}>
-            {currentMethodInfo.name}
-          </Typography>
-          <Typography variant="caption" sx={{ color: 'text.secondary', display: 'block', mt: 0.5 }}>
-            {currentMethodInfo.description}
-          </Typography>
-          <Box sx={{ mt: 1, display: 'flex', gap: 2 }}>
-            <Box sx={{ flex: 1 }}>
-              <Typography variant="caption" sx={{ color: '#2e7d32', fontWeight: 500 }}>Pros</Typography>
-              <Typography variant="caption" sx={{ color: 'text.secondary', display: 'block', fontSize: '0.65rem' }}>
-                {currentMethodInfo.pros}
-              </Typography>
+        <Tooltip
+          title={
+            <Box component="span" sx={{ display: 'block', maxWidth: 300 }}>
+              <strong>{currentMethodInfo.name}</strong>
+              <br />
+              <span style={{ opacity: 0.9 }}>{currentMethodInfo.class} · {currentMethodInfo.scope}</span>
+              <br />
+              {currentMethodInfo.summary}
             </Box>
-            <Box sx={{ flex: 1 }}>
-              <Typography variant="caption" sx={{ color: '#d32f2f', fontWeight: 500 }}>Cons</Typography>
-              <Typography variant="caption" sx={{ color: 'text.secondary', display: 'block', fontSize: '0.65rem' }}>
-                {currentMethodInfo.cons}
-              </Typography>
-            </Box>
-          </Box>
-        </Box>
-      </Box>
+          }
+          placement="right"
+        >
+          <FormControl size="small" sx={{ minWidth: 180 }}>
+            <Select
+              value={optMethod}
+              onChange={(e) => setOptMethod(e.target.value as OptMethod)}
+              sx={{ fontSize: '0.85rem' }}
+            >
+              <MenuItem value="pylinkage">Particle Swarm</MenuItem>
+              <MenuItem value="scipy">L-BFGS-B (SciPy)</MenuItem>
+              <MenuItem value="powell">Powell's Method</MenuItem>
+              <MenuItem value="nelder-mead">Nelder-Mead Simplex</MenuItem>
+              <MenuItem value="scip">SCIP</MenuItem>
+            </Select>
+          </FormControl>
+        </Tooltip>
+      </Stack>
 
       <Divider />
 
-      {/* Hyperparameters */}
-      <Box>
-        <Typography variant="subtitle2" sx={{ fontWeight: 700, color: '#7b1fa2', mb: 1, display: 'flex', alignItems: 'center', fontSize: '0.8rem' }}>
+      {/* Hyperparameters — compact: label + control on same row; iterations first */}
+      <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+        <Typography variant="subtitle2" sx={{ fontWeight: 700, color: '#7b1fa2', mb: 0.5, fontSize: '0.8rem' }}>
           Hyperparameters
         </Typography>
 
-        {/* PSO-specific parameters */}
-        {(optMethod === 'pso' || optMethod === 'pylinkage') && (
+        {/* Particle Swarm (pylinkage): Iterations first, then rest */}
+        {optMethod === 'pylinkage' && (
           <>
-            <Box sx={{ mb: 1.5 }}>
-              <Tooltip title="Number of particles in the swarm. More particles = better exploration but slower. Typical: 20-50" placement="left">
-                <Typography variant="caption" sx={{ color: 'text.secondary', display: 'block', mb: 0.5, cursor: 'help' }}>
-                  Swarm Size (Particles)
-                </Typography>
+            <Stack direction="row" alignItems="center" gap={1.5} sx={{ minHeight: 40 }}>
+              <Tooltip title="Iterations for the swarm. Typical: 256–1024" placement="left">
+                <Typography variant="body2" sx={{ color: 'text.secondary', minWidth: labelWidth, cursor: 'help', fontSize: '0.8rem' }}>Iterations</Typography>
               </Tooltip>
               <TextField
                 type="number"
                 size="small"
-                fullWidth
-                value={optNParticles}
-                onChange={(e) => setOptNParticles(Math.max(5, Math.min(1024, parseInt(e.target.value) || 32)))}
-                inputProps={{ min: 5, max: 1024, step: 16 }}
-                sx={{ '& .MuiInputBase-input': { fontSize: '0.85rem' } }}
-              />
-            </Box>
-
-            <Box sx={{ mb: 1.5 }}>
-              <Tooltip title="Number of iterations for the swarm. More iterations = better convergence but slower. Typical: 256-1024, max 10000" placement="left">
-                <Typography variant="caption" sx={{ color: 'text.secondary', display: 'block', mb: 0.5, cursor: 'help' }}>
-                  Iterations
-                </Typography>
-              </Tooltip>
-              <TextField
-                type="number"
-                size="small"
-                fullWidth
                 value={optIterations}
                 onChange={(e) => setOptIterations(Math.max(10, Math.min(10000, parseInt(e.target.value) || 512)))}
                 inputProps={{ min: 10, max: 10000, step: 64 }}
-                sx={{ '& .MuiInputBase-input': { fontSize: '0.85rem' } }}
+                sx={{ width: 96, '& .MuiInputBase-input': { fontSize: '0.85rem' } }}
               />
-            </Box>
-          </>
-        )}
-
-        {/* SciPy-specific parameters */}
-        {(optMethod === 'scipy' || optMethod === 'powell' || optMethod === 'nelder-mead') && (
-          <>
-            <Box sx={{ mb: 1.5 }}>
-              <Tooltip title="Maximum number of function evaluations. Prevents infinite loops. Typical: 100-1000" placement="left">
-                <Typography variant="caption" sx={{ color: 'text.secondary', display: 'block', mb: 0.5, cursor: 'help' }}>
-                  Max Iterations
-                </Typography>
+            </Stack>
+            <Stack direction="row" alignItems="center" gap={1.5} sx={{ minHeight: 40 }}>
+              <Tooltip title="Swarm size. Typical: 20–50" placement="left">
+                <Typography variant="body2" sx={{ color: 'text.secondary', minWidth: labelWidth, cursor: 'help', fontSize: '0.8rem' }}>Particles</Typography>
               </Tooltip>
               <TextField
                 type="number"
                 size="small"
-                fullWidth
-                value={optMaxIterations}
-                onChange={(e) => setOptMaxIterations(Math.max(10, Math.min(10000, parseInt(e.target.value) || 100)))}
-                inputProps={{ min: 10, max: 10000, step: 50 }}
-                sx={{ '& .MuiInputBase-input': { fontSize: '0.85rem' } }}
+                value={optNParticles}
+                onChange={(e) => setOptNParticles(Math.max(5, Math.min(1024, parseInt(e.target.value) || 32)))}
+                inputProps={{ min: 5, max: 1024, step: 16 }}
+                sx={{ width: 96, '& .MuiInputBase-input': { fontSize: '0.85rem' } }}
               />
-            </Box>
+            </Stack>
+            <Stack direction="row" alignItems="center" gap={1.5} sx={{ minHeight: 40 }}>
+              <Tooltip title="Inertia weight (w). Typical: 0.5–0.9" placement="left">
+                <Typography variant="body2" sx={{ color: 'text.secondary', minWidth: labelWidth, cursor: 'help', fontSize: '0.8rem' }}>Inertia (w)</Typography>
+              </Tooltip>
+              <TextField
+                type="number"
+                size="small"
+                value={optInertia}
+                onChange={(e) => setOptInertia(Math.max(0.1, Math.min(2, parseFloat(e.target.value) || 0.7)))}
+                inputProps={{ min: 0.1, max: 2, step: 0.1 }}
+                sx={{ width: 96, '& .MuiInputBase-input': { fontSize: '0.85rem' } }}
+              />
+            </Stack>
+            <Stack direction="row" alignItems="center" gap={1.5} sx={{ minHeight: 40 }}>
+              <Tooltip title="Cognitive coefficient (c1)" placement="left">
+                <Typography variant="body2" sx={{ color: 'text.secondary', minWidth: labelWidth, cursor: 'help', fontSize: '0.8rem' }}>C1 (leader)</Typography>
+              </Tooltip>
+              <TextField
+                type="number"
+                size="small"
+                value={optC1}
+                onChange={(e) => setOptC1(Math.max(0, Math.min(5, parseFloat(e.target.value) || 1.5)))}
+                inputProps={{ min: 0, max: 5, step: 0.1 }}
+                sx={{ width: 96, '& .MuiInputBase-input': { fontSize: '0.85rem' } }}
+              />
+            </Stack>
+            <Stack direction="row" alignItems="center" gap={1.5} sx={{ minHeight: 40 }}>
+              <Tooltip title="Social coefficient (c2)" placement="left">
+                <Typography variant="body2" sx={{ color: 'text.secondary', minWidth: labelWidth, cursor: 'help', fontSize: '0.8rem' }}>C2 (follower)</Typography>
+              </Tooltip>
+              <TextField
+                type="number"
+                size="small"
+                value={optC2}
+                onChange={(e) => setOptC2(Math.max(0, Math.min(5, parseFloat(e.target.value) || 1.5)))}
+                inputProps={{ min: 0, max: 5, step: 0.1 }}
+                sx={{ width: 96, '& .MuiInputBase-input': { fontSize: '0.85rem' } }}
+              />
+            </Stack>
+          </>
+        )}
 
-            <Box sx={{ mb: 1.5 }}>
-              <Tooltip title="Convergence tolerance. Smaller = more precise but slower. Typical: 1e-4 to 1e-8" placement="left">
-                <Typography variant="caption" sx={{ color: 'text.secondary', display: 'block', mb: 0.5, cursor: 'help' }}>
-                  Tolerance
-                </Typography>
+        {/* SciPy (L-BFGS-B, Powell, Nelder-Mead): Max iterations first, then tolerance */}
+        {(optMethod === 'scipy' || optMethod === 'powell' || optMethod === 'nelder-mead') && (
+          <>
+            <Stack direction="row" alignItems="center" gap={1.5} sx={{ minHeight: 40 }}>
+              <Tooltip title="Max function evaluations" placement="left">
+                <Typography variant="body2" sx={{ color: 'text.secondary', minWidth: labelWidth, cursor: 'help', fontSize: '0.8rem' }}>Max iterations</Typography>
+              </Tooltip>
+              <TextField
+                type="number"
+                size="small"
+                value={optMaxIterations}
+                onChange={(e) => setOptMaxIterations(Math.max(10, Math.min(10000, parseInt(e.target.value) || (optMethod === 'powell' || optMethod === 'nelder-mead' ? 512 : 100))))}
+                inputProps={{ min: 10, max: 10000, step: 50 }}
+                sx={{ width: 96, '& .MuiInputBase-input': { fontSize: '0.85rem' } }}
+              />
+            </Stack>
+            <Stack direction="row" alignItems="center" gap={1.5} sx={{ minHeight: 40 }}>
+              <Tooltip title="Convergence tolerance" placement="left">
+                <Typography variant="body2" sx={{ color: 'text.secondary', minWidth: labelWidth, cursor: 'help', fontSize: '0.8rem' }}>Tolerance</Typography>
               </Tooltip>
               <Select
                 size="small"
-                fullWidth
                 value={optTolerance}
                 onChange={(e) => setOptTolerance(e.target.value as number)}
-                sx={{ fontSize: '0.85rem' }}
+                sx={{ minWidth: 140, fontSize: '0.85rem' }}
               >
-                <MenuItem value={1e-4}>1e-4 (Fast, less precise)</MenuItem>
+                <MenuItem value={1e-4}>1e-4</MenuItem>
                 <MenuItem value={1e-5}>1e-5</MenuItem>
-                <MenuItem value={1e-6}>1e-6 (Default)</MenuItem>
+                <MenuItem value={1e-6}>1e-6</MenuItem>
                 <MenuItem value={1e-7}>1e-7</MenuItem>
-                <MenuItem value={1e-8}>1e-8 (Slow, very precise)</MenuItem>
+                <MenuItem value={1e-8}>1e-8</MenuItem>
               </Select>
-            </Box>
+            </Stack>
+          </>
+        )}
+
+        {/* SCIP: Discretization steps first (budget-like), then time and gap */}
+        {optMethod === 'scip' && (
+          <>
+            <Stack direction="row" alignItems="center" gap={1.5} sx={{ minHeight: 40 }}>
+              <Tooltip title="Grid points per dimension" placement="left">
+                <Typography variant="body2" sx={{ color: 'text.secondary', minWidth: labelWidth, cursor: 'help', fontSize: '0.8rem' }}>Discretization</Typography>
+              </Tooltip>
+              <TextField
+                type="number"
+                size="small"
+                value={optDiscretizationSteps}
+                onChange={(e) => setOptDiscretizationSteps(Math.max(2, Math.min(50, parseInt(e.target.value) || 20)))}
+                inputProps={{ min: 2, max: 50, step: 2 }}
+                sx={{ width: 96, '& .MuiInputBase-input': { fontSize: '0.85rem' } }}
+              />
+            </Stack>
+            <Stack direction="row" alignItems="center" gap={1.5} sx={{ minHeight: 40 }}>
+              <Tooltip title="Max solve time (seconds)" placement="left">
+                <Typography variant="body2" sx={{ color: 'text.secondary', minWidth: labelWidth, cursor: 'help', fontSize: '0.8rem' }}>Time limit (s)</Typography>
+              </Tooltip>
+              <TextField
+                type="number"
+                size="small"
+                value={optTimeLimit}
+                onChange={(e) => setOptTimeLimit(Math.max(0, Math.min(3600, parseInt(e.target.value) || 300)))}
+                inputProps={{ min: 0, max: 3600, step: 60 }}
+                sx={{ width: 96, '& .MuiInputBase-input': { fontSize: '0.85rem' } }}
+              />
+            </Stack>
+            <Stack direction="row" alignItems="center" gap={1.5} sx={{ minHeight: 40 }}>
+              <Tooltip title="Relative optimality gap (e.g. 0.01 = 1%)" placement="left">
+                <Typography variant="body2" sx={{ color: 'text.secondary', minWidth: labelWidth, cursor: 'help', fontSize: '0.8rem' }}>Gap limit</Typography>
+              </Tooltip>
+              <TextField
+                type="number"
+                size="small"
+                value={optGapLimit}
+                onChange={(e) => setOptGapLimit(Math.max(0, Math.min(1, parseFloat(e.target.value) || 0.01)))}
+                inputProps={{ min: 0, max: 1, step: 0.01 }}
+                sx={{ width: 96, '& .MuiInputBase-input': { fontSize: '0.85rem' } }}
+              />
+            </Stack>
           </>
         )}
       </Box>
 
       <Divider />
 
-      {/* Run Optimization */}
+      {/* Run Optimization — MUI Button with CircularProgress when loading */}
       <Box>
-        <Typography variant="subtitle2" sx={{ fontWeight: 700, color: '#e91e63', mb: 1, display: 'flex', alignItems: 'center', fontSize: '0.8rem' }}>
-          Run Optimization
-        </Typography>
-
-        <Box sx={{ mb: 1.5 }}>
-          <FormControlLabel
-            control={
-              <Switch
-                checked={optVerbose}
-                onChange={(e) => setOptVerbose(e.target.checked)}
-                size="small"
-              />
-            }
-            label={<Typography variant="caption">Verbose logging</Typography>}
-          />
-        </Box>
-
         <Button
           variant="contained"
           fullWidth
-          size="large"
+          size="medium"
           onClick={() => runOptimization(optimizationConfig)}
           disabled={!canOptimize}
+          startIcon={isOptimizing ? <CircularProgress size={18} color="inherit" /> : null}
           sx={{
             textTransform: 'none',
-            fontSize: '1rem',
+            fontSize: '0.95rem',
             fontWeight: 600,
-            py: 1.5,
-            backgroundColor: '#e91e63',
-            '&:hover': { backgroundColor: '#c2185b' },
+            py: 1.1,
+            backgroundColor: colors.primary,
+            '&:hover': { backgroundColor: colors.primaryDark },
             '&.Mui-disabled': { backgroundColor: '#e0e0e0' }
           }}
         >
@@ -625,29 +624,6 @@ export const OptimizationPanel: React.FC<OptimizationPanelProps> = ({
                     </Typography>
                   </Box>
                 )}
-                {/* Error metrics - safely handle cases where errors might be null/undefined/NaN */}
-                <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 1 }}>
-                  <Typography variant="caption" sx={{ color: 'text.secondary' }}>Initial Error</Typography>
-                  <Typography variant="caption" sx={{ fontFamily: 'monospace', fontWeight: 600, color: '#ff7043' }}>
-                    {optimizationResult.initialError != null &&
-                     typeof optimizationResult.initialError === 'number' &&
-                     !isNaN(optimizationResult.initialError) &&
-                     isFinite(optimizationResult.initialError)
-                      ? optimizationResult.initialError.toFixed(4)
-                      : 'N/A'}
-                  </Typography>
-                </Box>
-                <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 1 }}>
-                  <Typography variant="caption" sx={{ color: 'text.secondary' }}>Final Error</Typography>
-                  <Typography variant="caption" sx={{ fontFamily: 'monospace', fontWeight: 600, color: '#2e7d32' }}>
-                    {optimizationResult.finalError != null &&
-                     typeof optimizationResult.finalError === 'number' &&
-                     !isNaN(optimizationResult.finalError) &&
-                     isFinite(optimizationResult.finalError)
-                      ? optimizationResult.finalError.toFixed(4)
-                      : 'N/A'}
-                  </Typography>
-                </Box>
                 <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 1 }}>
                   <Typography variant="caption" sx={{ color: 'text.secondary' }}>Improvement</Typography>
                   <Typography variant="caption" sx={{

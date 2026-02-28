@@ -2,7 +2,7 @@ import React, { useState, useRef, useCallback, useEffect } from 'react'
 import {
   Box, Typography, Paper, IconButton, Modal, TextField,
   FormControl, InputLabel, Select, MenuItem, Button, Chip, Divider,
-  FormControlLabel, Switch, Tooltip
+  FormControlLabel, Switch, Tooltip, Popover
 } from '@mui/material'
 import CloseIcon from '@mui/icons-material/Close'
 import { graphColors, statusColors, colors, jointColors } from '../theme'
@@ -95,7 +95,6 @@ export const DraggableToolbar: React.FC<DraggableToolbarProps> = ({
       ref={toolbarRef}
       elevation={6}
       data-no-canvas-zoom
-      onMouseDownCapture={() => onInteract?.()}
       sx={{
         position: 'absolute',
         left: position.x,
@@ -113,13 +112,15 @@ export const DraggableToolbar: React.FC<DraggableToolbarProps> = ({
           ? '0 12px 40px rgba(0,0,0,0.2)'
           : '0 4px 20px rgba(0,0,0,0.12)',
         transition: isDragging ? 'none' : 'box-shadow 0.2s ease',
-        zIndex: isDragging ? 1400 : 1300,
-        userSelect: 'none'
+        zIndex: isDragging ? 1400 : 1300
       }}
     >
-      {/* Title bar - draggable */}
+      {/* Title bar - draggable; only title bar has userSelect: none so slider thumb remains draggable in content */}
       <Box
-        onMouseDown={handleMouseDown}
+        onMouseDown={(e) => {
+          onInteract?.()
+          handleMouseDown(e)
+        }}
         sx={{
           display: 'flex',
           alignItems: 'center',
@@ -128,7 +129,8 @@ export const DraggableToolbar: React.FC<DraggableToolbarProps> = ({
           py: 1,
           backgroundColor: 'rgba(0,0,0,0.03)',
           borderBottom: '1px solid rgba(0,0,0,0.08)',
-          cursor: isDragging ? 'grabbing' : 'grab'
+          cursor: isDragging ? 'grabbing' : 'grab',
+          userSelect: 'none'
         }}
       >
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
@@ -155,8 +157,8 @@ export const DraggableToolbar: React.FC<DraggableToolbarProps> = ({
         </IconButton>
       </Box>
 
-      {/* Content area - allow text selection and copy (e.g. Optimize toolbar logs/results) */}
-      <Box sx={{ overflow: 'auto', flex: 1, userSelect: 'text' }} data-draggable-toolbar-content>
+      {/* Content area - allow text selection and pointer events for sliders/controls */}
+      <Box sx={{ overflow: 'auto', flex: 1, userSelect: 'text', pointerEvents: 'auto' }} data-draggable-toolbar-content>
         {children}
       </Box>
     </Paper>
@@ -185,6 +187,7 @@ export const TOOLBAR_CONFIGS: ToolbarConfig[] = [
   { id: 'optimize', title: 'Optimize', icon: '✦', defaultPosition: { x: 8, y: -630 } }, // Bottom left (negative y = from bottom)
   { id: 'links', title: 'Links', icon: '—', defaultPosition: { x: -220, y: 8 } },      // Far right edge (negative = from right)
   { id: 'nodes', title: 'Nodes', icon: '○', defaultPosition: { x: -220, y: 500 } },    // Below Links on far right
+  { id: 'forms', title: 'Forms', icon: '▢', defaultPosition: { x: -263, y: 260 } },     // Right side with 8px padding (255 minWidth + 8)
   { id: 'settings', title: 'Settings', icon: '⚙', defaultPosition: { x: -280, y: 12 } } // Upper right, flush so panel stays on-screen (x = canvasWidth - panelWidth)
 ]
 
@@ -353,7 +356,7 @@ export const TOOLS: ToolInfo[] = [
     id: 'merge',
     label: 'Merge Polygon',
     icon: '⋒',
-    description: 'Merge a polygon with an enclosed link, or click a merged polygon to unmerge it',
+    description: 'Merge a polygon with a link or another polygon form; click a merged polygon to unmerge',
     shortcut: 'E'
   },
   {
@@ -599,10 +602,17 @@ export interface DrawnObject {
   fillOpacity: number
   closed: boolean                // Whether the shape is closed (polygon) or open (path)
   attachment?: DrawnObjectAttachment  // If attached to a link, this defines the relationship
-  mergedLinkName?: string        // If merged with a link, the link's name
+  mergedLinkName?: string        // Primary link for rigid transform (first of contained_links)
+  contained_links?: string[]     // All link IDs with both endpoints inside the polygon
   // Rigid attachment: store link positions at merge time for transformation
   mergedLinkOriginalStart?: [number, number]  // Link start position when merged
   mergedLinkOriginalEnd?: [number, number]    // Link end position when merged
+  /** Z-level (layer) for rendering order; polygon z-level dominates for contained links. */
+  z_level?: number
+  /** When true, this form's z-level is pinned during recompute (e.g. after drag). */
+  z_level_fixed?: boolean
+  /** Preferred z when recomputing (soft pin). */
+  target_z_level?: number
   metadata?: Record<string, unknown>  // For future extensibility
 }
 
@@ -1168,6 +1178,12 @@ interface FooterToolbarProps {
   selectedJoints: string[]
   selectedLinks: string[]
   statusMessage: StatusMessage | null
+  /** Last 10 error/warning messages for issue history popout */
+  statusHistory?: StatusMessage[]
+  clearStatusHistory?: () => void
+  /** Open/toggle toolbars when user clicks joint or link count */
+  openToolbars?: Set<string>
+  onToggleToolbar?: (id: string) => void
   linkCreationState: LinkCreationState
   polygonDrawState?: PolygonDrawState
   measureState?: MeasureState
@@ -1272,12 +1288,11 @@ const getToolHint = (
       }
       return 'Click on joint or link to delete'
     case 'merge':
-      // Merge polygon with link tool
       if (mergePolygonState?.step === 'polygon_selected') {
-        return 'Now click a link to merge with polygon'
+        return 'Click a link or another polygon form to merge with'
       }
       if (mergePolygonState?.step === 'link_selected') {
-        return 'Now click a polygon to merge with link'
+        return 'Click a polygon to merge with link'
       }
       return 'Click a polygon or link to merge • Click merged polygon to unmerge'
     case 'add_joint':
@@ -1300,6 +1315,10 @@ export const FooterToolbar: React.FC<FooterToolbarProps> = ({
   selectedJoints,
   selectedLinks,
   statusMessage,
+  statusHistory = [],
+  clearStatusHistory,
+  openToolbars,
+  onToggleToolbar,
   linkCreationState,
   polygonDrawState,
   measureState,
@@ -1310,8 +1329,17 @@ export const FooterToolbar: React.FC<FooterToolbarProps> = ({
   onCancelAction,
   darkMode = false
 }) => {
+  const [historyOpen, setHistoryOpen] = React.useState(false)
+  const historyAnchorRef = React.useRef<HTMLButtonElement>(null)
   const activeTool = TOOLS.find(t => t.id === toolMode)
   const toolHint = getToolHint(toolMode, linkCreationState, polygonDrawState, measureState, groupSelectionState, selectedJoints, selectedLinks, mergePolygonState, pathDrawState)
+  const hasIssues = statusHistory.length > 0
+  const lastIssueType = hasIssues ? statusHistory[0].type : null
+  const issueColor = lastIssueType === 'error'
+    ? (darkMode ? '#ef9a9a' : statusColors.error)
+    : lastIssueType === 'warning'
+      ? (darkMode ? '#ffcc80' : statusColors.warningDark)
+      : undefined
 
   // Determine if we should show cancel hint
   const showCancelHint = statusMessage?.type === 'action' ||
@@ -1452,26 +1480,162 @@ export const FooterToolbar: React.FC<FooterToolbarProps> = ({
         </Box>
       ) : null}
 
-      {/* RIGHT: Counts + Logo */}
+      {/* RIGHT: Issue history (when present) + Counts + Logo */}
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, minWidth: 180, justifyContent: 'flex-end' }}>
-        <Typography sx={{ fontSize: '0.8rem', color: darkMode ? '#bbb' : 'text.secondary' }}>
-          <strong style={{ color: darkMode ? '#e0e0e0' : 'inherit' }}>{jointCount}</strong> joints
-        </Typography>
-        <Typography sx={{ fontSize: '0.8rem', color: darkMode ? '#bbb' : 'text.secondary' }}>
-          <strong style={{ color: darkMode ? '#e0e0e0' : 'inherit' }}>{linkCount}</strong> links
-        </Typography>
+        {hasIssues && (
+          <>
+            <Tooltip title="Recent issues">
+              <IconButton
+                ref={historyAnchorRef}
+                size="small"
+                onClick={() => setHistoryOpen(o => !o)}
+                sx={{
+                  p: 0.5,
+                  color: issueColor,
+                  '&:hover': { backgroundColor: darkMode ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.06)' }
+                }}
+                aria-label="Recent issues"
+              >
+                {lastIssueType === 'error' ? (
+                  <Box
+                    component="span"
+                    sx={{
+                      width: 14,
+                      height: 14,
+                      borderRadius: 0.5,
+                      backgroundColor: issueColor,
+                      display: 'block'
+                    }}
+                  />
+                ) : (
+                  <Box
+                    component="span"
+                    sx={{
+                      width: 0,
+                      height: 0,
+                      display: 'block',
+                      borderLeft: '7px solid transparent',
+                      borderRight: '7px solid transparent',
+                      borderBottom: `14px solid ${issueColor}`
+                    }}
+                  />
+                )}
+              </IconButton>
+            </Tooltip>
+            <Popover
+              open={historyOpen}
+              anchorEl={historyAnchorRef.current}
+              onClose={() => setHistoryOpen(false)}
+              anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }}
+              transformOrigin={{ vertical: 'bottom', horizontal: 'right' }}
+              slotProps={{
+                paper: {
+                  sx: {
+                    mb: 7.5,
+                    minWidth: 380,
+                    maxWidth: 480,
+                    maxHeight: 320,
+                    overflow: 'hidden',
+                    display: 'flex',
+                    flexDirection: 'column'
+                  }
+                }
+              }}
+            >
+              <Box sx={{ p: 1.25, minWidth: 380, maxHeight: 280, display: 'flex', flexDirection: 'column' }}>
+                <Typography sx={{ fontSize: '0.75rem', fontWeight: 600, color: darkMode ? '#ccc' : 'text.secondary', mb: 1, flexShrink: 0 }}>
+                  Recent issues ({statusHistory.length})
+                </Typography>
+                <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.5, flex: 1, minHeight: 0, overflowY: 'auto' }}>
+                  {statusHistory.slice(0, 10).map((msg, i) => (
+                    <Box
+                      key={`${msg.timestamp}-${i}`}
+                      sx={{
+                        display: 'flex',
+                        alignItems: 'flex-start',
+                        gap: 1,
+                        py: 0.5,
+                        borderBottom: i < Math.min(10, statusHistory.length) - 1 ? (darkMode ? '1px solid #333' : '1px solid #eee') : 'none'
+                      }}
+                    >
+                      <Box
+                        sx={{
+                          width: 6,
+                          height: 6,
+                          borderRadius: '50%',
+                          flexShrink: 0,
+                          mt: 0.75,
+                          backgroundColor: msg.type === 'error' ? (darkMode ? '#ef9a9a' : statusColors.error) : (darkMode ? '#ffcc80' : statusColors.warningDark)
+                        }}
+                      />
+                      <Typography sx={{ fontSize: '0.8rem', color: darkMode ? '#e0e0e0' : 'text.primary' }}>
+                        {msg.text}
+                      </Typography>
+                    </Box>
+                  ))}
+                </Box>
+                {clearStatusHistory && (
+                  <Button size="small" onClick={() => { clearStatusHistory(); setHistoryOpen(false) }} sx={{ mt: 1, fontSize: '0.75rem', flexShrink: 0 }}>
+                    Clear history
+                  </Button>
+                )}
+              </Box>
+            </Popover>
+          </>
+        )}
+        <Tooltip title="Open Nodes toolbar">
+          <Typography
+            component="span"
+            onClick={() => onToggleToolbar?.('nodes')}
+            sx={{
+              fontSize: '0.8rem',
+              color: darkMode ? '#bbb' : 'text.secondary',
+              cursor: onToggleToolbar ? 'pointer' : 'default',
+              '&:hover': onToggleToolbar ? { color: darkMode ? '#e0e0e0' : 'text.primary', textDecoration: 'underline' } : {}
+            }}
+          >
+            <strong style={{ color: darkMode ? '#e0e0e0' : 'inherit' }}>{jointCount}</strong> joints
+          </Typography>
+        </Tooltip>
+        <Tooltip title="Open Links toolbar">
+          <Typography
+            component="span"
+            onClick={() => onToggleToolbar?.('links')}
+            sx={{
+              fontSize: '0.8rem',
+              color: darkMode ? '#bbb' : 'text.secondary',
+              cursor: onToggleToolbar ? 'pointer' : 'default',
+              '&:hover': onToggleToolbar ? { color: darkMode ? '#e0e0e0' : 'text.primary', textDecoration: 'underline' } : {}
+            }}
+          >
+            <strong style={{ color: darkMode ? '#e0e0e0' : 'inherit' }}>{linkCount}</strong> links
+          </Typography>
+        </Tooltip>
         <Box sx={{ width: '1px', height: 20, backgroundColor: darkMode ? '#444' : '#e0e0e0' }} />
-        <img
-          src={acinonyxLogo}
-          alt="Acinonyx"
-          className="footer-logo"
-          style={{
-            width: '28px',
-            height: '28px',
-            objectFit: 'contain',
-            borderRadius: '4px'
-          }}
-        />
+        <Tooltip title="Help & About">
+          <IconButton
+            component="span"
+            onClick={() => window.dispatchEvent(new CustomEvent('acinonyx-switch-tab', { detail: { tabIndex: 1 } }))}
+            sx={{
+              p: 0.25,
+              '&:hover .footer-logo': { transform: 'scale(1.08)' },
+              '& .footer-logo': { transition: 'transform 0.2s ease' }
+            }}
+            aria-label="Help & About"
+          >
+            <img
+              src={acinonyxLogo}
+              alt="Acinonyx"
+              className="footer-logo"
+              style={{
+                width: '28px',
+                height: '28px',
+                objectFit: 'contain',
+                borderRadius: '4px'
+              }}
+            />
+          </IconButton>
+        </Tooltip>
       </Box>
     </Box>
   )
@@ -2098,6 +2262,8 @@ export interface LinkData {
   connects: [string, string]
   length: number | null
   isGround?: boolean  // True if this is a ground/anchored link
+  /** Z-level (layer) when computed via Compute Z-levels */
+  zlevel?: number
   // Computed/display data
   mechanismGroup?: string
   jointPositions?: [[number, number] | null, [number, number] | null]
@@ -2110,6 +2276,8 @@ export interface LinkEditModalProps {
   onRename: (oldName: string, newName: string) => void
   onColorChange: (linkName: string, color: string) => void
   onGroundChange: (linkName: string, isGround: boolean) => void
+  /** When provided, "Sync color to z-level" sets link color to the document-derived color for this link's z-level */
+  getColorForZLevel?: (z: number) => string
   darkMode?: boolean
 }
 
@@ -2120,6 +2288,7 @@ export const LinkEditModal: React.FC<LinkEditModalProps> = ({
   onRename,
   onColorChange,
   onGroundChange,
+  getColorForZLevel,
   darkMode = false
 }) => {
   const [editedName, setEditedName] = useState('')
@@ -2220,7 +2389,7 @@ export const LinkEditModal: React.FC<LinkEditModalProps> = ({
               }}
             />
 
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, flexWrap: 'wrap' }}>
               <Typography variant="body2" sx={{ fontSize: '0.8rem', color: darkMode ? '#ccc' : 'text.secondary' }}>
                 Color
               </Typography>
@@ -2241,6 +2410,16 @@ export const LinkEditModal: React.FC<LinkEditModalProps> = ({
                 <Typography variant="caption" sx={{ fontFamily: 'monospace', color: darkMode ? '#999' : '#666' }}>
                   {linkData.color.toUpperCase()}
                 </Typography>
+                {getColorForZLevel && linkData.zlevel !== undefined && linkData.zlevel !== null && (
+                  <Button
+                    size="small"
+                    variant="outlined"
+                    sx={{ textTransform: 'none', fontSize: '0.7rem', ml: 0.5 }}
+                    onClick={() => onColorChange(linkData.name, getColorForZLevel(linkData.zlevel!))}
+                  >
+                    Sync color to z-level
+                  </Button>
+                )}
               </Box>
             </Box>
 
@@ -2313,6 +2492,15 @@ export const LinkEditModal: React.FC<LinkEditModalProps> = ({
               </Typography>
             </Box>
 
+            <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 1 }}>
+              <Typography variant="caption" sx={{ color: darkMode ? '#999' : 'text.secondary' }}>
+                Z-level
+              </Typography>
+              <Typography variant="caption" sx={{ fontFamily: 'monospace', fontWeight: 500 }}>
+                {linkData.zlevel !== undefined && linkData.zlevel !== null ? String(linkData.zlevel) : '—'}
+              </Typography>
+            </Box>
+
             {linkData.jointPositions && (
               <>
                 <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 1 }}>
@@ -2379,5 +2567,249 @@ export const LinkEditModal: React.FC<LinkEditModalProps> = ({
   )
 }
 
+// ═══════════════════════════════════════════════════════════════════════════════
+// FORM EDIT MODAL (drawn object / polygon form: name, color, z-level)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+export interface FormData {
+  id: string
+  name: string
+  fillColor: string
+  z_level?: number
+  z_level_fixed?: boolean
+  target_z_level?: number
+}
+
+export interface FormEditModalProps {
+  open: boolean
+  onClose: () => void
+  formData: FormData | null
+  onSave: (id: string, updates: { name: string; fillColor: string; strokeColor: string; z_level?: number; z_level_fixed?: boolean; target_z_level?: number }) => void
+  /** When provided, used to sync color to z-level and to update color when z-level changes */
+  getColorForZLevel?: (z: number) => string
+  darkMode?: boolean
+}
+
+export const FormEditModal: React.FC<FormEditModalProps> = ({
+  open,
+  onClose,
+  formData,
+  onSave,
+  getColorForZLevel,
+  darkMode = false
+}) => {
+  const [editedName, setEditedName] = useState('')
+  const [editedColor, setEditedColor] = useState('#888888')
+  const [editedZLevel, setEditedZLevel] = useState<number>(0)
+  const [editedZLevelFixed, setEditedZLevelFixed] = useState<boolean>(false)
+  const [editedTargetZLevel, setEditedTargetZLevel] = useState<number | ''>('')
+
+  useEffect(() => {
+    if (formData) {
+      setEditedName(formData.name)
+      setEditedColor(formData.fillColor)
+      setEditedZLevel(formData.z_level ?? 0)
+      setEditedZLevelFixed(formData.z_level_fixed ?? false)
+      setEditedTargetZLevel(formData.target_z_level ?? '')
+    }
+  }, [formData])
+
+  const handleZLevelChange = (newZ: number) => {
+    setEditedZLevel(newZ)
+    if (getColorForZLevel) setEditedColor(getColorForZLevel(newZ))
+  }
+
+  if (!formData) return null
+
+  const handleSave = () => {
+    const name = editedName.trim() || formData.name
+    onSave(formData.id, {
+      name,
+      fillColor: editedColor,
+      strokeColor: editedColor,
+      z_level: editedZLevel,
+      z_level_fixed: editedZLevelFixed,
+      target_z_level: editedTargetZLevel === '' ? undefined : editedTargetZLevel
+    })
+    onClose()
+  }
+
+  const modalStyle = {
+    position: 'absolute' as const,
+    top: '50%',
+    left: '50%',
+    transform: 'translate(-50%, -50%)',
+    width: 360,
+    bgcolor: darkMode ? '#2a2a2a' : '#fff',
+    color: darkMode ? '#f5f5f5' : '#333',
+    borderRadius: 3,
+    boxShadow: 24,
+    p: 0,
+    outline: 'none'
+  }
+
+  return (
+    <Modal open={open} onClose={onClose}>
+      <Box sx={modalStyle}>
+        <Box sx={{
+          p: 2,
+          borderBottom: `3px solid ${editedColor}`,
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          bgcolor: darkMode ? '#333' : '#fafafa'
+        }}>
+          <Typography variant="h6" sx={{ fontWeight: 600, fontSize: '1rem' }}>
+            Edit Form
+          </Typography>
+          <IconButton size="small" onClick={onClose} sx={{ color: darkMode ? '#aaa' : '#666' }}>
+            <CloseIcon fontSize="small" />
+          </IconButton>
+        </Box>
+
+        <Box sx={{ p: 2.5 }}>
+          <TextField
+            size="small"
+            label="Name"
+            value={editedName}
+            onChange={(e) => setEditedName(e.target.value)}
+            fullWidth
+            sx={{
+              mb: 2,
+              '& .MuiInputBase-input': { fontSize: '0.85rem' },
+              '& .MuiInputLabel-root': { fontSize: '0.8rem' }
+            }}
+          />
+
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, mb: 2, flexWrap: 'wrap' }}>
+            <Typography variant="body2" sx={{ fontSize: '0.8rem', color: darkMode ? '#ccc' : 'text.secondary' }}>
+              Color
+            </Typography>
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+              <input
+                type="color"
+                value={editedColor}
+                onChange={(e) => setEditedColor(e.target.value)}
+                style={{
+                  width: 40,
+                  height: 28,
+                  border: 'none',
+                  borderRadius: 4,
+                  cursor: 'pointer',
+                  padding: 0
+                }}
+              />
+              <Typography variant="caption" sx={{ fontFamily: 'monospace', color: darkMode ? '#999' : '#666' }}>
+                {editedColor.toUpperCase()}
+              </Typography>
+              {getColorForZLevel && (
+                <Button
+                  size="small"
+                  variant="outlined"
+                  sx={{ textTransform: 'none', fontSize: '0.7rem', ml: 0.5 }}
+                  onClick={() => setEditedColor(getColorForZLevel(editedZLevel))}
+                >
+                  Sync color to z-level
+                </Button>
+              )}
+            </Box>
+          </Box>
+
+          <Typography variant="body2" sx={{ fontSize: '0.8rem', color: darkMode ? '#ccc' : 'text.secondary', mb: 0.5 }}>
+            Current z: {typeof formData.z_level === 'number' && Number.isFinite(formData.z_level) ? formData.z_level : '—'}
+          </Typography>
+
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, mb: 1.5, flexWrap: 'wrap' }}>
+            <TextField
+              size="small"
+              label="Force change z level"
+              type="number"
+              value={editedZLevel}
+              onChange={(e) => handleZLevelChange(Number(e.target.value) || 0)}
+              inputProps={{ min: -100, max: 100, step: 1 }}
+              sx={{
+                flex: '1 1 120px',
+                minWidth: 120,
+                '& .MuiInputBase-input': { fontSize: '0.85rem' },
+                '& .MuiInputLabel-root': { fontSize: '0.8rem' }
+              }}
+            />
+            <FormControlLabel
+              control={
+                <Switch
+                  size="small"
+                  checked={editedZLevelFixed}
+                  onChange={(e) => setEditedZLevelFixed(e.target.checked)}
+                />
+              }
+              label={
+                <Typography variant="body2" sx={{ fontSize: '0.8rem', color: darkMode ? '#ccc' : 'text.secondary' }}>
+                  Z-level locked
+                </Typography>
+              }
+              sx={{ ml: 0 }}
+            />
+          </Box>
+
+          <Box sx={{ mb: 2, display: 'flex', alignItems: 'flex-start', gap: 1 }}>
+            <Tooltip title="Preferred z-level for this form when recomputing; used if possible without conflicts." placement="top">
+              <TextField
+                size="small"
+                label="Target z level (for recompute)"
+                type="number"
+                value={editedTargetZLevel}
+                onChange={(e) => {
+                  const v = e.target.value
+                  setEditedTargetZLevel(v === '' ? '' : Number(v) || 0)
+                }}
+                placeholder="None"
+                inputProps={{ min: -100, max: 100, step: 1 }}
+                fullWidth
+                sx={{
+                  flex: 1,
+                  '& .MuiInputBase-input': { fontSize: '0.85rem' },
+                  '& .MuiInputLabel-root': { fontSize: '0.8rem' }
+                }}
+              />
+            </Tooltip>
+            <Button
+              size="small"
+              variant="outlined"
+              onClick={() => setEditedTargetZLevel('')}
+              sx={{ textTransform: 'none', fontSize: '0.75rem', minWidth: 56, mt: 0.5 }}
+              title="Clear target z-level"
+            >
+              Clear
+            </Button>
+          </Box>
+        </Box>
+
+        <Box sx={{
+          p: 2,
+          borderTop: `1px solid ${darkMode ? '#444' : '#eee'}`,
+          display: 'flex',
+          justifyContent: 'flex-end',
+          gap: 1
+        }}>
+          <Button variant="outlined" size="small" onClick={onClose} sx={{ textTransform: 'none' }}>
+            Cancel
+          </Button>
+          <Button
+            variant="contained"
+            size="small"
+            onClick={handleSave}
+            sx={{
+              textTransform: 'none',
+              bgcolor: colors.primary,
+              '&:hover': { bgcolor: '#e67300' }
+            }}
+          >
+            Save
+          </Button>
+        </Box>
+      </Box>
+    </Modal>
+  )
+}
 
 export default FooterToolbar

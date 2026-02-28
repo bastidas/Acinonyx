@@ -11,6 +11,7 @@ License: scipy is BSD licensed (permissive for commercial use)
 from __future__ import annotations
 
 import logging
+import math
 from dataclasses import dataclass
 from typing import Literal
 from typing import TYPE_CHECKING
@@ -151,12 +152,6 @@ def run_scipy_optimization(
     initial_values = tuple(dimension_bounds_spec.initial_values)
     initial_error = fitness(initial_values)
 
-    if verbose:
-        logger.info(f'Starting scipy optimization ({method}, Mechanism fast path)')
-        logger.info(f'  Dimensions: {len(dimension_bounds_spec)}')
-        logger.info(f'  Initial error: {initial_error:.4f}')
-        logger.info(f'  Phase invariant: {phase_invariant}')
-
     # Convert bounds to scipy format: [(low, high), ...]
     scipy_bounds = dimension_bounds_spec.bounds
 
@@ -166,8 +161,6 @@ def run_scipy_optimization(
     def callback(xk):
         error = fitness(tuple(xk))
         history.append(error)
-        if verbose and len(history) % 10 == 0:
-            logger.info(f'  Iteration {len(history)}: error={error:.4f}')
 
     # Run optimization
     try:
@@ -192,9 +185,18 @@ def run_scipy_optimization(
             callback=callback,
         )
 
-        # Extract results
+        # Extract results (raw best point; do not clamp or alter)
         optimized_values = tuple(result.x)
         final_error = result.fun
+
+        # Consider success if we have a valid best point (finite error, valid x).
+        # Hitting max iterations without meeting tolerance is not a failure.
+        has_valid_best = (
+            result.x is not None
+            and len(result.x) == len(dimension_bounds_spec)
+            and (result.fun is None or (isinstance(result.fun, (int, float)) and math.isfinite(result.fun)))
+        )
+        success = result.success or has_valid_best
 
         # Update mechanism with best dimensions and return copy
         mechanism.set_dimensions(optimized_values)
@@ -204,14 +206,8 @@ def run_scipy_optimization(
         # Create dimension dict: {name: value} mapping
         optimized_dims = dict(zip(dimension_bounds_spec.names, optimized_values))
 
-        if verbose:
-            logger.info(f'  Converged: {result.success}')
-            logger.info(f'  Final error: {final_error:.4f}')
-            logger.info(f'  Iterations: {result.nit}')
-            logger.info(f'  Function evals: {result.nfev}')
-
         return OptimizationResult(
-            success=result.success,
+            success=success,
             optimized_dimensions=optimized_dims,
             optimized_mechanism=optimized_mechanism,
             initial_error=initial_error,

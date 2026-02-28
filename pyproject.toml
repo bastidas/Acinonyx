@@ -13,33 +13,29 @@ authors = [
     {name = "abf", email = "alexander.bastidas.fry@gmail.com"},
     ]
 dependencies = [
-    "scikit-learn>=1.5.2",
     "numpy == 2.2.5",
     "scipy >= 1.7.3",
-    "pandas >= 2.2, <2.3",
-    "jupyter",
-    "ipympl",
     "matplotlib >= 3.4.0",
-    "types-python-dateutil",
     "seaborn >= 0.12.2",
     "networkx",
-    "opencv-python>=4.8.0",
-    "pillow",
     "uvicorn",
     "fastapi",
-    "Flask",
-    "python-dotenv",
-    "websocket-client",
     "pydantic == 2.12.4",
     "pylinkage",
+    "shapely>=2.1.2",
+    "scikit-learn>=1.5.2",
+]
+
+[project.optional-dependencies]
+all = [
+    # these are the optional dependencies for the full functionality
+    "pyscipopt",
+    "geohash2==1.1",
     "pyDOE3",
     "nlopt",
     "pyswarms",
-    "geohash2==1.1",
-    "shapely>=1.6.4"
-    ]
-
-[project.optional-dependencies]
+    "pillow",
+]
 testing = [
     "pytest>=4.3.1",
     "pytest-cov>=2.6.1",
@@ -50,7 +46,6 @@ dev = [
     "pre-commit",
     "black"
     ]
-
 
 
 [tool.setuptools_scm]

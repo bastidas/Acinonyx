@@ -37,6 +37,13 @@ export const DEFAULT_AUTO_SIMULATE_DELAY_MS = 5
 // INTERACTION SETTINGS
 // ═══════════════════════════════════════════════════════════════════════════════
 
+/**
+ * Minimum pointer movement (in world units) to count as a drag rather than a click.
+ * Used for: actualMove on drag end, bake-during-drag, and position resolution during drag.
+ * Keep in sync with useMechanismPositions and BuilderTab drag/bake logic.
+ */
+export const DRAG_MOVE_THRESHOLD = 1e-3
+
 /** Default radius for joint merge detection (in units) */
 export const DEFAULT_JOINT_MERGE_RADIUS = MERGE_THRESHOLD
 

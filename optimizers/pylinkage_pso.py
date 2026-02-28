@@ -167,10 +167,6 @@ def run_pylinkage_pso(
     if mechanism.n_steps != target.n_steps:
         mechanism._n_steps = target.n_steps
 
-    if verbose:
-        logger.info('Starting pylinkage PSO (Mechanism fast path)')
-        logger.info(f'  Dimensions: {len(dimension_bounds_spec)}, Particles: {n_particles}, Iterations: {iterations}')
-
     # Create fast fitness function
     fitness = create_mechanism_fitness(
         mechanism=mechanism,
@@ -185,8 +181,6 @@ def run_pylinkage_pso(
     constraint_order, linkage_n_dims = _constraint_order_and_linkage_dims(mechanism, dimension_bounds_spec)
     spec_len = len(dimension_bounds_spec)
     use_subset = spec_len > linkage_n_dims and len(constraint_order) == linkage_n_dims
-    if use_subset and verbose:
-        logger.info(f'  Aligning to linkage constraints: spec dims={spec_len}, linkage dims={linkage_n_dims}')
 
     # Wrapper for pylinkage PSO interface (expects linkage, params, init_pos)
     # When use_subset, params have length linkage_n_dims; expand to full for mechanism.set_dimensions
@@ -206,8 +200,6 @@ def run_pylinkage_pso(
     if use_subset:
         init_dims = init_dims[constraint_order]
     initial_error = fitness_func(None, init_dims, None)
-    if verbose:
-        logger.info(f'  Initial error: {initial_error:.4f}')
 
     # Track convergence history
     convergence_history = [initial_error]
@@ -244,8 +236,6 @@ def run_pylinkage_pso(
                     base = np.asarray(presampled[0])
                 for i in range(n_pre, n_particles):
                     init_pos[i] = np.clip(base + (np.random.random(n_dims)-0.5)*0.3*(upper-lower), lower, upper)
-                if verbose:
-                    logger.info(f'  Pre-sampled {n_pre} positions (best: {scores[0]:.4f})')
             else:
                 init_mode = 'random'
         except Exception:
@@ -322,11 +312,6 @@ def run_pylinkage_pso(
             # Trim if we have too many
             convergence_history = convergence_history[:expected_length]
 
-            if verbose:
-                logger.info(f'  Final error: {best_score:.4f}')
-                if initial_error > 0 and initial_error != float('inf'):
-                    logger.info(f'  Improvement: {(1 - best_score / initial_error) * 100:.1f}%')
-
             # Update mechanism with optimized dimensions and return copy
             mechanism.set_dimensions(best_dims)
             mechanism.sync_positions_to_dimensions()
@@ -353,8 +338,7 @@ def run_pylinkage_pso(
             )
 
     except Exception as e:
-        if verbose:
-            logger.error(f'PSO failed: {e}', exc_info=True)
+        logger.error(f'PSO failed: {e}', exc_info=True)
         return OptimizationResult(
             success=False, optimized_dimensions={},
             initial_error=initial_error,

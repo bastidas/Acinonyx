@@ -40,6 +40,10 @@ export interface UseMoveGroupParams {
   exitMoveGroupMode: () => void
   showStatus: (message: string, type?: string, duration?: number) => void
   triggerMechanismChange: () => void
+  /** Reset animation to first frame when starting drag (avoids N/N flash). */
+  resetAnimationToFirstFrame?: () => void
+  /** After drag end, call to refresh polygon contained_links_valid (find-associated-polygons). */
+  apiFindAssociatedPolygons?: () => Promise<unknown>
 }
 
 export interface UseMoveGroupReturn {
@@ -71,7 +75,9 @@ export function useMoveGroup(params: UseMoveGroupParams): UseMoveGroupReturn {
     translateGroupRigid,
     exitMoveGroupMode,
     showStatus,
-    triggerMechanismChange
+    triggerMechanismChange,
+    resetAnimationToFirstFrame,
+    apiFindAssociatedPolygons
   } = params
 
   const handleMouseDown = useCallback(
@@ -150,6 +156,7 @@ export function useMoveGroup(params: UseMoveGroupParams): UseMoveGroupReturn {
           isDragging: true,
           dragStartPoint: clickPoint
         }))
+        resetAnimationToFirstFrame?.()
         const itemCount = moveGroupState.joints.length + moveGroupState.drawnObjectIds.length
         showStatus(`Moving ${itemCount} items — drag to reposition`, 'action')
         return true
@@ -171,7 +178,8 @@ export function useMoveGroup(params: UseMoveGroupParams): UseMoveGroupReturn {
       drawnObjects.objects,
       setMoveGroupState,
       exitMoveGroupMode,
-      showStatus
+      showStatus,
+      resetAnimationToFirstFrame
     ]
   )
 
@@ -254,6 +262,7 @@ export function useMoveGroup(params: UseMoveGroupParams): UseMoveGroupReturn {
         )
       }))
       triggerMechanismChange()
+      setTimeout(() => apiFindAssociatedPolygons?.(), 0)
       return true
     },
     [
@@ -264,7 +273,8 @@ export function useMoveGroup(params: UseMoveGroupParams): UseMoveGroupReturn {
       getJointPosition,
       drawnObjects.objects,
       showStatus,
-      triggerMechanismChange
+      triggerMechanismChange,
+      apiFindAssociatedPolygons
     ]
   )
 

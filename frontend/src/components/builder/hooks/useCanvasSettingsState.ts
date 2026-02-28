@@ -48,12 +48,22 @@ export interface UseCanvasSettingsStateReturn {
   setJointSize: React.Dispatch<React.SetStateAction<number>>
   linkThickness: number
   setLinkThickness: React.Dispatch<React.SetStateAction<number>>
+  linkTransparency: number
+  setLinkTransparency: React.Dispatch<React.SetStateAction<number>>
+  linkColorMode: 'various' | 'z-level' | 'single'
+  setLinkColorMode: React.Dispatch<React.SetStateAction<'various' | 'z-level' | 'single'>>
+  linkColorSingle: string
+  setLinkColorSingle: React.Dispatch<React.SetStateAction<string>>
+  jointOutline: number
+  setJointOutline: React.Dispatch<React.SetStateAction<number>>
   trajectoryDotSize: number
   setTrajectoryDotSize: React.Dispatch<React.SetStateAction<number>>
   trajectoryDotOutline: boolean
   setTrajectoryDotOutline: React.Dispatch<React.SetStateAction<boolean>>
   trajectoryDotOpacity: number
   setTrajectoryDotOpacity: React.Dispatch<React.SetStateAction<number>>
+  showTrajectoryStepNumbers: boolean
+  setShowTrajectoryStepNumbers: React.Dispatch<React.SetStateAction<boolean>>
   selectionHighlightColor: SelectionHighlightColorOption
   setSelectionHighlightColor: React.Dispatch<React.SetStateAction<SelectionHighlightColorOption>>
   trajectoryStyle: TrajectoryStyleOption
@@ -97,9 +107,14 @@ export function useCanvasSettingsState(): UseCanvasSettingsStateReturn {
   const [canvasBgColor, setCanvasBgColor] = useState<CanvasBgColor>(initial.canvasBgColor)
   const [jointSize, setJointSize] = useState(initial.jointSize)
   const [linkThickness, setLinkThickness] = useState(initial.linkThickness)
+  const [linkTransparency, setLinkTransparency] = useState(initial.linkTransparency)
+  const [linkColorMode, setLinkColorMode] = useState(initial.linkColorMode)
+  const [linkColorSingle, setLinkColorSingle] = useState(initial.linkColorSingle)
+  const [jointOutline, setJointOutline] = useState(initial.jointOutline)
   const [trajectoryDotSize, setTrajectoryDotSize] = useState(initial.trajectoryDotSize)
   const [trajectoryDotOutline, setTrajectoryDotOutline] = useState(initial.trajectoryDotOutline)
   const [trajectoryDotOpacity, setTrajectoryDotOpacity] = useState(initial.trajectoryDotOpacity)
+  const [showTrajectoryStepNumbers, setShowTrajectoryStepNumbers] = useState(initial.showTrajectoryStepNumbers)
   const [selectionHighlightColor, setSelectionHighlightColor] = useState<SelectionHighlightColorOption>(initial.selectionHighlightColor)
   const [trajectoryStyle, setTrajectoryStyle] = useState<TrajectoryStyleOption>(initial.trajectoryStyle)
   const [canvasDimensions, setCanvasDimensions] = useState<CanvasDimensions>({ width: 1200, height: 700 })
@@ -123,9 +138,14 @@ export function useCanvasSettingsState(): UseCanvasSettingsStateReturn {
       jointMergeRadius,
       jointSize,
       linkThickness,
+      linkTransparency,
+      linkColorMode,
+      linkColorSingle,
+      jointOutline,
       trajectoryDotSize,
       trajectoryDotOutline,
       trajectoryDotOpacity,
+      showTrajectoryStepNumbers,
       selectionHighlightColor,
       trajectoryStyle,
       exploreRadius,
@@ -146,9 +166,14 @@ export function useCanvasSettingsState(): UseCanvasSettingsStateReturn {
     jointMergeRadius,
     jointSize,
     linkThickness,
+    linkTransparency,
+    linkColorMode,
+    linkColorSingle,
+    jointOutline,
     trajectoryDotSize,
     trajectoryDotOutline,
     trajectoryDotOpacity,
+    showTrajectoryStepNumbers,
     selectionHighlightColor,
     trajectoryStyle,
     exploreRadius,
@@ -188,12 +213,22 @@ export function useCanvasSettingsState(): UseCanvasSettingsStateReturn {
     setJointSize,
     linkThickness,
     setLinkThickness,
+    linkTransparency,
+    setLinkTransparency,
+    linkColorMode,
+    setLinkColorMode,
+    linkColorSingle,
+    setLinkColorSingle,
+    jointOutline,
+    setJointOutline,
     trajectoryDotSize,
     setTrajectoryDotSize,
     trajectoryDotOutline,
     setTrajectoryDotOutline,
     trajectoryDotOpacity,
     setTrajectoryDotOpacity,
+    showTrajectoryStepNumbers,
+    setShowTrajectoryStepNumbers,
     selectionHighlightColor,
     setSelectionHighlightColor,
     trajectoryStyle,

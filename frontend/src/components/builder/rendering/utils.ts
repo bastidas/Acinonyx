@@ -5,7 +5,7 @@
  */
 
 import { HighlightType, ObjectType } from '../types'
-import { JointColors } from './types'
+import { JointColors, type TrajectoryRenderData, type Position } from './types'
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // COORDINATE CONVERSION
@@ -160,6 +160,56 @@ export function isValidPosition(pos: unknown): pos is [number, number] {
     typeof pos[1] === 'number' &&
     isFinite(pos[0]) &&
     isFinite(pos[1])
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// TRAJECTORY FILTERING (shared by useCanvasLayerRenders and TrajectoriesRenderer)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+export interface TrajectoryDataForFilter {
+  trajectories: Record<string, [number, number][]>
+  jointTypes?: Record<string, string>
+}
+
+export interface JointMetaForTrajectory {
+  show_path?: boolean
+}
+
+/**
+ * Filter and validate trajectory entries for rendering. Single place for joint type,
+ * show_path, and position validation so layer hook and renderer stay in sync.
+ */
+export function filterTrajectoriesForRendering(
+  trajectoryData: TrajectoryDataForFilter,
+  jointMeta: Record<string, JointMetaForTrajectory>
+): TrajectoryRenderData[] {
+  return Object.entries(trajectoryData.trajectories)
+    .map(([jointName, positions]): TrajectoryRenderData | null => {
+      if (!positions || !Array.isArray(positions) || positions.length === 0) return null
+      const jointType = trajectoryData.jointTypes?.[jointName]
+      if (jointType !== 'Revolute' && jointType !== 'Crank') return null
+      const meta = jointMeta[jointName]
+      if (meta?.show_path === false) return null
+      const firstPos = positions[0]
+      if (!isValidPosition(firstPos)) return null
+      const validPositions = positions.filter(isValidPosition) as Position[]
+      if (validPositions.length === 0) return null
+      const trajectoryHasMovement =
+        validPositions.length > 1 &&
+        validPositions.some(
+          (pos, i) =>
+            i > 0 &&
+            (Math.abs(pos[0] - firstPos[0]) > 0.001 || Math.abs(pos[1] - firstPos[1]) > 0.001)
+        )
+      return {
+        jointName,
+        positions: validPositions,
+        jointType: jointType as 'Static' | 'Crank' | 'Revolute',
+        hasMovement: trajectoryHasMovement,
+        showPath: !(meta?.show_path === false)
+      }
+    })
+    .filter((t): t is TrajectoryRenderData => t != null)
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════

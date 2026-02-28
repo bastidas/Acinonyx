@@ -383,10 +383,14 @@ export interface DrawnObjectData {
   strokeWidth: number
   fillOpacity: number
   closed: boolean
-  mergedLinkName?: string        // If merged with a link, the link's name
+  mergedLinkName?: string        // Primary link for rigid transform (first of contained_links)
+  /** All link IDs with both endpoints inside the polygon. */
+  contained_links?: string[]
   // Rigid attachment: store link positions at merge time for transformation
   mergedLinkOriginalStart?: [number, number]
   mergedLinkOriginalEnd?: [number, number]
+  /** Z-level (layer) for rendering order; polygon z-level dominates for contained links. */
+  z_level?: number
 }
 
 /**

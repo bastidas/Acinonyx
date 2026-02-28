@@ -75,4 +75,33 @@ export type { UseDocumentStateReturn } from './useDocumentState'
 export { useCanvasLayerRenders } from './useCanvasLayerRenders'
 export type { UseCanvasLayerRendersParams, UseCanvasLayerRendersReturn } from './useCanvasLayerRenders'
 
+// Display frame + edit mode (single owner for builder animation/edit)
+export { useDisplayFrame } from './useDisplayFrame'
+export type { UseDisplayFrameParams, UseDisplayFrameReturn, BuilderAnimationMode } from './useDisplayFrame'
+
+// Mechanism positions (single place for joint position resolution)
+export { useMechanismPositions } from './useMechanismPositions'
+export type {
+  UseMechanismPositionsParams,
+  UseMechanismPositionsReturn,
+  MechanismPositionsDragState,
+  PendingDropPosition,
+  Position as MechanismPosition
+} from './useMechanismPositions'
+
+// Tool context (single place for tool context construction)
+export { useToolContext } from './useToolContext'
+export type { UseToolContextParams } from './useToolContext'
+
+// Canvas event handlers (mouse down/move/up/leave, click, double-click)
+export { useCanvasEventHandlers } from './useCanvasEventHandlers'
+export type {
+  UseCanvasEventHandlersParams,
+  UseCanvasEventHandlersReturn
+} from './useCanvasEventHandlers'
+
+// Toolbar content by id (single place for toolbar switch)
+export { useToolbarContent } from './useToolbarContent'
+export type { UseToolbarContentParams, GetToolbarContent } from './useToolbarContent'
+
 // Viewport: not re-exported here to avoid barrel load-order issues. Import from './hooks/useViewportState' or from builder index.

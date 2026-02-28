@@ -7,22 +7,22 @@ https://github.com/bguillouet/traj-dist
 Original code is MIT licensed. This is a pure Python port using the pydist
 implementations instead of the Cython (cydist) implementations.
 """
-# Lazy import of linecell to avoid requiring geohash2 unless sowd_grid is used
-# from .pydist.linecell import trajectory_set_grid
+# Lazy import of linecell to avoid requiring geohash2 (optional [all] extra) unless sowd_grid is used
 from __future__ import annotations
 
+import logging
 import warnings
 
 import numpy as np
 
-from .pydist.discret_frechet import discret_frechet
+from .pydist.discret_frechet import discret_frechet as _discret_frechet_impl
 from .pydist.dtw import e_dtw
 from .pydist.dtw import s_dtw
 from .pydist.edr import e_edr
 from .pydist.edr import s_edr
 from .pydist.erp import e_erp
 from .pydist.erp import s_erp
-from .pydist.frechet import frechet
+from .pydist.frechet import frechet as _frechet_impl
 from .pydist.hausdorff import e_hausdorff
 from .pydist.hausdorff import s_hausdorff
 from .pydist.lcss import e_lcss
@@ -30,6 +30,9 @@ from .pydist.lcss import s_lcss
 from .pydist.sowd import sowd_grid as pydist_sowd_grid
 from .pydist.sspd import e_sspd
 from .pydist.sspd import s_sspd
+
+logger = logging.getLogger(__name__)
+
 
 __all__ = [
     'pdist', 'cdist', 'sspd', 'sowd_grid', 'frechet', 'discret_frechet', 'hausdorff', 'dtw', 'lcss', 'edr',
@@ -51,8 +54,8 @@ METRIC_DIC = {
         'dtw': e_dtw,
         'lcss': e_lcss,
         'hausdorff': e_hausdorff,
-        'discret_frechet': discret_frechet,
-        'frechet': frechet,
+        'discret_frechet': _discret_frechet_impl,
+        'frechet': _frechet_impl,
         'sowd_grid': pydist_sowd_grid,
         'erp': e_erp,
         'edr': e_edr,
@@ -160,7 +163,16 @@ def sowd_grid(traj_1, traj_2, type_d='euclidean', converted=None, precision=None
             )
             precision = 7
         # Lazy import to avoid requiring geohash2 unless sowd_grid is actually used
-        from .pydist.linecell import trajectory_set_grid
+        try:
+            from .pydist.linecell import trajectory_set_grid
+        except ImportError as e:
+            logger.error(
+                "geohash2 is required for sowd_grid metric. Install with: pip install -e '.[all]'. %s",
+                e,
+            )
+            raise ImportError(
+                "geohash2 is required for sowd_grid. Install with: pip install -e '.[all]'",
+            ) from e
         cells_list_, _, _, _, _ = trajectory_set_grid([traj_1, traj_2], precision)
         cells_list = [np.array(cells_list_[0])[:, :2], np.array(cells_list_[1])[:, :2]]
 
@@ -431,8 +443,7 @@ def erp(traj_1, traj_2, type_d='euclidean', g=None):
 
     if g is None:
         g = np.zeros(dim, dtype=float)
-        warnings.warn('g parameter should be specified for metric erp. Default is ')
-        print(g)
+        warnings.warn(f'g parameter should be specified for metric erp. Using default g={g}')
     else:
         if g.shape[0] != dim:
             raise ValueError('g and trajectories in list should have same dimension')
@@ -563,7 +574,7 @@ def pdist(
             )
 
     if verbose:
-        print('Computing ' + type_d + ' distance ' + metric + ' for %d trajectories' % nb_traj)
+        logger.info('Computing %s distance %s for %d trajectories', type_d, metric, nb_traj)
     M = np.zeros(sum(range(nb_traj)))
     dist = METRIC_DIC[type_d][metric]
     if metric.startswith('sowd_grid'):
@@ -583,13 +594,22 @@ def pdist(
                 )
                 precision = 7
             if verbose:
-                print('Cells conversion start')
+                logger.debug('Cells conversion start')
             # Lazy import to avoid requiring geohash2 unless sowd_grid is actually used
-            from .pydist.linecell import trajectory_set_grid
+            try:
+                from .pydist.linecell import trajectory_set_grid
+            except ImportError as e:
+                logger.error(
+                    "geohash2 is required for sowd_grid metric. Install with: pip install -e '.[all]'. %s",
+                    e,
+                )
+                raise ImportError(
+                    "geohash2 is required for sowd_grid. Install with: pip install -e '.[all]'",
+                ) from e
             cells_list_, _, _, _, _ = trajectory_set_grid(traj_list, precision)
             cells_list = [np.array(x)[:, :2] for x in cells_list_]
             if verbose:
-                print('Cells conversion ok')
+                logger.debug('Cells conversion ok')
         im = 0
         for i in range(nb_traj):
             cells_list_i = cells_list[i]
@@ -600,9 +620,7 @@ def pdist(
     elif metric == 'erp':
         if g is None:
             g = np.zeros(dim, dtype=float)
-            warnings.warn('g parameter should be specified for metric erp. Default is ')
-            if verbose:
-                print(g)
+            warnings.warn(f'g parameter should be specified for metric erp. Using default g={g}')
         else:
             if g.shape[0] != dim:
                 raise ValueError('g and trajectories in list should have same dimension')
@@ -745,7 +763,7 @@ def cdist(
         raise ValueError("The type_d argument should be 'euclidean' or 'spherical'\ntype_d given is : " + type_d)
 
     if verbose:
-        print('Computing ' + type_d + ' distance ' + metric + ' for %d and %d trajectories' % (nb_traj_1, nb_traj_2))
+        logger.info('Computing %s distance %s for %d and %d trajectories', type_d, metric, nb_traj_1, nb_traj_2)
     M = np.zeros((nb_traj_1, nb_traj_2))
     dist = METRIC_DIC[type_d][metric]
     if metric.startswith('sowd_grid'):
@@ -766,7 +784,16 @@ def cdist(
                 )
                 precision = 7
             # Lazy import to avoid requiring geohash2 unless sowd_grid is actually used
-            from .pydist.linecell import trajectory_set_grid
+            try:
+                from .pydist.linecell import trajectory_set_grid
+            except ImportError as e:
+                logger.error(
+                    "geohash2 is required for sowd_grid metric. Install with: pip install -e '.[all]'. %s",
+                    e,
+                )
+                raise ImportError(
+                    "geohash2 is required for sowd_grid. Install with: pip install -e '.[all]'",
+                ) from e
             cells_list, _, _, _, _ = trajectory_set_grid(traj_list_1 + traj_list_2, precision)
             cells_list_1 = [np.array(x)[:, :2] for x in cells_list[:nb_traj_1]]
             cells_list_2 = [np.array(x)[:, :2] for x in cells_list[nb_traj_1:]]
@@ -778,9 +805,7 @@ def cdist(
     elif metric == 'erp':
         if g is None:
             g = np.zeros(dim, dtype=float)
-            warnings.warn('g parameter should be specified for metric erp. Default is ')
-            if verbose:
-                print(g)
+            warnings.warn(f'g parameter should be specified for metric erp. Using default g={g}')
         else:
             if g.shape[0] != dim:
                 raise ValueError('g and trajectories in list should have same dimension')

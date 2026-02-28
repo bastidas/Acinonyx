@@ -41,6 +41,16 @@ function App() {
     return () => document.removeEventListener('keydown', handleGlobalKeyDown)
   }, [handleGlobalKeyDown])
 
+  // Footer cheetah logo easter egg: switch to Help & About tab
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const ev = e as CustomEvent<{ tabIndex: number }>
+      if (ev.detail?.tabIndex !== undefined) setCurrentTab(ev.detail.tabIndex)
+    }
+    window.addEventListener('acinonyx-switch-tab', handler)
+    return () => window.removeEventListener('acinonyx-switch-tab', handler)
+  }, [])
+
   const handleTabChange = (_event: React.SyntheticEvent, newValue: number) => {
     setCurrentTab(newValue)
   }

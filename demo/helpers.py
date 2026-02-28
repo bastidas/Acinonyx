@@ -8,19 +8,13 @@ This module provides common functions used across multiple demos:
 """
 from __future__ import annotations
 
-import copy
 import json
-import math
 from pathlib import Path
 
-from pylinkage.joints import Crank
-
-from pylink_tools.hypergraph_adapter import _build_joint_attr_mapping
 from pylink_tools.hypergraph_adapter import extract_dimensions
-from pylink_tools.hypergraph_adapter import to_simulatable_linkage
+from pylink_tools.mechanism import create_mechanism_from_dict as _create_mechanism_from_dict
 from pylink_tools.mechanism import Mechanism
 from pylink_tools.optimization_types import DimensionBoundsSpec
-from pylink_tools.optimization_types import DimensionMapping
 
 # =============================================================================
 # MECHANISM REGISTRY
@@ -70,6 +64,9 @@ def create_mechanism_from_dict(
     """
     Helper to create Mechanism from pylink_data dict.
 
+    Delegates to pylink_tools.mechanism.create_mechanism_from_dict, then
+    applies default variation config when bounds are empty (for demos/optimization).
+
     Args:
         pylink_data: Mechanism data dictionary
         dim_spec: Optional DimensionBoundsSpec (extracted if not provided)
@@ -77,62 +74,12 @@ def create_mechanism_from_dict(
     Returns:
         Mechanism object
     """
-    # Extract dimensions if not provided (returns empty bounds)
     if dim_spec is None:
         dim_spec, _ = extract_dimensions(pylink_data)
-
-    # Create linkage
-    linkage = to_simulatable_linkage(pylink_data)
-
-    # Set crank angle
-    n_steps = pylink_data.get('n_steps', 32)
-    angle_per_step = 2 * math.pi / n_steps
-    for joint in linkage.joints:
-        if isinstance(joint, Crank):
-            joint.angle = angle_per_step
-
-    # Rebuild and compile
-    linkage.rebuild()
-    linkage.compile()
-
-    # Build dimension mapping (with empty bounds if not provided)
-    joint_attrs = _build_joint_attr_mapping(linkage, pylink_data, dim_spec)
-    dim_mapping = DimensionMapping(
-        names=list(dim_spec.names),
-        initial_values=list(dim_spec.initial_values),
-        bounds=list(dim_spec.bounds) if dim_spec.bounds else [],  # Empty if not set
-        edge_mapping=dim_spec.edge_mapping.copy() if dim_spec.edge_mapping else {},
-        joint_attrs=joint_attrs,
-    )
-
-    # Get joint names
-    joint_names = [j.name for j in linkage.joints]
-
-    # Store original edges in metadata so to_dict() can include ALL edges
-    # (not just optimizable ones). This ensures crank links and all other edges
-    # are preserved with their optimized distances.
-    original_edges = copy.deepcopy(pylink_data.get('linkage', {}).get('edges', {}))
-    # Store original nodes to preserve node types (role: fixed/crank/follower) and other metadata
-    original_nodes = copy.deepcopy(pylink_data.get('linkage', {}).get('nodes', {}))
-    metadata = {
-        '_original_edges': original_edges,
-        '_original_nodes': original_nodes,
-    }
-
-    # Create mechanism
-    mechanism = Mechanism(
-        linkage=linkage,
-        dimension_mapping=dim_mapping,
-        joint_names=joint_names,
-        n_steps=n_steps,
-        metadata=metadata,
-    )
-
-    # Apply default variation config if bounds are empty
+    mechanism = _create_mechanism_from_dict(pylink_data, dim_spec=dim_spec, n_steps=n_steps)
     if not dim_spec.bounds:
         from target_gen.variation_config import DEFAULT_VARIATION_CONFIG
         mechanism.apply_variation_config(DEFAULT_VARIATION_CONFIG)
-
     return mechanism
 
 

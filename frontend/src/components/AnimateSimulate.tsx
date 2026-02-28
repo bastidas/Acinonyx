@@ -8,7 +8,7 @@
  * - Auto-simulation with configurable delay
  */
 
-import { useState, useRef, useCallback, useEffect } from 'react'
+import { useState, useRef, useCallback, useEffect, useLayoutEffect } from 'react'
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // TYPES
@@ -29,9 +29,36 @@ export interface AnimationState {
   isAnimating: boolean
   currentFrame: number
   totalFrames: number
-  playbackSpeed: number  // 1 = normal, 0.5 = half speed, 2 = double speed
+  /** Frames (simulation steps) per second. 1–400, default 10. */
+  playbackFps: number
   loop: boolean
   playbackDirection: PlaybackDirection  // 1 = forward, -1 = reverse
+}
+
+/** Default playback FPS when there is no trajectory. */
+export const DEFAULT_PLAYBACK_FPS = 10
+
+/**
+ * FPS range is proportional to simulation steps.
+ * - ~1 to 100 for 10 steps (default 10)
+ * - ~10 to 1000 for 100 steps (default 200)
+ */
+export function getMinPlaybackFps(totalFrames: number): number {
+  if (totalFrames <= 0) return 1
+  return Math.max(1, Math.floor(totalFrames / 10))
+}
+
+const MAX_PLAYBACK_SPEED = 500
+
+export function getMaxPlaybackFps(totalFrames: number): number {
+  if (totalFrames <= 0) return 100
+  return Math.min(MAX_PLAYBACK_SPEED, totalFrames * 10)
+}
+
+export function getDefaultPlaybackFps(totalFrames: number): number {
+  if (totalFrames <= 0) return DEFAULT_PLAYBACK_FPS
+  if (totalFrames <= 10) return totalFrames
+  return Math.min(getMaxPlaybackFps(totalFrames), totalFrames * 2)
 }
 
 /** Initial animation state */
@@ -39,7 +66,7 @@ export const initialAnimationState: AnimationState = {
   isAnimating: false,
   currentFrame: 0,
   totalFrames: 0,
-  playbackSpeed: 1,
+  playbackFps: DEFAULT_PLAYBACK_FPS,
   loop: true,
   playbackDirection: 1
 }
@@ -58,7 +85,6 @@ export interface SimulationState {
 interface UseAnimationProps {
   trajectoryData: TrajectoryData | null
   onFrameChange: (frame: number) => void
-  frameIntervalMs?: number  // Default: 50ms (20fps)
 }
 
 interface UseAnimationReturn {
@@ -68,7 +94,7 @@ interface UseAnimationReturn {
   stop: () => void
   reset: () => void
   setFrame: (frame: number) => void
-  setPlaybackSpeed: (speed: number) => void
+  setPlaybackFps: (fps: number) => void
   setLoop: (loop: boolean) => void
   setPlaybackDirection: (direction: PlaybackDirection) => void
   /** Get interpolated joint positions for the current frame */
@@ -81,8 +107,7 @@ interface UseAnimationReturn {
  */
 export function useAnimation({
   trajectoryData,
-  onFrameChange,
-  frameIntervalMs = 50
+  onFrameChange
 }: UseAnimationProps): UseAnimationReturn {
   const [animationState, setAnimationState] = useState<AnimationState>({
     ...initialAnimationState,
@@ -91,10 +116,18 @@ export function useAnimation({
 
   const animationFrameRef = useRef<number | null>(null)
   const lastFrameTimeRef = useRef<number>(0)
+  const prevTrajectoryDataRef = useRef<TrajectoryData | null>(null)
+
+  // When trajectoryData reference changes, show frame 0 in the SAME render so we never paint N/N.
+  const trajectoryDataChanged = trajectoryData !== prevTrajectoryDataRef.current
+  const effectiveFrame = trajectoryDataChanged ? 0 : animationState.currentFrame
+  const effectiveAnimationState = trajectoryDataChanged ? { ...animationState, currentFrame: 0 } : animationState
+  const effectiveFrameRef = useRef(effectiveFrame)
+  effectiveFrameRef.current = effectiveFrame
 
   // Use refs to track current values without causing re-renders in animation loop
   const isAnimatingRef = useRef(animationState.isAnimating)
-  const playbackSpeedRef = useRef(animationState.playbackSpeed)
+  const playbackFpsRef = useRef(animationState.playbackFps)
   const loopRef = useRef(animationState.loop)
   const playbackDirectionRef = useRef(animationState.playbackDirection)
   const currentFrameRef = useRef(animationState.currentFrame)
@@ -104,7 +137,7 @@ export function useAnimation({
   // Keep refs in sync with state
   useEffect(() => {
     isAnimatingRef.current = animationState.isAnimating
-    playbackSpeedRef.current = animationState.playbackSpeed
+    playbackFpsRef.current = animationState.playbackFps
     loopRef.current = animationState.loop
     playbackDirectionRef.current = animationState.playbackDirection
     currentFrameRef.current = animationState.currentFrame
@@ -115,16 +148,21 @@ export function useAnimation({
     onFrameChangeRef.current = onFrameChange
   }, [onFrameChange])
 
-  // Update total frames when trajectory data changes
-  useEffect(() => {
+  // Update total frames when trajectory data changes; always start at first frame (1/N)
+  // and set playback FPS to the step-proportional default (e.g. 10 for 10 steps, 200 for 100 steps).
+  useLayoutEffect(() => {
+    prevTrajectoryDataRef.current = trajectoryData
     if (trajectoryData) {
       const newTotalFrames = trajectoryData.nSteps
       totalFramesRef.current = newTotalFrames
+      const defaultFps = getDefaultPlaybackFps(newTotalFrames)
       setAnimationState(prev => ({
         ...prev,
         totalFrames: newTotalFrames,
-        currentFrame: Math.min(prev.currentFrame, newTotalFrames - 1)
+        currentFrame: 0,
+        playbackFps: defaultFps
       }))
+      playbackFpsRef.current = defaultFps
     } else {
       totalFramesRef.current = 0
       isAnimatingRef.current = false
@@ -133,8 +171,10 @@ export function useAnimation({
         ...prev,
         totalFrames: 0,
         currentFrame: 0,
-        isAnimating: false
+        isAnimating: false,
+        playbackFps: DEFAULT_PLAYBACK_FPS
       }))
+      playbackFpsRef.current = DEFAULT_PLAYBACK_FPS
     }
   }, [trajectoryData])
 
@@ -157,7 +197,8 @@ export function useAnimation({
       }
 
       const elapsed = timestamp - lastFrameTimeRef.current
-      const adjustedInterval = frameIntervalMs / playbackSpeedRef.current
+      const fps = playbackFpsRef.current
+      const adjustedInterval = fps > 0 ? 1000 / fps : 1000
 
       if (elapsed >= adjustedInterval) {
         lastFrameTimeRef.current = timestamp
@@ -220,7 +261,7 @@ export function useAnimation({
         animationFrameRef.current = null
       }
     }
-  }, [animationState.isAnimating, trajectoryData, frameIntervalMs])
+  }, [animationState.isAnimating, trajectoryData])
 
   const play = useCallback(() => {
     if (!trajectoryData || trajectoryData.nSteps === 0) return
@@ -266,12 +307,15 @@ export function useAnimation({
       ...prev,
       currentFrame: clampedFrame
     }))
-    onFrameChangeRef.current(frame)
+    onFrameChangeRef.current(clampedFrame)
   }, [])
 
-  const setPlaybackSpeed = useCallback((speed: number) => {
-    playbackSpeedRef.current = speed
-    setAnimationState(prev => ({ ...prev, playbackSpeed: speed }))
+  const setPlaybackFps = useCallback((fps: number) => {
+    const min = getMinPlaybackFps(totalFramesRef.current)
+    const max = getMaxPlaybackFps(totalFramesRef.current)
+    const clamped = Math.max(min, Math.min(max, fps))
+    playbackFpsRef.current = clamped
+    setAnimationState(prev => ({ ...prev, playbackFps: clamped }))
   }, [])
 
   const setLoop = useCallback((loop: boolean) => {
@@ -284,12 +328,12 @@ export function useAnimation({
     setAnimationState(prev => ({ ...prev, playbackDirection: direction }))
   }, [])
 
-  /** Get joint positions for the current animation frame */
+  /** Get joint positions for the current animation frame (uses effective frame when trajectoryData just changed). */
   const getAnimatedPositions = useCallback((): Record<string, [number, number]> | null => {
     if (!trajectoryData) return null
 
     const positions: Record<string, [number, number]> = {}
-    const frame = animationState.currentFrame
+    const frame = effectiveFrameRef.current
 
     for (const [jointName, trajectory] of Object.entries(trajectoryData.trajectories)) {
       if (trajectory && trajectory[frame]) {
@@ -298,16 +342,16 @@ export function useAnimation({
     }
 
     return positions
-  }, [trajectoryData, animationState.currentFrame])
+  }, [trajectoryData])
 
   return {
-    animationState,
+    animationState: effectiveAnimationState,
     play,
     pause,
     stop,
     reset,
     setFrame,
-    setPlaybackSpeed,
+    setPlaybackFps,
     setLoop,
     setPlaybackDirection,
     getAnimatedPositions
@@ -332,6 +376,8 @@ interface UseSimulationProps {
   autoSimulateDelayMs: number
   autoSimulateEnabled: boolean
   mechanismVersion: number
+  /** When true, do not schedule auto-sim (avoids running with inconsistent doc during drag). */
+  isDragging?: boolean
   onSimulationStart?: () => void
   onSimulationComplete?: (data: TrajectoryData) => void
   onSimulationError?: (error: string) => void
@@ -341,8 +387,8 @@ interface UseSimulationProps {
 interface UseSimulationReturn {
   isSimulating: boolean
   trajectoryData: TrajectoryData | null
-  /** Manually trigger a simulation */
-  runSimulation: () => Promise<void>
+  /** Manually trigger a simulation. Pass docOverride to use that doc instead of current state (e.g. drag-end synced doc). */
+  runSimulation: (docOverride?: any) => Promise<void>
   /** Clear trajectory data */
   clearTrajectory: () => void
   /** Enable/disable auto-simulation */
@@ -381,6 +427,7 @@ export function useSimulation({
   autoSimulateDelayMs,
   autoSimulateEnabled: initialAutoSimulate,
   mechanismVersion,
+  isDragging = false,
   onSimulationStart,
   onSimulationComplete,
   onSimulationError,
@@ -391,9 +438,12 @@ export function useSimulation({
   const [autoSimulateEnabled, setAutoSimulateEnabled] = useState(initialAutoSimulate)
   const autoSimulateTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
-  /** Run simulation against the backend */
-  const runSimulation = useCallback(async () => {
-    if (!hasCrankJoint(linkageDoc)) {
+  /** Run simulation against the backend. Use docOverride when provided (e.g. drag-end synced doc).
+   * TRAJECTORY HOP FIX: When BuilderTab passes syncedDoc after a drag, we send that exact doc so the
+   * backend returns trajectory[0] = that state; otherwise we'd get wrong frame 0 and a cyclic shift. */
+  const runSimulation = useCallback(async (docOverride?: any) => {
+    const docToSend = docOverride != null ? docOverride : linkageDoc
+    if (!hasCrankJoint(docToSend)) {
       console.warn('[Simulation] Cannot simulate: no Crank joint defined in document')
       showStatus?.('Cannot simulate: no Crank joint defined', 'warning', 2000)
       return
@@ -402,7 +452,6 @@ export function useSimulation({
     try {
       setIsSimulating(true)
       onSimulationStart?.()
-      console.log('[Simulation] Starting trajectory computation with', simulationSteps, 'steps')
       showStatus?.(`Simulating ${simulationSteps} steps...`, 'action')
 
       // Send document directly - backend handles both formats
@@ -410,7 +459,7 @@ export function useSimulation({
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          ...linkageDoc,
+          ...docToSend,
           n_steps: simulationSteps
         })
       })
@@ -427,19 +476,23 @@ export function useSimulation({
           nSteps: result.n_steps,
           jointTypes: result.joint_types || {}
         }
-        console.log('[Simulation] Success:', result.n_steps, 'steps,', Object.keys(result.trajectories).length, 'joints')
         setTrajectoryData(data)
         onSimulationComplete?.(data)
         showStatus?.(`Simulation complete: ${result.n_steps} steps`, 'success', 1500)
+        if (result.trajectory_did_not_close) {
+          showStatus?.('Trajectory did not close after one cycle.', 'error', 3000)
+        }
       } else {
         const errorMsg = result.message || 'Simulation failed'
         console.error('[Simulation] Backend returned error:', errorMsg, result)
+        setTrajectoryData(null)
         onSimulationError?.(errorMsg)
         showStatus?.(errorMsg, 'error', 3000)
       }
     } catch (error) {
       const errorMsg = error instanceof Error ? error.message : 'Simulation error'
       console.error('[Simulation] Exception during trajectory computation:', error)
+      setTrajectoryData(null)
       onSimulationError?.(errorMsg)
       showStatus?.(`Simulation error: ${errorMsg}`, 'error', 3000)
     } finally {
@@ -453,29 +506,28 @@ export function useSimulation({
     showStatus?.('Trajectory cleared', 'info', 1500)
   }, [showStatus])
 
-  // Auto-simulation effect
+  // Auto-simulation: run after autoSimulateDelayMs from last dependency change (linkageDoc / mechanismVersion).
+  // During drag, linkageDoc is updated by moveJoint/bake so we can run sim with current doc and update
+  // trajectories while the user drags (unless "disable continuous simulation" is on).
   useEffect(() => {
     if (!autoSimulateEnabled) return
 
     if (!hasCrankJoint(linkageDoc)) return
 
-    // Clear any existing timer
     if (autoSimulateTimerRef.current) {
       clearTimeout(autoSimulateTimerRef.current)
     }
 
-    // Set new timer
     autoSimulateTimerRef.current = setTimeout(() => {
       runSimulation()
     }, autoSimulateDelayMs)
 
-    // Cleanup
     return () => {
       if (autoSimulateTimerRef.current) {
         clearTimeout(autoSimulateTimerRef.current)
       }
     }
-  }, [mechanismVersion, autoSimulateEnabled, linkageDoc, autoSimulateDelayMs, runSimulation])
+  }, [mechanismVersion, autoSimulateEnabled, linkageDoc, autoSimulateDelayMs, isDragging, runSimulation])
 
   return {
     isSimulating,
@@ -500,7 +552,7 @@ interface AnimationControlsProps {
   onPause: () => void
   onStop: () => void
   onFrameChange: (frame: number) => void
-  onSpeedChange: (speed: number) => void
+  onSpeedChange: (fps: number) => void
   disabled?: boolean
   compact?: boolean
 }
@@ -519,7 +571,7 @@ export const AnimationControls: React.FC<AnimationControlsProps> = ({
   disabled = false,
   compact = false
 }) => {
-  const { isAnimating, currentFrame, totalFrames, playbackSpeed } = animationState
+  const { isAnimating, currentFrame, totalFrames, playbackFps } = animationState
 
   return (
     <Box sx={{
@@ -581,28 +633,28 @@ export const AnimationControls: React.FC<AnimationControlsProps> = ({
         />
       )}
 
-      {/* Speed Control (only if not compact) */}
+      {/* Speed Control (only if not compact) - presets */}
       {!compact && (
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mt: 0.5 }}>
           <Typography variant="caption" sx={{ color: 'text.secondary', fontSize: '0.65rem' }}>
             Speed:
           </Typography>
-          {[0.5, 1, 2].map(speed => (
+          {[5, 10, 20].map(fps => (
             <Box
-              key={speed}
-              onClick={() => !disabled && onSpeedChange(speed)}
+              key={fps}
+              onClick={() => !disabled && onSpeedChange(fps)}
               sx={{
                 px: 0.75,
                 py: 0.25,
                 borderRadius: 1,
                 fontSize: '0.65rem',
                 cursor: disabled ? 'default' : 'pointer',
-                bgcolor: playbackSpeed === speed ? 'primary.main' : 'grey.100',
-                color: playbackSpeed === speed ? '#fff' : 'text.secondary',
-                '&:hover': disabled ? {} : { bgcolor: playbackSpeed === speed ? 'primary.dark' : 'grey.200' }
+                bgcolor: playbackFps === fps ? 'primary.main' : 'grey.100',
+                color: playbackFps === fps ? '#fff' : 'text.secondary',
+                '&:hover': disabled ? {} : { bgcolor: playbackFps === fps ? 'primary.dark' : 'grey.200' }
               }}
             >
-              {speed}x
+              {fps}
             </Box>
           ))}
         </Box>
@@ -633,9 +685,10 @@ export function interpolatePositions(
 
 /**
  * Get the duration of a full animation cycle in milliseconds.
+ * playbackFps = simulation steps per second (internal).
  */
-export function getAnimationDuration(totalFrames: number, frameIntervalMs: number, playbackSpeed: number): number {
-  return (totalFrames * frameIntervalMs) / playbackSpeed
+export function getAnimationDuration(totalFrames: number, playbackFps: number): number {
+  return playbackFps > 0 ? (totalFrames / playbackFps) * 1000 : 0
 }
 
 /**

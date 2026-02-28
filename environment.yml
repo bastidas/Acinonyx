@@ -1,3 +1,5 @@
+# Minimal install (matches: pip install -e .)
+# Most of the UI works; for full functionality use environment-all.yml or run: pip install -e ".[all]"
 name: acinonyx
 channels:
   - conda-forge
@@ -7,30 +9,22 @@ dependencies:
   - pip>=21.3
   - setuptools>=64.0.0
   - git
-  - scikit-learn>=1.5.2
-  - numpy==2.2.5
+  - numpy=2.2.5
   - scipy>=1.7.3
-  - pandas>=2.2,<2.3
-  - jupyter
-  - ipympl
   - matplotlib>=3.4.0
   - seaborn>=0.12.2
   - networkx
-  - pillow
   - uvicorn
   - fastapi
-  - flask
-  - python-dotenv
-  - websocket-client
-  - pydantic==2.12.4
+  - pydantic=2.12.4
+  - scikit-learn>=1.5.2
   - pytest>=4.3.1
   - pytest-cov>=2.6.1
   - pytest-asyncio
   - pre-commit
   - black
   - pip:
-    - types-python-dateutil
     - pylinkage
-    - pyDOE3
-    - nlopt
+    - shapely>=2.1.2
+    - pyscipopt
     - -e .

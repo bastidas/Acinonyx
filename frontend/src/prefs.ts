@@ -18,6 +18,7 @@ export type StoredCanvasBgColor = 'default' | 'white' | 'cream' | 'dark'
 export type StoredTrajectoryStyle = 'dots' | 'line' | 'both'
 export type StoredSelectionHighlightColor = 'blue' | 'orange' | 'green' | 'purple'
 export type StoredColorCycleType = 'rainbow' | 'fire' | 'glow' | 'twilight' | 'husl'
+export type StoredLinkColorMode = 'various' | 'z-level' | 'single'
 
 export interface StoredSettings {
   showGrid: boolean
@@ -30,15 +31,27 @@ export interface StoredSettings {
   jointMergeRadius: number
   jointSize: number
   linkThickness: number
+  /** Link opacity 10–100 (percent). */
+  linkTransparency: number
+  /** Link color mode: various (per-link), z-level (by meta zlevel), single (one color). */
+  linkColorMode: StoredLinkColorMode
+  /** Hex color when linkColorMode is 'single'. */
+  linkColorSingle: string
+  /** Joint outline width in px (0 = none, 10 = max). */
+  jointOutline: number
   trajectoryDotSize: number
   trajectoryDotOutline: boolean
   trajectoryDotOpacity: number
+  /** Show step numbers (1..N) next to trajectory dots. Default off. */
+  showTrajectoryStepNumbers: boolean
   selectionHighlightColor: StoredSelectionHighlightColor
   trajectoryStyle: StoredTrajectoryStyle
   /** Trajectory exploration: max radius in units (5–50). */
   exploreRadius: number
   /** Trajectory exploration: number of radial sample points (8–360). */
   exploreRadialSamples: number
+  /** Trajectory exploration: number of angular (azimuthal) samples around the circle (8–45). */
+  exploreAzimuthalSamples: number
   /** Trajectory exploration: max N1×N2 for combinatorial run (64–5128). */
   exploreNMaxCombinatorial: number
   /** Trajectory exploration: color-map dots and trajectories by angle/radius (default on). */
@@ -56,19 +69,24 @@ export const DEFAULT_STORED_SETTINGS: StoredSettings = {
   showLinkLabels: false,
   canvasBgColor: 'default',
   simulationSteps: 64,
-  autoSimulateDelayMs: 5,
+  autoSimulateDelayMs: 0,
   trajectoryColorCycle: 'rainbow',
-  jointMergeRadius: 4,
-  jointSize: 8,
-  linkThickness: 8,
+  jointMergeRadius: 2,
+  jointSize: 5,
+  linkThickness: 6,
+  linkTransparency: 90,
+  linkColorMode: 'z-level',
+  linkColorSingle: '#555555',
+  jointOutline: 1,
   trajectoryDotSize: 4,
   trajectoryDotOutline: false,
   trajectoryDotOpacity: 0.85,
+  showTrajectoryStepNumbers: false,
   selectionHighlightColor: 'blue',
   trajectoryStyle: 'both',
-  exploreRadius: 20,
-  exploreRadialSamples: 10,
-  exploreAzimuthalSamples: 16,
+  exploreRadius: 15,
+  exploreRadialSamples: 5,
+  exploreAzimuthalSamples: 10,
   exploreNMaxCombinatorial: 2048,
   exploreColormapEnabled: true,
   exploreColormapType: 'rainbow'
@@ -80,6 +98,7 @@ const VALID_SELECTION_COLOR: StoredSelectionHighlightColor[] = ['blue', 'orange'
 const VALID_COLOR_CYCLE: StoredColorCycleType[] = ['rainbow', 'fire', 'glow', 'twilight', 'husl']
 export type StoredExploreColormapType = 'rainbow' | 'twilight' | 'husl'
 const VALID_EXPLORE_COLORMAP_TYPE: StoredExploreColormapType[] = ['rainbow', 'twilight', 'husl']
+const VALID_LINK_COLOR_MODE: StoredLinkColorMode[] = ['various', 'z-level', 'single']
 
 function clampNum(value: unknown, min: number, max: number, fallback: number): number {
   const n = typeof value === 'number' && !Number.isNaN(value) ? value : fallback
@@ -103,12 +122,17 @@ export function getStoredSettings(): StoredSettings {
       simulationSteps: clampNum(parsed.simulationSteps, MIN_SIMULATION_STEPS, MAX_SIMULATION_STEPS, DEFAULT_STORED_SETTINGS.simulationSteps),
       autoSimulateDelayMs: clampNum(parsed.autoSimulateDelayMs, 0, 10000, DEFAULT_STORED_SETTINGS.autoSimulateDelayMs),
       trajectoryColorCycle: oneOf(parsed.trajectoryColorCycle, VALID_COLOR_CYCLE, DEFAULT_STORED_SETTINGS.trajectoryColorCycle),
-      jointMergeRadius: clampNum(parsed.jointMergeRadius, 0, 50, DEFAULT_STORED_SETTINGS.jointMergeRadius),
+      jointMergeRadius: clampNum(parsed.jointMergeRadius, 1, 10, DEFAULT_STORED_SETTINGS.jointMergeRadius),
       jointSize: clampNum(parsed.jointSize, 1, 32, DEFAULT_STORED_SETTINGS.jointSize),
       linkThickness: clampNum(parsed.linkThickness, 1, 32, DEFAULT_STORED_SETTINGS.linkThickness),
+      linkTransparency: clampNum(parsed.linkTransparency, 10, 100, DEFAULT_STORED_SETTINGS.linkTransparency),
+      linkColorMode: oneOf(parsed.linkColorMode, VALID_LINK_COLOR_MODE, DEFAULT_STORED_SETTINGS.linkColorMode),
+      linkColorSingle: typeof parsed.linkColorSingle === 'string' && /^#[0-9A-Fa-f]{6}$/.test(parsed.linkColorSingle) ? parsed.linkColorSingle : DEFAULT_STORED_SETTINGS.linkColorSingle,
+      jointOutline: clampNum(parsed.jointOutline, 0, 10, DEFAULT_STORED_SETTINGS.jointOutline),
       trajectoryDotSize: clampNum(parsed.trajectoryDotSize, 1, 24, DEFAULT_STORED_SETTINGS.trajectoryDotSize),
       trajectoryDotOutline: typeof parsed.trajectoryDotOutline === 'boolean' ? parsed.trajectoryDotOutline : DEFAULT_STORED_SETTINGS.trajectoryDotOutline,
-      trajectoryDotOpacity: clampNum(parsed.trajectoryDotOpacity, 0, 1, DEFAULT_STORED_SETTINGS.trajectoryDotOpacity),
+      trajectoryDotOpacity: clampNum(parsed.trajectoryDotOpacity, 0.1, 1, DEFAULT_STORED_SETTINGS.trajectoryDotOpacity),
+      showTrajectoryStepNumbers: typeof parsed.showTrajectoryStepNumbers === 'boolean' ? parsed.showTrajectoryStepNumbers : DEFAULT_STORED_SETTINGS.showTrajectoryStepNumbers,
       selectionHighlightColor: oneOf(parsed.selectionHighlightColor, VALID_SELECTION_COLOR, DEFAULT_STORED_SETTINGS.selectionHighlightColor),
       trajectoryStyle: oneOf(parsed.trajectoryStyle, VALID_TRAJECTORY_STYLE, DEFAULT_STORED_SETTINGS.trajectoryStyle),
       exploreRadius: clampNum(parsed.exploreRadius, 5, 50, DEFAULT_STORED_SETTINGS.exploreRadius),
@@ -156,4 +180,15 @@ export function setStoredGraphFilename(filename: string | null): void {
   } else {
     Cookies.set(GRAPH_KEY, filename, { expires: COOKIE_EXPIRES_DAYS })
   }
+}
+
+/**
+ * Remove all Acinonyx cookies so the app falls back to defaults from this file.
+ * Call from browser console: import('/src/prefs.ts').then(m => m.clearStoredPrefs())
+ * Or expose on window for one-off use: window.__clearAcinonyxPrefs = clearStoredPrefs
+ */
+export function clearStoredPrefs(): void {
+  Cookies.remove(THEME_KEY)
+  Cookies.remove(GRAPH_KEY)
+  Cookies.remove(SETTINGS_KEY)
 }

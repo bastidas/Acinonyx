@@ -17,6 +17,7 @@ function renderJoint(
 ): JSX.Element {
   const {
     jointSize,
+    jointOutline,
     jointColors,
     darkMode,
     showJointLabels,
@@ -73,12 +74,20 @@ function renderJoint(
   const defaultStroke = darkMode ? '#333333' : '#FFFFFF'
   const highlightStyle = getHighlightStyle('joint', highlightType, jointFillColor, 2)
 
-  // Stroke color: use object color for glow, but keep default stroke for the actual outline
+  // Stroke: when no highlight use jointOutline (0 = none). When hovered: outline + 1 (so 0→1, 4→5).
+  // Other highlights (selected, move_group, merge) use highlightStyle stroke/width.
+  const outlineWidth = highlightType === 'none'
+    ? jointOutline
+    : highlightType === 'hovered'
+      ? jointOutline + 1
+      : highlightStyle.strokeWidth
   const strokeColor = highlightType === 'none'
-    ? defaultStroke
+    ? (jointOutline > 0 ? defaultStroke : 'none')
+    : highlightType === 'hovered'
+      ? defaultStroke
     : highlightType === 'move_group' || highlightType === 'merge'
       ? highlightStyle.stroke
-      : defaultStroke  // Keep white/dark outline, the glow provides the color
+      : defaultStroke
 
   // Calculate radius based on state
   const radius = isDragging
@@ -98,7 +107,7 @@ function renderJoint(
         r={radius}
         fill={jointFillColor}
         stroke={strokeColor}
-        strokeWidth={highlightStyle.strokeWidth}
+        strokeWidth={outlineWidth}
         filter={highlightStyle.filter}
         style={{ cursor: moveGroupIsActive ? 'move' : (toolMode === 'select' ? 'grab' : 'pointer') }}
         onMouseEnter={() => onJointHover(name)}

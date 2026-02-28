@@ -57,10 +57,13 @@ SMOOTHING_POLYORDER:
 """
 from __future__ import annotations
 
+import logging
 from typing import Literal
 
 import numpy as np
 from scipy.interpolate import interp1d
+logger = logging.getLogger(__name__)
+
 Trajectory = list[tuple[float, float]]
 TrajectoryArray = np.ndarray  # Shape: (n_points, 2)
 
@@ -544,17 +547,19 @@ def analyze_trajectory(trajectory: Trajectory) -> dict:
     }
 
 
-def print_trajectory_info(trajectory: Trajectory, name: str = 'Trajectory') -> None:
-    """Print formatted trajectory statistics."""
+def log_trajectory_info(trajectory: Trajectory, name: str = 'Trajectory') -> None:
+    """Log trajectory statistics at DEBUG level."""
     stats = analyze_trajectory(trajectory)
-
-    print(f"\n{'='*50}")
-    print(f'  {name} Analysis')
-    print(f"{'='*50}")
-    print(f"  Points:        {stats['n_points']}")
-    print(f"  Centroid:      ({stats['centroid'][0]:.2f}, {stats['centroid'][1]:.2f})")
-    print(f"  Bounding box:  {stats['bounding_box']['width']:.2f} x {stats['bounding_box']['height']:.2f}")
-    print(f"  Path length:   {stats['total_path_length']:.2f}")
-    print(f"  Closed curve:  {'Yes' if stats['is_closed'] else 'No'} (gap: {stats['closure_gap']:.4f})")
-    print(f"  Roughness:     {stats['roughness']:.4f} rad/segment")
-    print(f"{'='*50}\n")
+    logger.debug(
+        '%s: n_points=%s centroid=(%.2f, %.2f) bbox=%.2fx%.2f path_len=%.2f closed=%s gap=%.4f roughness=%.4f',
+        name,
+        stats['n_points'],
+        stats['centroid'][0],
+        stats['centroid'][1],
+        stats['bounding_box']['width'],
+        stats['bounding_box']['height'],
+        stats['total_path_length'],
+        stats['is_closed'],
+        stats['closure_gap'],
+        stats['roughness'],
+    )

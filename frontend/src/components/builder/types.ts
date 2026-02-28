@@ -73,6 +73,8 @@ export interface LinkMeta {
   color: string
   connects: string[]
   isGround?: boolean
+  /** Z-level (layer) when computed via Compute Z-levels */
+  zlevel?: number
 }
 
 export interface UIMeta {

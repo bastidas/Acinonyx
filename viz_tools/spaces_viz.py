@@ -88,6 +88,7 @@ def render_contours(
 
     if use_scattered:
         # Store original scattered values before interpolation
+        assert x_coords is not None and y_coords is not None  # use_scattered guarantees this
         original_x_coords = x_coords.copy()
         original_y_coords = y_coords.copy()
         if values is not None:
@@ -252,6 +253,7 @@ def render_contours(
             # Default style for unknown labels
             default_style = {'color': 'gray', 'marker': 'o', 'facecolors': 'gray', 'edgecolors': 'gray', 's': 30}
 
+            assert original_x_coords is not None and original_y_coords is not None  # set when use_scattered
             for label in unique_labels:
                 mask = original_point_labels == label
                 style = label_styles.get(label.lower(), default_style)

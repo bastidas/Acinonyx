@@ -55,17 +55,6 @@ export const StaticJointMovementConfig: React.FC<StaticJointMovementConfigProps>
   const SLIDER_MIN = -100
   const SLIDER_MAX = 100
 
-  // DEBUG: Log when jointOverrides prop changes
-  useEffect(() => {
-    if (process.env.NODE_ENV === 'development') {
-      console.log('[DEBUG] StaticJointMovementConfig: jointOverrides prop changed', {
-        jointOverrides,
-        keys: Object.keys(jointOverrides),
-        entries: Object.entries(jointOverrides)
-      })
-    }
-  }, [jointOverrides])
-
   return (
     <Stack spacing={compact ? 1 : 1.5}>
       {/* Enable/Disable toggle */}
@@ -119,16 +108,6 @@ export const StaticJointMovementConfig: React.FC<StaticJointMovementConfigProps>
               const minY = -maxY
               const maxYDisplay = maxY
 
-              // DEBUG: Log current values on each render (after all variables are initialized)
-              if (process.env.NODE_ENV === 'development') {
-                console.log(`[DEBUG] StaticJoint ${joint.name} render:`, {
-                  override,
-                  storedValues: { maxX, maxY },
-                  displayRange: { minX, maxX: maxXDisplay, minY, maxY: maxYDisplay },
-                  jointEnabled,
-                  jointOverridesKey: Object.keys(jointOverrides)
-                })
-              }
               const xRange: [number, number] = [minX, maxXDisplay]
               const yRange: [number, number] = [minY, maxYDisplay]
 
@@ -221,32 +200,11 @@ export const StaticJointMovementConfig: React.FC<StaticJointMovementConfigProps>
                               // Use the smaller absolute value to allow shrinking
                               const newMaxXValue = Math.min(absMin, absMax)
 
-                              // DEBUG: Log onChange event with actual values
-                              if (process.env.NODE_ENV === 'development') {
-                                console.log(`[DEBUG] StaticJoint ${joint.name} X onChange:`, {
-                                  userInput: { newMin, newMax },
-                                  afterClamp: { finalMin, finalMax },
-                                  absValues: { absMin, absMax },
-                                  oldState: { minX, maxX: maxXDisplay, storedMaxX: oldMaxX },
-                                  calculatedNewMaxX: newMaxXValue,
-                                  willUpdate: newMaxXValue !== oldMaxX
-                                })
-                              }
-
                               // Read current Y value fresh from jointOverrides to avoid stale closure
                               const currentOverride = jointOverrides[joint.name]
                               const currentYValue = currentOverride !== undefined ? currentOverride[2] : defaultMaxY
 
                               // Always update (don't skip) - let React handle optimization
-                              // DEBUG: Log before update
-                              if (process.env.NODE_ENV === 'development') {
-                                console.log(`[DEBUG] StaticJoint ${joint.name} X updating:`, {
-                                  newOverride: [jointEnabled, newMaxXValue, currentYValue],
-                                  currentOverride,
-                                  change: `${oldMaxX} → ${newMaxXValue}`
-                                })
-                              }
-
                               // Update with new X value, preserving current Y value
                               onJointOverrideChange(joint.name, [jointEnabled, newMaxXValue, currentYValue])
                             }}
@@ -324,32 +282,11 @@ export const StaticJointMovementConfig: React.FC<StaticJointMovementConfigProps>
                               // Use the smaller absolute value to allow shrinking
                               const newMaxYValue = Math.min(absMin, absMax)
 
-                              // DEBUG: Log onChange event with actual values
-                              if (process.env.NODE_ENV === 'development') {
-                                console.log(`[DEBUG] StaticJoint ${joint.name} Y onChange:`, {
-                                  userInput: { newMin, newMax },
-                                  afterClamp: { finalMin, finalMax },
-                                  absValues: { absMin, absMax },
-                                  oldState: { minY, maxY: maxYDisplay, storedMaxY: oldMaxY },
-                                  calculatedNewMaxY: newMaxYValue,
-                                  willUpdate: newMaxYValue !== oldMaxY
-                                })
-                              }
-
                               // Read current X value fresh from jointOverrides to avoid stale closure
                               const currentOverride = jointOverrides[joint.name]
                               const currentXValue = currentOverride !== undefined ? currentOverride[1] : defaultMaxX
 
                               // Always update (don't skip) - let React handle optimization
-                              // DEBUG: Log before update
-                              if (process.env.NODE_ENV === 'development') {
-                                console.log(`[DEBUG] StaticJoint ${joint.name} Y updating:`, {
-                                  newOverride: [jointEnabled, currentXValue, newMaxYValue],
-                                  currentOverride,
-                                  change: `${oldMaxY} → ${newMaxYValue}`
-                                })
-                              }
-
                               // Update with new Y value, preserving current X value
                               onJointOverrideChange(joint.name, [jointEnabled, currentXValue, newMaxYValue])
                             }}

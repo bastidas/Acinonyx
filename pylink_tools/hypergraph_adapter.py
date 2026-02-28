@@ -22,9 +22,13 @@ Usage:
 from __future__ import annotations
 
 import copy
+import logging
 from typing import TYPE_CHECKING
 
 from pylink_tools.optimization_types import DimensionBoundsSpec
+
+logger = logging.getLogger(__name__)
+
 
 if TYPE_CHECKING:
     from pylinkage.hypergraph import HypergraphLinkage
@@ -195,7 +199,7 @@ def sync_hypergraph_distances(
 
     Args:
         pylink_data: Our hypergraph format with 'linkage.nodes' and 'linkage.edges'
-        verbose: If True, print sync changes
+        verbose: If True, log sync changes at DEBUG level
         inplace: If True, modify in place; otherwise return copy
 
     Returns:
@@ -219,8 +223,10 @@ def sync_hypergraph_distances(
         target_id = edge.get('target')
 
         if source_id not in nodes or target_id not in nodes:
-            if verbose:
-                print(f'  [SYNC] Edge {edge_id}: missing node(s) {source_id} or {target_id}')
+            logger.warning(
+                'sync_hypergraph_distances: edge %s references missing node(s) %s or %s',
+                edge_id, source_id, target_id,
+            )
             continue
 
         source_pos = nodes[source_id].get('position', [0, 0])
@@ -238,10 +244,13 @@ def sync_hypergraph_distances(
             edge['distance'] = new_distance
             synced_count += 1
             if verbose:
-                print(f'  [SYNC] Edge {edge_id}: distance {old_distance:.2f} → {new_distance:.2f}')
+                logger.debug(
+                    'sync_hypergraph_distances: edge %s distance %.2f → %.2f',
+                    edge_id, old_distance, new_distance,
+                )
 
     if verbose and synced_count > 0:
-        print(f'  Synced {synced_count} edge distances')
+        logger.debug('sync_hypergraph_distances: synced %d edge distances', synced_count)
 
     return pylink_data
 

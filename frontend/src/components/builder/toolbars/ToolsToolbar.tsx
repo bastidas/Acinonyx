@@ -58,8 +58,11 @@ export const ToolsToolbar: React.FC<ToolsToolbarProps> = ({
                   </Typography>
                 </Box>
               }
-              placement="bottom"
+              placement="left"
               arrow
+              disableInteractive
+              leaveDelay={0}
+              enterDelay={400}
             >
               <IconButton
                 onClick={() => {

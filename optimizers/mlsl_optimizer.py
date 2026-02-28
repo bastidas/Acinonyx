@@ -125,15 +125,15 @@ def run_nlopt_mlsl(
         - MLSL_LDS variant uses Sobol sequences for better coverage
         - Local L-BFGS requires gradient estimation (finite differences)
     """
-    # Import here to provide clear error if not installed
+    # Import here to provide clear error if not installed (optional [all] extra)
     try:
         import nlopt
-    except ImportError:
+    except ImportError as e:
         error_msg = (
-            'NLopt package not installed. Install with: pip install nlopt\n'
+            "NLopt package not installed. Install with: pip install -e '.[all]'. "
             'NLopt is LGPL licensed (permissive for commercial use).'
         )
-        logger.error(error_msg)
+        logger.error('%s %s', error_msg, e)
         return OptimizationResult(
             success=False,
             optimized_dimensions={},
@@ -180,17 +180,6 @@ def run_nlopt_mlsl(
     # Get bounds
     lower_bounds = np.array([b[0] for b in dimension_bounds_spec.bounds], dtype=np.float64)
     upper_bounds = np.array([b[1] for b in dimension_bounds_spec.bounds], dtype=np.float64)
-
-    if verbose:
-        logger.info('Starting NLopt MLSL optimization')
-        logger.info(f'  Dimensions: {dim}')
-        logger.info(f"  Algorithm: MLSL{'_LDS' if config.use_lds else ''} + {config.local_algorithm.upper()}")
-        logger.info(f'  Max evaluations: {config.max_eval}')
-        logger.info(f'  Local max evaluations: {config.local_max_eval}')
-        logger.info(f'  Initial error: {initial_error:.6f}')
-        logger.info('  Bounds:')
-        for name, lo, hi, init in zip(dimension_bounds_spec.names, lower_bounds, upper_bounds, x0):
-            logger.info(f'    {name}: [{lo:.2f}, {hi:.2f}] (init: {init:.2f})')
 
     # Track convergence history
     convergence_history = []
@@ -329,21 +318,6 @@ def run_nlopt_mlsl(
     mechanism.set_dimensions(xopt)
     mechanism.sync_positions_to_dimensions()
     optimized_mechanism = mechanism.copy()
-
-    if verbose:
-        result_name = _get_result_name(result_code)
-        improvement = (1 - final_error / initial_error) * 100 if initial_error > 0 else 0
-        logger.info('NLopt MLSL completed:')
-        logger.info(f'  Result: {result_name}')
-        logger.info(f'  Evaluations: {eval_count[0]}')
-        logger.info(f'  Time: {elapsed_time:.2f}s')
-        logger.info(f'  Initial error: {initial_error:.6f}')
-        logger.info(f'  Final error: {final_error:.6f}')
-        logger.info(f'  Improvement: {improvement:.1f}%')
-        logger.info('  Optimized dimensions:')
-        for name, val in optimized_dims.items():
-            init_val = dict(zip(dimension_bounds_spec.names, x0))[name]
-            logger.info(f'    {name}: {init_val:.2f} -> {val:.2f}')
 
     return OptimizationResult(
         success=success,

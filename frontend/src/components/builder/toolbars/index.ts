@@ -14,6 +14,9 @@ export type { NodesToolbarProps } from './NodesToolbar'
 export { MoreToolbar } from './MoreToolbar'
 export type { MoreToolbarProps } from './MoreToolbar'
 
+export { FormsToolbar, DEFAULT_Z_LEVEL_CONFIG } from './FormsToolbar'
+export type { FormsToolbarProps, ZLevelRow, ZLevelHeuristicConfig } from './FormsToolbar'
+
 export { AnimateToolbar } from './AnimateToolbar'
 export type { AnimateToolbarProps, AnimationState } from './AnimateToolbar'
 
@@ -22,7 +25,8 @@ export type {
   SettingsToolbarProps,
   CanvasBgColor,
   TrajectoryStyle,
-  SelectionHighlightColor
+  SelectionHighlightColor,
+  LinkColorMode
 } from './SettingsToolbar'
 
 export { OptimizationToolbar } from './OptimizationToolbar'

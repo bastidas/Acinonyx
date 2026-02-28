@@ -224,7 +224,8 @@ export function convertLinkageDocumentToLegacy(doc: LinkageDocument): PylinkDocu
     linksMeta[edgeId] = {
       color: meta?.color || '#888888',
       connects: [edge.source, edge.target],
-      isGround: meta?.isGround
+      isGround: meta?.isGround,
+      zlevel: meta?.zlevel
     }
   }
 

@@ -407,10 +407,11 @@ def get_mech_variations_from_spec(
             from pyDOE3 import bbdesign
         except ImportError as e:
             logger.error(
-                f'pyDOE3 not installed. Install with: pip install pyDOE3. Error: {e}',
+                "pyDOE3 not installed (required for 'behnken' mode). Install with: pip install -e '.[all]'. %s",
+                e,
             )
             raise ImportError(
-                "pyDOE3 is required for 'behnken' mode. Install with: pip install pyDOE3",
+                "pyDOE3 is required for 'behnken' mode. Install with: pip install -e '.[all]'",
             ) from e
 
         try:
@@ -461,10 +462,11 @@ def get_mech_variations_from_spec(
             from pyDOE3 import sobol_sequence
         except ImportError as e:
             logger.error(
-                f'pyDOE3 not installed. Install with: pip install pyDOE3. Error: {e}',
+                "pyDOE3 not installed (required for 'sobol' mode). Install with: pip install -e '.[all]'. %s",
+                e,
             )
             raise ImportError(
-                "pyDOE3 is required for 'sobol' mode. Install with: pip install pyDOE3",
+                "pyDOE3 is required for 'sobol' mode. Install with: pip install -e '.[all]'",
             ) from e
 
         try:

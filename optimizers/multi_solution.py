@@ -305,16 +305,6 @@ def run_basin_hopping_multi(
 
     initial_error = fitness_func(tuple(x0))
 
-    if verbose:
-        logger.info('Starting Basin Hopping multi-solution optimization')
-        logger.info(f'  Dimensions: {dim}')
-        logger.info(f'  Iterations: {config.n_iterations}')
-        logger.info(f'  Temperature: {config.temperature}')
-        logger.info(f'  Step size: {config.stepsize}')
-        logger.info(f'  Local method: {config.local_method}')
-        logger.info(f'  Epsilon threshold: {config.epsilon_threshold}')
-        logger.info(f'  Initial error: {initial_error:.6f}')
-
     # Track all local minima discovered
     class MinimumTracker:
         def __init__(self, min_distance_threshold):
@@ -337,8 +327,6 @@ def run_basin_hopping_multi(
 
             if is_new:
                 self.minima.append((x.copy(), f, self.iteration))
-                if verbose and len(self.minima) % 10 == 0:
-                    logger.info(f'  Iteration {self.iteration}: Found {len(self.minima)} distinct minima')
 
     tracker = MinimumTracker(config.min_distance_threshold)
 
@@ -431,21 +419,12 @@ def run_basin_hopping_multi(
     all_f = np.array([f for _, f, _ in tracker.minima])
     all_iter = np.array([it for _, _, it in tracker.minima])
 
-    if verbose:
-        logger.info(f'Basin hopping completed in {elapsed_time:.2f}s')
-        logger.info(f'  Total evaluations: {eval_count[0]}')
-        logger.info(f'  Discovered {len(tracker.minima)} distinct minima')
-        logger.info(f'  Best error: {result.fun:.6f}')
-
     # Cluster solutions to identify distinct groups
     cluster_labels, n_clusters = _cluster_solutions(
         all_x,
         method='dbscan',
         threshold=config.min_distance_threshold,
     )
-
-    if verbose:
-        logger.info(f'  Clustered into {n_clusters} distinct solution groups')
 
     # Compute uniqueness scores
     uniqueness_scores = _compute_uniqueness_scores(all_x, cluster_labels)
@@ -775,7 +754,7 @@ def _compute_search_space_coverage(
 
                 # Unit hypercube has volume 1.0
                 coverage = min(hull_volume, 1.0)
-                return coverage
+                return float(coverage)
         except Exception:
             # Fall back to range method if convex hull fails
             method = 'range'
@@ -801,7 +780,7 @@ def _compute_search_space_coverage(
 
         # Geometric mean of dimension coverages
         coverage = np.prod(dim_coverages) ** (1.0 / n_dims)
-        return min(coverage, 1.0)
+        return float(min(coverage, 1.0))
 
     else:
         raise ValueError(f"Unknown coverage method: {method}. Use 'convex_hull', 'grid', or 'range'")

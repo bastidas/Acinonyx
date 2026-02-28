@@ -16,7 +16,7 @@ import {
   DialogContentText,
   DialogActions
 } from '@mui/material'
-import { JointEditModal, JointData, LinkEditModal, LinkData } from '../BuilderTools'
+import { JointEditModal, JointData, LinkEditModal, LinkData, FormEditModal, FormData } from '../BuilderTools'
 
 export interface DeleteConfirmDialogState {
   open: boolean
@@ -39,7 +39,12 @@ export interface BuilderModalsProps {
   onJointShowPathChange: (jointName: string, showPath: boolean) => void
   setEditingJointData: React.Dispatch<React.SetStateAction<JointData | null>>
   setEditingLinkData: React.Dispatch<React.SetStateAction<LinkData | null>>
+  editingFormData: FormData | null
+  onCloseFormEdit: () => void
+  onSaveForm: (id: string, updates: { name: string; fillColor: string; strokeColor: string; z_level?: number; z_level_fixed?: boolean }) => void
   jointTypes: readonly string[]
+  /** When provided, Link and Form edit modals show "Sync color to z-level" and form edit updates color when z-level changes */
+  getColorForZLevel?: (z: number) => string
   darkMode?: boolean
 }
 
@@ -58,7 +63,11 @@ export function BuilderModals({
   onJointShowPathChange,
   setEditingJointData,
   setEditingLinkData,
+  editingFormData,
+  onCloseFormEdit,
+  onSaveForm,
   jointTypes,
+  getColorForZLevel,
   darkMode = false
 }: BuilderModalsProps): JSX.Element {
   return (
@@ -137,6 +146,16 @@ export function BuilderModals({
           updateLinkProperty(linkName, 'isGround', isGround)
           setEditingLinkData(prev => prev ? { ...prev, isGround } : null)
         }}
+        getColorForZLevel={getColorForZLevel}
+        darkMode={darkMode}
+      />
+
+      <FormEditModal
+        open={editingFormData !== null}
+        onClose={onCloseFormEdit}
+        formData={editingFormData}
+        onSave={onSaveForm}
+        getColorForZLevel={getColorForZLevel}
         darkMode={darkMode}
       />
     </>

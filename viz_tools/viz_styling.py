@@ -7,6 +7,7 @@ module for consistency and maintainability.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 
 import matplotlib as mpl
 import matplotlib.pyplot as plt
@@ -233,8 +234,6 @@ def _save_or_show(fig: plt.Figure, out_path: Path | str | None, dpi: int = 150):
         out_path: Path to save (None to show)
         dpi: DPI for saved figures
     """
-    from pathlib import Path
-
     if out_path is not None:
         out_path = Path(out_path)
         out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -279,8 +278,6 @@ def _handle_output(
         out_path: Output path for saving (None to display)
         style: Style configuration
     """
-    from pathlib import Path
-
     if out_path is not None:
         out_path = Path(out_path)
         if out_path.is_dir():

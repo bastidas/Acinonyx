@@ -65,6 +65,8 @@ export {
   LinksToolbar,
   NodesToolbar,
   MoreToolbar,
+  FormsToolbar,
+  DEFAULT_Z_LEVEL_CONFIG,
   SettingsToolbar,
   OptimizationToolbar,
   AnimateToolbar
@@ -76,6 +78,9 @@ export type {
   LinksToolbarProps,
   NodesToolbarProps,
   MoreToolbarProps,
+  FormsToolbarProps,
+  ZLevelRow,
+  ZLevelHeuristicConfig,
   SettingsToolbarProps,
   OptimizationToolbarProps,
   AnimateToolbarProps,
@@ -239,7 +244,12 @@ export {
   useStatusState,
   useCanvasSettingsState,
   useDocumentState,
-  useCanvasLayerRenders
+  useCanvasLayerRenders,
+  useDisplayFrame,
+  useMechanismPositions,
+  useToolContext,
+  useCanvasEventHandlers,
+  useToolbarContent
 } from './hooks'
 export {
   useViewportState,
@@ -276,7 +286,19 @@ export type {
   SelectionHighlightColorOption,
   UseDocumentStateReturn,
   UseCanvasLayerRendersParams,
-  UseCanvasLayerRendersReturn
+  UseCanvasLayerRendersReturn,
+  UseDisplayFrameParams,
+  UseDisplayFrameReturn,
+  BuilderAnimationMode,
+  UseMechanismPositionsParams,
+  UseMechanismPositionsReturn,
+  MechanismPositionsDragState,
+  PendingDropPosition,
+  UseToolContextParams,
+  UseCanvasEventHandlersParams,
+  UseCanvasEventHandlersReturn,
+  UseToolbarContentParams,
+  GetToolbarContent
 } from './hooks'
 export type {
   ViewportState,
@@ -399,6 +421,9 @@ export {
 
   // Apply loaded document (file load / demo load)
   applyLoadedDocument,
+
+  // Drag-end sync (trajectory hop fix)
+  buildSyncedDocAfterDrop,
 
   // Optimizer sync status (pure comparison)
   computeOptimizerSyncStatus,

@@ -23,7 +23,8 @@ import {
   renderDrawnObjects as doRenderDrawnObjects,
   renderLinks as doRenderLinks,
   renderExplorationDots as doRenderExplorationDots,
-  renderExplorationTrajectories as doRenderExplorationTrajectories
+  renderExplorationTrajectories as doRenderExplorationTrajectories,
+  filterTrajectoriesForRendering
 } from '../rendering'
 import type { PylinkDocument } from '../types'
 import type { ToolContext } from '../toolHandlers/types'
@@ -128,10 +129,15 @@ export interface UseCanvasLayerRendersParams {
   canvasDimensions: { width: number; height: number }
   darkMode: boolean
   jointSize: number
+  jointOutline: number
   linkThickness: number
+  linkTransparency: number
+  linkColorMode: 'various' | 'z-level' | 'single'
+  linkColorSingle: string
   trajectoryDotSize: number
   trajectoryDotOutline: boolean
   trajectoryDotOpacity: number
+  showTrajectoryStepNumbers: boolean
   trajectoryStyle: string
   trajectoryColorCycle: string
   showJointLabels: boolean
@@ -209,10 +215,15 @@ export function useCanvasLayerRenders(params: UseCanvasLayerRendersParams): UseC
     canvasDimensions,
     darkMode,
     jointSize,
+    jointOutline,
     linkThickness,
+    linkTransparency,
+    linkColorMode,
+    linkColorSingle,
     trajectoryDotSize,
     trajectoryDotOutline,
     trajectoryDotOpacity,
+    showTrajectoryStepNumbers,
     trajectoryStyle,
     trajectoryColorCycle,
     showJointLabels,
@@ -381,6 +392,7 @@ export function useCanvasLayerRenders(params: UseCanvasLayerRendersParams): UseC
     return doRenderJoints({
       joints: jointData,
       jointSize,
+      jointOutline,
       jointColors,
       darkMode,
       showJointLabels,
@@ -395,31 +407,7 @@ export function useCanvasLayerRenders(params: UseCanvasLayerRendersParams): UseC
 
   const renderTrajectories = (): React.ReactNode => {
     if (!trajectoryData || !showTrajectory) return null
-    const trajectories = Object.entries(trajectoryData.trajectories)
-      .map(([jointName, positions]): { jointName: string; positions: [number, number][]; jointType: 'Static' | 'Crank' | 'Revolute'; hasMovement: boolean; showPath: boolean } | null => {
-        if (!positions || !Array.isArray(positions) || positions.length === 0) return null
-        const jointType = trajectoryData.jointTypes?.[jointName]
-        if (jointType !== 'Revolute' && jointType !== 'Crank') return null
-        const jointMeta = pylinkDoc.meta.joints[jointName]
-        if (jointMeta && jointMeta.show_path === false) return null
-        const firstPos = positions[0]
-        if (!firstPos || typeof firstPos[0] !== 'number' || typeof firstPos[1] !== 'number') return null
-        const validPositions = positions.filter((pos): pos is [number, number] =>
-          !!pos && typeof pos[0] === 'number' && typeof pos[1] === 'number' && isFinite(pos[0]) && isFinite(pos[1])
-        )
-        if (validPositions.length === 0) return null
-        const hasMovement = validPositions.length > 1 && validPositions.some((pos, i) =>
-          i > 0 && (Math.abs(pos[0] - firstPos[0]) > 0.001 || Math.abs(pos[1] - firstPos[1]) > 0.001)
-        )
-        return {
-          jointName,
-          positions: validPositions,
-          jointType: jointType as 'Static' | 'Crank' | 'Revolute',
-          hasMovement,
-          showPath: jointMeta?.show_path !== false
-        }
-      })
-      .filter((t): t is NonNullable<typeof t> => t != null)
+    const trajectories = filterTrajectoriesForRendering(trajectoryData, pylinkDoc.meta.joints)
     return (
       <>
         {doRenderTrajectories({
@@ -427,6 +415,7 @@ export function useCanvasLayerRenders(params: UseCanvasLayerRendersParams): UseC
           trajectoryDotSize,
           trajectoryDotOutline,
           trajectoryDotOpacity,
+          showTrajectoryStepNumbers,
           trajectoryStyle: trajectoryStyle as TrajectoryStyle,
           trajectoryColorCycle: trajectoryColorCycle as ColorCycleType,
           jointColors,
@@ -438,9 +427,13 @@ export function useCanvasLayerRenders(params: UseCanvasLayerRendersParams): UseC
   }
 
   const renderLinks = (): React.ReactNode => {
-    const linkEntries = Object.entries(pylinkDoc.meta.links).filter(
-      ([, meta]) => meta.connects.length >= 2
-    ) as [string, { connects: [string, string]; color?: string; isGround?: boolean }][]
+    const linkEntries = Object.entries(pylinkDoc.meta.links)
+      .filter(([, meta]) => meta.connects.length >= 2)
+      .sort(([, a], [, b]) => {
+        const za = (a as { zlevel?: number }).zlevel ?? 0
+        const zb = (b as { zlevel?: number }).zlevel ?? 0
+        return za - zb
+      }) as [string, { connects: [string, string]; color?: string; isGround?: boolean; zlevel?: number }][]
 
     const links: Array<{
       name: string
@@ -462,11 +455,18 @@ export function useCanvasLayerRenders(params: UseCanvasLayerRendersParams): UseC
       if (!pos0 || !pos1) continue
 
       const isGround = linkMeta.isGround ?? false
-      const baseLinkColor = stretchingLinks.includes(linkName)
-        ? '#ff0000'
-        : isGround && !linkMeta.color
+      let baseLinkColor: string
+      if (stretchingLinks.includes(linkName)) {
+        baseLinkColor = '#ff0000'
+      } else if (linkColorMode === 'single') {
+        baseLinkColor = linkColorSingle
+      } else if (linkColorMode === 'z-level') {
+        baseLinkColor = linkMeta.color ?? getDefaultColor(linkMeta.zlevel ?? index)
+      } else {
+        baseLinkColor = isGround && !linkMeta.color
           ? '#7f7f7f'
           : (linkMeta.color || getDefaultColor(index))
+      }
 
       links.push({
         name: linkName,
@@ -488,6 +488,7 @@ export function useCanvasLayerRenders(params: UseCanvasLayerRendersParams): UseC
         {doRenderLinks({
           links,
           linkThickness,
+          linkTransparency,
           darkMode,
           showLinkLabels,
           moveGroupIsActive: moveGroupState.isActive,
@@ -521,19 +522,27 @@ export function useCanvasLayerRenders(params: UseCanvasLayerRendersParams): UseC
       .filter((obj): obj is typeof obj & { type: 'polygon' } => obj.type === 'polygon' && obj.points.length >= 3)
       .map(obj => {
         let displayPoints = obj.points
-        if (obj.mergedLinkName && obj.mergedLinkOriginalStart && obj.mergedLinkOriginalEnd) {
+        if (obj.mergedLinkName && (obj.mergedLinkOriginalStart != null || obj.mergedLinkOriginalEnd != null)) {
           const linkMeta = pylinkDoc.meta.links[obj.mergedLinkName]
           if (linkMeta) {
             const currentStart = getJointPosition(linkMeta.connects[0])
             const currentEnd = getJointPosition(linkMeta.connects[1])
             if (currentStart && currentEnd) {
-              displayPoints = transformPolygonPoints(
-                obj.points,
-                obj.mergedLinkOriginalStart,
-                obj.mergedLinkOriginalEnd,
-                currentStart,
-                currentEnd
-              )
+              // Use trajectory[0] as transform origin when available so polygon (built at step 0) never
+              // "moves away" at frame 0; avoids document vs trajectory[0] mismatch from merge/load.
+              const traj0Start = trajectoryData?.trajectories?.[linkMeta.connects[0]]?.[0] as [number, number] | undefined
+              const traj0End = trajectoryData?.trajectories?.[linkMeta.connects[1]]?.[0] as [number, number] | undefined
+              const origStart = (traj0Start ?? obj.mergedLinkOriginalStart) as [number, number] | undefined
+              const origEnd = (traj0End ?? obj.mergedLinkOriginalEnd) as [number, number] | undefined
+              if (origStart && origEnd) {
+                displayPoints = transformPolygonPoints(
+                  obj.points,
+                  origStart,
+                  origEnd,
+                  currentStart,
+                  currentEnd
+                )
+              }
             }
           }
         }
@@ -546,7 +555,8 @@ export function useCanvasLayerRenders(params: UseCanvasLayerRendersParams): UseC
           strokeColor: obj.strokeColor,
           strokeWidth: obj.strokeWidth,
           fillOpacity: obj.fillOpacity,
-          mergedLinkName: obj.mergedLinkName
+          mergedLinkName: obj.mergedLinkName,
+          contained_links_valid: obj.contained_links_valid
         }
       })
 
@@ -560,6 +570,7 @@ export function useCanvasLayerRenders(params: UseCanvasLayerRendersParams): UseC
           toolMode,
           getHighlightStyle,
           unitsToPixels,
+          pointerEventsNoneForDrawPolygon: toolMode === 'draw_polygon',
           onObjectClick: (id, _isSelected) => {
             setDrawnObjects(prev => ({
               ...prev,
@@ -596,7 +607,10 @@ export function useCanvasLayerRenders(params: UseCanvasLayerRendersParams): UseC
         targetPaths: targetPaths.map(p => ({ id: p.id, name: p.name, points: p.points, color: p.color })),
         selectedPathId,
         unitsToPixels,
-        onPathClick: setSelectedPathId
+        onPathClick: setSelectedPathId,
+        trajectoryDotSize,
+        trajectoryDotOpacity,
+        trajectoryDotOutline
       })}
     </>
   )

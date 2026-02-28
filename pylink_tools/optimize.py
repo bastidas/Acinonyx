@@ -8,16 +8,15 @@ from __future__ import annotations
 
 import logging
 from typing import Literal
-from typing import TYPE_CHECKING
 
-if TYPE_CHECKING:
-    from pylink_tools.mechanism import Mechanism
-    from pylink_tools.optimization_types import (
-        DimensionBoundsSpec,
-        OptimizationResult,
-        TargetTrajectory,
-    )
-    from target_gen.variation_config import MechVariationConfig
+from pylink_tools.mechanism import Mechanism
+from pylink_tools.optimization_types import DimensionBoundsSpec
+from pylink_tools.optimization_types import OptimizationResult
+from pylink_tools.optimization_types import TargetTrajectory
+from pylink_tools.optimization_types import TopologyVariationSpec
+from target_gen.variation_config import MechVariationConfig
+# from typing import TYPE_CHECKING
+# if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
@@ -51,6 +50,7 @@ def optimize_trajectory(
     target: TargetTrajectory,
     dimension_bounds_spec: DimensionBoundsSpec | None = None,
     mech_variation_config: MechVariationConfig | None = None,  # NEW
+    topology_variation_spec: TopologyVariationSpec | None = None,
     method: str = 'pylinkage',
     metric: str = 'mse',
     verbose: bool = True,
@@ -69,6 +69,7 @@ def optimize_trajectory(
         target: Target trajectory to match (joint name + positions)
         dimension_bounds_spec: Pre-computed dimension bounds spec (extracted from mechanism if None)
         mech_variation_config: Optional variation config to derive bounds from
+        topology_variation_spec: Optional topology constraints (for SCIP topology optimization)
         method: Optimization method:
                 - "pylinkage": Particle Swarm Optimization (default, robust)
                 - "pso": Standalone PSO implementation
@@ -107,29 +108,6 @@ def optimize_trajectory(
         ...           f"to {result.final_error:.2f}")
         ...     optimized_mechanism = mechanism  # Mechanism updated in place
     """
-    # Log MechVariationConfig when optimizer is instantiated
-    if mech_variation_config:
-        print('\n[optimize_trajectory] Received MechVariationConfig:')
-        print(f'  Type: {type(mech_variation_config)}')
-        print(f'  Has dimension_variation: {hasattr(mech_variation_config, "dimension_variation")}')
-        if hasattr(mech_variation_config, 'dimension_variation'):
-            dim_var = mech_variation_config.dimension_variation
-            print(f'    dimension_variation type: {type(dim_var)}')
-            print(f'    default_variation_range: {getattr(dim_var, "default_variation_range", "MISSING")}')
-            print(f'    default_enabled: {getattr(dim_var, "default_enabled", "MISSING")}')
-            print(f'    dimension_overrides: {len(getattr(dim_var, "dimension_overrides", {}))} overrides')
-            print(f'    exclude_dimensions: {len(getattr(dim_var, "exclude_dimensions", []))} excluded')
-        print(f'  Has static_joint_movement: {hasattr(mech_variation_config, "static_joint_movement")}')
-        if hasattr(mech_variation_config, 'static_joint_movement'):
-            static_joint = mech_variation_config.static_joint_movement
-            print(f'    static_joint_movement type: {type(static_joint)}')
-            print(f'    enabled: {getattr(static_joint, "enabled", "MISSING")}')
-            print(f'    max_x_movement: {getattr(static_joint, "max_x_movement", "MISSING")}')
-            print(f'    max_y_movement: {getattr(static_joint, "max_y_movement", "MISSING")}')
-        print(f'  Has topology_changes: {hasattr(mech_variation_config, "topology_changes")}')
-        print(f'  Has max_attempts: {hasattr(mech_variation_config, "max_attempts")}')
-        print(f'  Has fallback_ranges: {hasattr(mech_variation_config, "fallback_ranges")}')
-        print(f'  Has random_seed: {hasattr(mech_variation_config, "random_seed")}')
     # Priority: dimension_bounds_spec > mech_variation_config > mechanism default
     if dimension_bounds_spec is None:
         if mech_variation_config is not None:
@@ -289,6 +267,7 @@ def optimize_trajectory(
             verbose=verbose,
             phase_invariant=phase_invariant,
             phase_align_method=phase_align_method,
+            **kwargs,
         )
 
     # SCIP optimizer
@@ -300,12 +279,14 @@ def optimize_trajectory(
             config = SCIPConfig(
                 time_limit=kwargs.get('time_limit', 300.0),
                 gap_limit=kwargs.get('gap_limit', 0.01),
+                discretization_steps=kwargs.get('discretization_steps', 20),
             )
 
         return run_scip_optimization(
             mechanism=mechanism,
             target=target,
             dimension_bounds_spec=dimension_bounds_spec,
+            topology_variation_spec=topology_variation_spec,
             config=config,
             metric=metric,
             verbose=verbose,
@@ -326,7 +307,6 @@ def optimize_trajectory(
             'nlopt_gf',
             'scip',
         ]
-        from pylink_tools.optimization_types import OptimizationResult
         return OptimizationResult(
             success=False,
             optimized_dimensions={},

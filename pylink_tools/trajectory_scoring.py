@@ -91,9 +91,9 @@ def _prepare_trajectories(
     traj1: np.ndarray,
     traj2: np.ndarray,
     phase_invariant: bool,
-    phase_align_method: Literal['fft', 'rotation'],
+    phase_align_method: Literal['fft', 'rotation', 'frechet'],
     translation_invariant: bool,
-) -> tuple[np.ndarray, np.ndarray, dict]:
+) -> tuple[np.ndarray, np.ndarray, dict[str, int | float]]:
     """
     Prepare trajectories for metric computation with optional optimizations.
 
@@ -104,7 +104,7 @@ def _prepare_trajectories(
         traj1: Reference trajectory, shape (n, 2)
         traj2: Trajectory to compare, shape (n, 2)
         phase_invariant: If True, align traj2 to traj1
-        phase_align_method: Phase alignment method ('fft' or 'rotation')
+        phase_align_method: Phase alignment method ('fft', 'rotation', or 'frechet')
         translation_invariant: If True, center both trajectories
 
     Returns:
@@ -113,7 +113,7 @@ def _prepare_trajectories(
             - 'phase_offset': Best phase offset found
             - 'mse_at_best_offset': MSE at best offset (if rotation method used)
     """
-    metadata = {}
+    metadata: dict[str, int | float] = {}
 
     # Early return if no preprocessing needed - avoid unnecessary copies
     if not phase_invariant and not translation_invariant:
@@ -143,7 +143,7 @@ def _prepare_trajectories(
             metadata['phase_offset'] = best_offset
             metadata['mse_at_best_offset'] = float(best_mse)
             t2 = np.roll(t2, -best_offset, axis=0)
-        else:  # fft
+        else:  # fft or frechet: use FFT for phase alignment
             t2 = align_trajectory_phase(t1, t2, method='fft')
 
     # Translation invariance (centering)
@@ -163,7 +163,7 @@ def score_trajectory(
     metric: str = 'mse',
     *,
     phase_invariant: bool = True,
-    phase_align_method: Literal['fft', 'rotation'] = 'fft',
+    phase_align_method: Literal['fft', 'rotation', 'frechet'] = 'fft',
     translation_invariant: bool = False,
     **metric_kwargs,
 ) -> float:
@@ -281,7 +281,7 @@ def score_trajectory(
         'mse_at_best_offset' in metadata and
         not translation_invariant
     ):
-        return metadata['mse_at_best_offset']
+        return float(metadata['mse_at_best_offset'])
 
     # Compute MSE metric
     if metric == 'mse':

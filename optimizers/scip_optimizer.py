@@ -17,21 +17,23 @@ License: Apache 2.0 (permissive for commercial use)
 """
 from __future__ import annotations
 
+import itertools
 import logging
 from dataclasses import dataclass
 from typing import Literal
-from typing import TYPE_CHECKING
 
 import numpy as np
 
-if TYPE_CHECKING:
-    from pylink_tools.mechanism import Mechanism
-    from pylink_tools.optimization_types import (
-        DimensionBoundsSpec,
-        OptimizationResult,
-        TargetTrajectory,
-    )
-
+from pylink_tools.mechanism import create_mechanism_fitness
+from pylink_tools.mechanism import Mechanism
+from pylink_tools.mechanism import Mechanism as MechanismType
+from pylink_tools.optimization_types import DimensionBoundsSpec
+from pylink_tools.optimization_types import OptimizationResult
+from pylink_tools.optimization_types import TargetTrajectory
+from pylink_tools.optimization_types import TopologyVariationSpec
+from pylink_tools.topology_validity import BadTopologyCache
+from pylink_tools.topology_validity import check_mechanism_validity
+from pylink_tools.topology_validity import topology_id_from_edges
 logger = logging.getLogger(__name__)
 
 
@@ -64,10 +66,15 @@ class SCIPConfig:
 # Main Interface
 # =============================================================================
 
+# Maximum grid points for dimension-only discretization (avoid memory blowup)
+SCIP_MAX_GRID_POINTS = 500_000
+
+
 def run_scip_optimization(
     mechanism: Mechanism,
     target: TargetTrajectory,
     dimension_bounds_spec: DimensionBoundsSpec | None = None,
+    topology_variation_spec: TopologyVariationSpec | None = None,
     config: SCIPConfig | None = None,
     metric: str = 'mse',
     verbose: bool = True,
@@ -131,7 +138,6 @@ def run_scip_optimization(
         - PySCIPOpt is Apache 2.0 licensed (permissive for commercial use)
         - For continuous-only problems, consider nlopt_mlsl instead
     """
-    from pylink_tools.optimization_types import OptimizationResult
 
     # Import here to provide clear error if not installed
     try:
@@ -154,8 +160,6 @@ def run_scip_optimization(
             error=error_msg,
         )
 
-    # Validate mechanism type
-    from pylink_tools.mechanism import Mechanism as MechanismType
     if not isinstance(mechanism, MechanismType):
         return OptimizationResult(
             success=False,
@@ -172,11 +176,72 @@ def run_scip_optimization(
     if mechanism.n_steps != target.n_steps:
         mechanism._n_steps = target.n_steps
 
-    # TODO: IMPLEMENTATION PLACEHOLDER
-    # This is a mock implementation - see implementation plan below
-    logger.warning('SCIP optimizer not yet implemented - returning mock result')
+    config = config or SCIPConfig()
+    n_steps = max(2, config.discretization_steps)
+    n_dims = len(dimension_bounds_spec)
+    grid_size = n_steps ** n_dims
 
-    return _mock_scip_result(mechanism, target, dimension_bounds_spec, verbose)
+    if grid_size > SCIP_MAX_GRID_POINTS:
+        return OptimizationResult(
+            success=False,
+            optimized_dimensions={},
+            error=f'Discretized grid too large: {grid_size} points (max {SCIP_MAX_GRID_POINTS}). '
+                  f'Reduce discretization_steps (current {n_steps}) or number of dimensions ({n_dims}).',
+        )
+
+    invalid_topologies_report: list[dict] = []
+    best_topology_id_str: str | None = None
+
+    if topology_variation_spec is not None:
+        cache = BadTopologyCache()
+        doc = mechanism.to_dict()
+        edges = doc.get('linkage', {}).get('edges', {})
+        if not edges:
+            return OptimizationResult(
+                success=False,
+                optimized_dimensions={},
+                error='Mechanism has no edges; cannot compute topology id.',
+            )
+        topology_id = topology_id_from_edges(edges)
+        if cache.is_bad(topology_id):
+            logger.warning('SCIP: base topology is in bad cache (skipped)')
+            return OptimizationResult(
+                success=False,
+                optimized_dimensions={},
+                invalid_topologies=cache.to_report_list(),
+                error='Base topology is invalid (cached).',
+            )
+        mechanism_copy = mechanism.copy()
+        valid, reason = check_mechanism_validity(mechanism_copy, topology_id, cache, check_grashof=True)
+        if not valid:
+            invalid_topologies_report = cache.to_report_list()
+            logger.warning(f'SCIP: base topology failed validity ({reason})')
+            return OptimizationResult(
+                success=False,
+                optimized_dimensions=dict(zip(dimension_bounds_spec.names, dimension_bounds_spec.initial_values)),
+                optimized_mechanism=mechanism.copy(),
+                initial_error=float('inf'),
+                final_error=float('inf'),
+                invalid_topologies=invalid_topologies_report,
+                error=f'Base topology invalid: {reason}',
+            )
+        best_topology_id_str = repr(topology_id)
+
+    result = _run_scip_discretized(
+        mechanism=mechanism,
+        target=target,
+        dimension_bounds_spec=dimension_bounds_spec,
+        config=config,
+        n_steps=n_steps,
+        metric=metric,
+        verbose=verbose,
+        phase_invariant=phase_invariant,
+        phase_align_method=phase_align_method,
+    )
+    if topology_variation_spec is not None:
+        result.invalid_topologies = invalid_topologies_report
+        result.best_topology_id = best_topology_id_str
+    return result
 
 
 # =============================================================================
@@ -333,6 +398,80 @@ SCIP may be more valuable for:
 # Internal Helpers
 # =============================================================================
 
+
+def _run_scip_discretized(
+    mechanism: Mechanism,
+    target: TargetTrajectory,
+    dimension_bounds_spec: DimensionBoundsSpec,
+    config: SCIPConfig,
+    n_steps: int,
+    metric: str,
+    verbose: bool,
+    phase_invariant: bool,
+    phase_align_method: Literal['fft', 'rotation', 'frechet'],
+) -> OptimizationResult:
+    """
+    Run dimension-only optimization by discretizing the search space and
+    evaluating fitness at each grid point (grid search). Returns the best
+    solution as OptimizationResult.
+    """
+
+    grid_values, _ = _create_discretized_grid(dimension_bounds_spec, n_steps)
+    fitness = create_mechanism_fitness(
+        mechanism,
+        target,
+        target_joint=target.joint_name,
+        metric=metric,
+        phase_invariant=phase_invariant,
+        phase_align_method=phase_align_method,
+    )
+
+    names = dimension_bounds_spec.names
+    initial_dims = tuple(dimension_bounds_spec.initial_values)
+    initial_error = fitness(initial_dims)
+
+    best_error = initial_error
+    best_indices: tuple[int, ...] = tuple(
+        int(np.argmin(np.abs(grid_values[i] - initial_dims[i])))
+        for i in range(len(names))
+    )
+    convergence_history = [initial_error]
+
+    for indices in itertools.product(range(n_steps), repeat=len(names)):
+        dims = _grid_to_continuous(indices, grid_values)
+        err = fitness(tuple(dims))
+        convergence_history.append(err)
+        if err < best_error:
+            best_error = err
+            best_indices = indices
+
+    best_dims = _grid_to_continuous(best_indices, grid_values)
+    optimized_dimensions = dict(zip(names, best_dims))
+
+    # Apply best dimensions to a copy for result
+    optimized_mechanism = mechanism.copy()
+    optimized_mechanism.set_dimensions(optimized_dimensions)
+
+    improvement_pct = (
+        (initial_error - best_error) / initial_error * 100.0
+        if initial_error > 0 and initial_error != float('inf')
+        else 0.0
+    )
+
+    return OptimizationResult(
+        success=True,
+        optimized_dimensions=optimized_dimensions,
+        optimized_mechanism=optimized_mechanism,
+        initial_error=initial_error,
+        final_error=best_error,
+        best_error=best_error,
+        improvement_pct=improvement_pct,
+        iterations=len(convergence_history),
+        convergence_history=convergence_history,
+        error=None,
+    )
+
+
 def _mock_scip_result(
     mechanism: Mechanism,
     target: TargetTrajectory,
@@ -344,11 +483,6 @@ def _mock_scip_result(
 
     # Return initial values as "optimized" (no actual optimization)
     optimized_dims = dict(zip(dimension_bounds_spec.names, dimension_bounds_spec.initial_values))
-
-    if verbose:
-        logger.info('SCIP: Mock result (not implemented)')
-        logger.info(f'  Dimensions: {len(dimension_bounds_spec)}')
-        logger.info(f'  Would optimize: {list(dimension_bounds_spec.names)}')
 
     # Return mechanism copy (no optimization performed)
     optimized_mechanism = mechanism.copy()

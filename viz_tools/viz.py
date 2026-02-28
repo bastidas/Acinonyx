@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from itertools import cycle
+from pathlib import Path
 
 import matplotlib.pyplot as plt
 import networkx as nx
@@ -18,7 +19,7 @@ def plot_graph(
     lg: nx.Graph,
     title: str = 'Link Graph',
     out_path: str | Path | None = None,
-    style: PlotStyleConfig = DEFAULT_STYLE,
+    style: PlotStyleConfig = DEFAULT_PLOT_STYLE,
 ) -> None:
     """
     Plot a networkx graph representing the linkage system
@@ -55,7 +56,7 @@ def plot_static_arrows(
     i: int,
     title: str = 'Linkage Arrows',
     out_path: str | Path | None = None,
-    style: PlotStyleConfig = DEFAULT_STYLE,
+    style: PlotStyleConfig = DEFAULT_PLOT_STYLE,
 ) -> None:
     """
     Plot static arrows showing link directions at a specific time index
@@ -101,7 +102,7 @@ def plot_static_pos(
     times: np.ndarray,
     title: str = 'Linkage Positions',
     out_path: str | Path | None = None,
-    style: PlotStyleConfig = DEFAULT_STYLE,
+    style: PlotStyleConfig = DEFAULT_PLOT_STYLE,
     show_paths: bool = True,
     show_fixed_links: bool = True,
     show_free_links: bool = True,

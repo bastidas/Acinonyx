@@ -17,8 +17,8 @@ from pathlib import Path
 import pytest
 
 from backend.acinonyx_api import analyze_trajectory_endpoint
-from backend.acinonyx_api import compute_pylink_trajectory
 from backend.acinonyx_api import compute_pylink_trajectories_batch
+from backend.acinonyx_api import compute_pylink_trajectory
 from backend.acinonyx_api import get_optimizable_dimensions
 from backend.acinonyx_api import get_status
 from backend.acinonyx_api import list_pylink_graphs
@@ -219,6 +219,16 @@ class TestTrajectoryComputation:
         # All trajectories should have 48 points
         for positions in result['trajectories'].values():
             assert len(positions) == 48
+
+    def test_compute_trajectory_returns_trajectory_did_not_close(self, fourbar_data):
+        """Success response includes trajectory_did_not_close (step_fast does not include 2π step)."""
+        request = {'pylink_data': fourbar_data, 'n_steps': 24}
+        result = compute_pylink_trajectory(request)
+        assert result['status'] == 'success'
+        assert 'trajectory_did_not_close' in result
+        assert result['n_steps'] == 24
+        # Fourbar with step_fast(24) normally does not close; we trim and set the flag
+        assert result['trajectory_did_not_close']  # may be True or 1.0 after JSON sanitize
 
     def test_compute_trajectory_invalid_data(self):
         """Test trajectory computation with invalid data."""

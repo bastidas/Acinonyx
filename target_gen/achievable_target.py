@@ -354,7 +354,7 @@ def create_achievable_target(
                 modified_mechanism._n_steps = n_steps
 
             # Apply static joint movement (if enabled)
-            joint_movements = {}
+            joint_movements: dict[str, tuple[float, float]] = {}
             if config.static_joint_movement.enabled:
                 modified_mechanism, joint_movements = apply_static_joint_movement(
                     modified_mechanism, config.static_joint_movement, rng,
@@ -372,7 +372,7 @@ def create_achievable_target(
                         target_traj = trajectories[target_joint]
                         target = TargetTrajectory(
                             joint_name=target_joint,
-                            positions=[tuple(pos) for pos in target_traj],
+                            positions=[(float(pos[0]), float(pos[1])) for pos in target_traj],
                         )
 
                         # Log success

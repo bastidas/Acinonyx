@@ -64,10 +64,29 @@ export function getExploreRegionOptionsForMaxPoints(
 }
 
 /**
+ * Largest divisor of 360 that is <= maxVal.
+ */
+function largestAngleDivisor(maxVal: number): number {
+  const d = ANGLE_DIVISORS.filter(d => d <= maxVal).pop()
+  return d ?? 1
+}
+
+/**
+ * Previous divisor of 360 (smaller than the given one), or 1.
+ */
+function prevAngleDivisor(nAngles: number): number {
+  const idx = ANGLE_DIVISORS.indexOf(nAngles)
+  if (idx > 0) return ANGLE_DIVISORS[idx - 1]
+  return 1
+}
+
+/**
  * Choose radial and angular sampling for the second (combinatorial) exploration so that
- * nRadial * nAngles ≤ n2Max. Starts from desired radial and angular counts and reduces
- * angular (to previous divisor of 360) then radial incrementally until under the cap.
- * Use this to get an evenly sampled bounding for the second simulation.
+ * nRadial * nAngles ≤ n2Max. Reduces from desired radial/angular by alternating between
+ * reducing radial and azimuthal (angular), so both dimensions keep some coverage.
+ * We greatly favor radial: we prefer to reduce azimuthal (angles) first so the result
+ * tends to have more radial samples and fewer angular (e.g. 33 radial × 3 azimuthal
+ * for ~100 samples).
  */
 export function getCombinatorialSecondOptions(
   n2Max: number,
@@ -77,18 +96,34 @@ export function getCombinatorialSecondOptions(
   if (n2Max < 1) {
     return { deltaDegrees: 360, nRadialSamples: 1 }
   }
-  const maxRadial = Math.min(desiredRadial, n2Max, 360)
-  let nRadial = Math.max(1, maxRadial)
-  let nAngles = ANGLE_DIVISORS.filter(d => d <= Math.min(desiredAngles, Math.floor(n2Max / nRadial))).pop() ?? 1
+  let nRadial = Math.max(1, Math.min(desiredRadial, n2Max))
+  let nAngles = largestAngleDivisor(Math.min(desiredAngles, n2Max))
+
+  // Alternate reducing angles vs radial; greatly favor radial (reduce angles several times per radial reduction)
+  const angleReductionsPerRadial = 3
+  let angleReductionsSinceRadial = 0
+  let preferAngles = true
   while (nRadial * nAngles > n2Max) {
-    const idx = ANGLE_DIVISORS.indexOf(nAngles)
-    if (idx > 0) {
-      nAngles = ANGLE_DIVISORS[idx - 1]
+    const canReduceAngles = nAngles > 1
+    const canReduceRadial = nRadial > 1
+    const shouldReduceAngles =
+      canReduceAngles &&
+      (preferAngles || !canReduceRadial) &&
+      (angleReductionsSinceRadial < angleReductionsPerRadial || !canReduceRadial)
+
+    if (shouldReduceAngles) {
+      nAngles = prevAngleDivisor(nAngles)
+      angleReductionsSinceRadial += 1
+      preferAngles = false
+    } else if (canReduceRadial) {
+      nRadial -= 1
+      angleReductionsSinceRadial = 0
+      preferAngles = true
     } else {
-      nRadial = Math.max(1, nRadial - 1)
-      nAngles = ANGLE_DIVISORS.filter(d => d <= Math.floor(n2Max / nRadial)).pop() ?? 1
+      break
     }
   }
+
   return {
     deltaDegrees: 360 / nAngles,
     nRadialSamples: nRadial

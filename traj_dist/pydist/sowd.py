@@ -1,8 +1,25 @@
 from __future__ import annotations
 
+import logging
+
 import numpy as np
 
-from .linecell import trajectory_set_grid
+logger = logging.getLogger(__name__)
+
+
+def _get_trajectory_set_grid():
+    """Lazy import to avoid requiring geohash2 (optional [all] extra) unless sowd_grid is used."""
+    try:
+        from .linecell import trajectory_set_grid
+        return trajectory_set_grid
+    except ImportError as e:
+        logger.error(
+            "geohash2 is required for sowd_grid metric. Install with: pip install -e '.[all]'. %s",
+            e,
+        )
+        raise ImportError(
+            "geohash2 is required for sowd_grid. Install with: pip install -e '.[all]'",
+        ) from e
 
 
 def owd_grid_brut(traj_cell_1, traj_cell_2):
@@ -114,8 +131,6 @@ def owd_grid(traj_cell_1, traj_cell_2):
                                 S.append(igp)
                                 d.append(dist)
         S_old = S
-        # p_t2 = map(lambda x: np.linalg.norm(traj_cell_1[i] - x), traj_cell_2)
-        # print(np.all(map(lambda x,y:x==y,S_old,find_first_min_points(p_t2, n2))))
         D += min(d)
     return D / n1
 
@@ -134,6 +149,7 @@ def sowd(traj_1, traj_2, precision=7, converted=False):
     if converted:
         d = sowd_grid(traj_1, traj_2)
     else:
+        trajectory_set_grid = _get_trajectory_set_grid()
         cells_list, _, _, _, _ = trajectory_set_grid([traj_1, traj_2], precision)
         d = sowd_grid(cells_list[0], cells_list[1])
     return d
@@ -143,6 +159,7 @@ def sowd_brut(traj_1, traj_2, precision=7, converted=False):
     if converted:
         d = sowd_grid_brut(traj_1, traj_2)
     else:
+        trajectory_set_grid = _get_trajectory_set_grid()
         cells_list, _, _, _, _ = trajectory_set_grid([traj_1, traj_2], precision)
         d = sowd_grid_brut(cells_list[0], cells_list[1])
     return d

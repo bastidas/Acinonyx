@@ -45,6 +45,39 @@ export interface NearestJointResult {
   distance: number
 }
 
+/** Response from POST /merge-polygon */
+export interface MergePolygonApiResult {
+  status: string
+  polygon?: {
+    polygon_id: string
+    contained_links: string[]
+    mergedLinkName: string | null
+    mergedLinkOriginalStart: [number, number] | null
+    mergedLinkOriginalEnd: [number, number] | null
+    fill_color: string | null
+    stroke_color: string | null
+    /** When request had selected_link_name: true if that link is fully inside, false otherwise. */
+    selected_link_fully_inside?: boolean | null
+  }
+}
+
+/** Response from POST /merge-two-polygons */
+export interface MergeTwoPolygonsApiResult {
+  status: string
+  message?: string
+  merged_polygon?: {
+    polygon_id: string
+    points: CanvasPoint[]
+    contained_links: string[]
+  }
+}
+
+/** Response from POST /find-associated-polygons */
+export interface FindAssociatedPolygonsApiResult {
+  status: string
+  polygons?: Record<string, { contained_links: string[]; all_inside: boolean }>
+}
+
 /** Result of findNearestLink */
 export interface NearestLinkResult {
   name: string
@@ -126,6 +159,10 @@ export interface ToolContext {
   ) => void
   /** Merge source joint into target joint */
   mergeJoints: (sourceJoint: string, targetJoint: string) => void
+  /** Reset animation to first frame (1/N); call when starting group drag if desired */
+  resetAnimationToFirstFrame: () => void
+  /** Pause animation without changing frame; use when starting single-node drag so mechanism stays at current X/N */
+  pauseAnimation: () => void
   /** Show status message */
   showStatus: (message: string, type?: StatusType, duration?: number) => void
   /** Clear status message */
@@ -176,7 +213,15 @@ export interface ToolContext {
     links: LinkWithPosition[]
   ) => { joints: string[]; links: string[] }
   /** Drawn objects (for box-select and merge detection) */
-  drawnObjects: { objects: Array<{ id: string; name?: string; type?: string; points: CanvasPoint[]; mergedLinkName?: string }> }
+  drawnObjects: { objects: Array<{ id: string; name?: string; type?: string; points: CanvasPoint[]; mergedLinkName?: string; contained_links?: string[] }> }
+  /** Call backend merge-polygon; if provided, merge tool uses it instead of local logic */
+  apiMergePolygon?: (params: { polygonId: string; polygonPoints: CanvasPoint[]; selectedLinkName?: string }) => Promise<MergePolygonApiResult>
+  /** Call backend merge-two-polygons; returns outer bounding polygon geometry for two polygons */
+  apiMergeTwoPolygons?: (params: { polygonIdA: string; polygonPointsA: CanvasPoint[]; polygonIdB: string; polygonPointsB: CanvasPoint[] }) => Promise<MergeTwoPolygonsApiResult>
+  /** Call backend find-associated-polygons (e.g. after drag); sets broken state from all_inside */
+  apiFindAssociatedPolygons?: () => Promise<FindAssociatedPolygonsApiResult>
+  /** Set linkage document (for updating meta e.g. link colors after merge). */
+  setLinkageDoc?: (value: LinkageDocument | ((prev: LinkageDocument) => LinkageDocument)) => void
   /** Set drawn objects state (objects + selectedIds); accepts setState action from BuilderTab */
   setDrawnObjects: (value: unknown) => void
   /** Enter move group mode with selected joints and drawn object ids */

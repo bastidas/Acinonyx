@@ -46,12 +46,12 @@ def normalize_samples(
 ) -> tuple[np.ndarray, dict]:
     """
     Normalize samples to [0, 1] range.
-    
+
     Args:
         samples: Samples to normalize (n_samples, n_dims)
         bounds: Optional list of (min, max) tuples for each dimension.
                 If None, uses min/max from samples.
-    
+
     Returns:
         tuple: (normalized_samples, normalization_params)
         - normalized_samples: Normalized samples in [0, 1]
@@ -59,28 +59,28 @@ def normalize_samples(
     """
     samples = np.asarray(samples)
     n_samples, n_dims = samples.shape
-    
+
     if bounds is not None:
         if len(bounds) != n_dims:
-            raise ValueError(f"bounds length ({len(bounds)}) must match number of dimensions ({n_dims})")
+            raise ValueError(f'bounds length ({len(bounds)}) must match number of dimensions ({n_dims})')
         min_vals = np.array([b[0] for b in bounds])
         max_vals = np.array([b[1] for b in bounds])
     else:
         min_vals = np.min(samples, axis=0)
         max_vals = np.max(samples, axis=0)
-    
+
     # Handle constant dimensions (max == min)
     range_vals = max_vals - min_vals
     range_vals[range_vals == 0] = 1.0  # Avoid division by zero
-    
+
     normalized = (samples - min_vals) / range_vals
-    
+
     normalization_params = {
         'min': min_vals,
         'max': max_vals,
         'range': range_vals,
     }
-    
+
     return normalized, normalization_params
 
 
@@ -97,12 +97,12 @@ def reduce_dimensions(
 ) -> tuple[np.ndarray, object, dict]:
     """
     Reduce high-dimensional samples to lower dimensions.
-    
+
     Modular utility for dimensionality reduction that can be used for:
     - Visualization (2D plotting)
     - Clustering (preprocessing before clustering algorithms)
     - Analysis (exploring high-dimensional spaces)
-    
+
     Args:
         samples: High-dimensional samples (n_samples, n_dims)
         method: Reduction method ('pca', 'tsne', 'umap')
@@ -118,7 +118,7 @@ def reduce_dimensions(
                          If None and normalize=True, uses min/max from samples.
         random_state: Random seed for reproducibility
         **kwargs: Method-specific parameters (e.g., perplexity for t-SNE, n_neighbors for UMAP)
-    
+
     Returns:
         tuple: (reduced_samples, reducer_object, metadata_dict)
         - reduced_samples: (n_samples, n_components) array
@@ -132,38 +132,38 @@ def reduce_dimensions(
     """
     samples = np.asarray(samples)
     n_samples, n_dims = samples.shape
-    
+
     if n_components >= n_dims:
-        raise ValueError(f"n_components ({n_components}) must be less than n_dims ({n_dims})")
-    
+        raise ValueError(f'n_components ({n_components}) must be less than n_dims ({n_dims})')
+
     # Normalize if requested
     normalized_samples = samples
     normalization_params = None
     if normalize:
         normalized_samples, normalization_params = normalize_samples(samples, bounds=dimension_bounds)
-    
+
     # Determine which samples to use for fitting
     if fit_samples_mask is not None:
         fit_samples_mask = np.asarray(fit_samples_mask, dtype=bool)
         if len(fit_samples_mask) != n_samples:
-            raise ValueError(f"fit_samples_mask length ({len(fit_samples_mask)}) must match n_samples ({n_samples})")
+            raise ValueError(f'fit_samples_mask length ({len(fit_samples_mask)}) must match n_samples ({n_samples})')
         fit_samples = normalized_samples[fit_samples_mask]
         if len(fit_samples) == 0:
-            logger.warning("No samples selected for fitting, using all samples")
+            logger.warning('No samples selected for fitting, using all samples')
             fit_samples = normalized_samples
     else:
         fit_samples = normalized_samples
-    
+
     # Determine which samples to transform
     if transform_samples_mask is not None:
         transform_samples_mask = np.asarray(transform_samples_mask, dtype=bool)
         if len(transform_samples_mask) != n_samples:
-            raise ValueError(f"transform_samples_mask length ({len(transform_samples_mask)}) must match n_samples ({n_samples})")
+            raise ValueError(f'transform_samples_mask length ({len(transform_samples_mask)}) must match n_samples ({n_samples})')
         transform_samples = normalized_samples[transform_samples_mask]
     else:
         transform_samples = normalized_samples
         transform_samples_mask = None
-    
+
     # Apply dimensionality reduction
     reducer = None
     metadata: dict[str, Any] = {
@@ -172,17 +172,17 @@ def reduce_dimensions(
         'normalized': normalize,
         'normalization_params': normalization_params,
     }
-    
+
     if method == 'pca':
         try:
             from sklearn.decomposition import PCA
-            
+
             # Extract PCA-specific kwargs
             svd_solver = kwargs.pop('svd_solver', 'auto')
-            
+
             reducer = PCA(n_components=n_components, random_state=random_state, svd_solver=svd_solver)
             reducer.fit(fit_samples)
-            
+
             # Transform all samples (or subset if mask provided)
             if transform_samples_mask is not None:
                 # Transform only selected samples, then place in full array
@@ -191,27 +191,27 @@ def reduce_dimensions(
                 reduced_samples[transform_samples_mask] = reduced_subset
             else:
                 reduced_samples = reducer.transform(transform_samples)
-            
+
             metadata['variance_explained'] = reducer.explained_variance_ratio_
             logger.info(
-                f"PCA reduction: {n_dims}D -> {n_components}D, "
-                f"variance explained: {reducer.explained_variance_ratio_[:n_components].sum():.1%} "
-                f"(PC1: {reducer.explained_variance_ratio_[0]:.1%}, "
-                f"PC2: {reducer.explained_variance_ratio_[1]:.1%})"
+                f'PCA reduction: {n_dims}D -> {n_components}D, '
+                f'variance explained: {reducer.explained_variance_ratio_[:n_components].sum():.1%} '
+                f'(PC1: {reducer.explained_variance_ratio_[0]:.1%}, '
+                f'PC2: {reducer.explained_variance_ratio_[1]:.1%})',
             )
-            
+
         except ImportError:
-            raise ImportError("sklearn is required for PCA. Install with: pip install scikit-learn")
-    
+            raise ImportError('sklearn is required for PCA. Install with: pip install scikit-learn')
+
     elif method == 'tsne':
         try:
             from sklearn.manifold import TSNE
-            
+
             # Extract t-SNE-specific kwargs
             perplexity = kwargs.pop('perplexity', 30)
             learning_rate = kwargs.pop('learning_rate', 'auto')
             n_iter = kwargs.pop('n_iter', 1000)
-            
+
             # t-SNE doesn't support separate fit/transform - it only does fit_transform
             # So we need to fit_transform on all samples we want to transform
             if transform_samples_mask is not None:
@@ -225,7 +225,7 @@ def reduce_dimensions(
                     # Since t-SNE doesn't support this, we fit_transform on all unique samples
                     logger.warning(
                         "t-SNE doesn't support separate fit/transform. "
-                        "Fitting and transforming on all samples that need transformation."
+                        'Fitting and transforming on all samples that need transformation.',
                     )
                     samples_to_fit_transform = transform_samples
             else:
@@ -237,10 +237,10 @@ def reduce_dimensions(
                     # Since t-SNE doesn't support this, we fit_transform on all samples
                     logger.warning(
                         "t-SNE doesn't support separate fit/transform. "
-                        "Fitting and transforming on all samples."
+                        'Fitting and transforming on all samples.',
                     )
                     samples_to_fit_transform = normalized_samples
-            
+
             reducer = TSNE(
                 n_components=n_components,
                 perplexity=min(perplexity, len(samples_to_fit_transform) - 1),  # Perplexity must be < n_samples
@@ -249,31 +249,31 @@ def reduce_dimensions(
                 random_state=random_state,
                 **kwargs,
             )
-            
+
             reduced_fit_transform = reducer.fit_transform(samples_to_fit_transform)
-            
+
             # Place results in full array
             if transform_samples_mask is not None:
                 reduced_samples = np.full((n_samples, n_components), np.nan)
                 reduced_samples[transform_samples_mask] = reduced_fit_transform
             else:
                 reduced_samples = reduced_fit_transform
-            
+
             metadata['variance_explained'] = None  # t-SNE doesn't provide variance explained
-            logger.info(f"t-SNE reduction: {n_dims}D -> {n_components}D")
-            
+            logger.info(f't-SNE reduction: {n_dims}D -> {n_components}D')
+
         except ImportError:
-            raise ImportError("sklearn is required for t-SNE. Install with: pip install scikit-learn")
-    
+            raise ImportError('sklearn is required for t-SNE. Install with: pip install scikit-learn')
+
     elif method == 'umap':
         try:
             import umap
-            
+
             # Extract UMAP-specific kwargs
             n_neighbors = kwargs.pop('n_neighbors', 15)
             min_dist = kwargs.pop('min_dist', 0.1)
             metric = kwargs.pop('metric', 'euclidean')
-            
+
             reducer = umap.UMAP(
                 n_components=n_components,
                 n_neighbors=min(n_neighbors, len(fit_samples) - 1),  # n_neighbors must be < n_samples
@@ -282,22 +282,22 @@ def reduce_dimensions(
                 random_state=random_state,
                 **kwargs,
             )
-            
+
             # UMAP supports fit/transform
             reducer.fit(fit_samples)
-            
+
             if transform_samples_mask is not None:
                 reduced_subset = reducer.transform(transform_samples)
                 reduced_samples = np.full((n_samples, n_components), np.nan)
                 reduced_samples[transform_samples_mask] = reduced_subset
             else:
                 reduced_samples = reducer.transform(transform_samples)
-            
+
             metadata['variance_explained'] = None  # UMAP doesn't provide variance explained
-            logger.info(f"UMAP reduction: {n_dims}D -> {n_components}D")
-            
+            logger.info(f'UMAP reduction: {n_dims}D -> {n_components}D')
+
         except ImportError:
-            logger.warning("umap-learn not available, falling back to PCA")
+            logger.warning('umap-learn not available, falling back to PCA')
             # Fall back to PCA
             return reduce_dimensions(
                 samples=samples,
@@ -310,8 +310,8 @@ def reduce_dimensions(
                 random_state=random_state,
                 **kwargs,
             )
-    
+
     else:
         raise ValueError(f"Unknown reduction method: {method}. Supported methods: 'pca', 'tsne', 'umap'")
-    
+
     return reduced_samples, reducer, metadata

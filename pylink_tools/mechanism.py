@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import copy
 import logging
+import math
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import cast
@@ -566,9 +567,6 @@ class Mechanism:
                     out.add(node)
             return out
 
-        # Target one axis for detailed debug (crank–coupler_rocker_joint)
-        _debug_axis = axis_key('crank', 'coupler_rocker_joint')
-
         def add_candidate(
             a: str,
             b: str,
@@ -578,47 +576,44 @@ class Mechanism:
             source: str,
         ) -> None:
             key = axis_key(a, b)
-            is_debug_axis = key == _debug_axis
-            if (debug or is_debug_axis) and key not in seen:
+            if debug and key not in seen:
                 logger.debug(
                     'get_reflectable_edges candidate axis %s–%s (source=%s) to_reflect=%s',
                     a, b, source, sorted(to_reflect),
                 )
             if not to_reflect:
-                if debug or is_debug_axis:
+                if debug:
                     logger.debug('get_reflectable_edges skip %s–%s: empty to_reflect', a, b)
                 return
             if not allow_move_fixed and (to_reflect & fixed_names):
-                if debug or is_debug_axis:
+                if debug:
                     logger.debug(
                         'get_reflectable_edges skip %s–%s: would move fixed %s',
                         a, b, sorted(to_reflect & fixed_names),
                     )
                 return
             if key in seen:
-                if is_debug_axis:
-                    logger.debug('get_reflectable_edges skip %s–%s: already seen', a, b)
                 return
             try:
                 line_p1 = _pos(a)
                 line_p2 = _pos(b)
             except (ValueError, KeyError):
-                if debug or is_debug_axis:
+                if debug:
                     logger.debug('get_reflectable_edges skip %s–%s: no position', a, b)
                 return
             dx = line_p2[0] - line_p1[0]
             dy = line_p2[1] - line_p1[1]
             if dx * dx + dy * dy < _REFLECT_AXIS_MIN_LENGTH * _REFLECT_AXIS_MIN_LENGTH:
-                if debug or is_debug_axis:
+                if debug:
                     logger.debug('get_reflectable_edges skip %s–%s: degenerate axis', a, b)
                 return
             if not lengths_ok_after_reflect(line_p1, line_p2, to_reflect):
-                if debug or is_debug_axis:
+                if debug:
                     logger.debug('get_reflectable_edges skip %s–%s: length check failed', a, b)
                 return
             axis_nodes = {a, b}
             if not angles_ok_after_reflect(line_p1, line_p2, to_reflect, axis_nodes):
-                if debug or is_debug_axis:
+                if debug:
                     logger.debug('get_reflectable_edges skip %s–%s: angle check failed', a, b)
                 return
             seen.add(key)
@@ -1276,6 +1271,71 @@ class Mechanism:
         return joint_attrs
 
 
+def create_mechanism_from_dict(
+    pylink_data: dict,
+    dim_spec: DimensionBoundsSpec | None = None,
+    n_steps: int = 32,
+) -> Mechanism:
+    """
+    Create a Mechanism from a pylink_data dict (linkage document).
+
+    Used by form_tools, backend, and demos. Does not apply variation config;
+    callers that need default bounds can call mechanism.apply_variation_config()
+    after construction.
+
+    Args:
+        pylink_data: Mechanism data with 'linkage.nodes' and 'linkage.edges'.
+        dim_spec: Optional DimensionBoundsSpec; if None, extracted from pylink_data.
+        n_steps: Simulation steps per cycle (default 32).
+
+    Returns:
+        Mechanism ready for simulate() and metadata (_original_edges, _original_nodes).
+    """
+    from pylink_tools.hypergraph_adapter import _build_joint_attr_mapping
+    from pylink_tools.hypergraph_adapter import extract_dimensions
+    from pylink_tools.hypergraph_adapter import to_simulatable_linkage
+
+    if dim_spec is None:
+        dim_spec, _ = extract_dimensions(pylink_data)
+
+    linkage = to_simulatable_linkage(pylink_data)
+
+    n_steps = pylink_data.get('n_steps', n_steps)
+    angle_per_step = 2 * math.pi / n_steps
+    for joint in linkage.joints:
+        if isinstance(joint, Crank):
+            joint.angle = angle_per_step
+
+    linkage.rebuild()
+    linkage.compile()
+
+    joint_attrs = _build_joint_attr_mapping(linkage, pylink_data, dim_spec)
+    dim_mapping = DimensionMapping(
+        names=list(dim_spec.names),
+        initial_values=list(dim_spec.initial_values),
+        bounds=list(dim_spec.bounds) if dim_spec.bounds else [],
+        edge_mapping=dim_spec.edge_mapping.copy() if dim_spec.edge_mapping else {},
+        joint_attrs=joint_attrs,
+    )
+
+    joint_names = [j.name for j in linkage.joints]
+
+    original_edges = copy.deepcopy(pylink_data.get('linkage', {}).get('edges', {}))
+    original_nodes = copy.deepcopy(pylink_data.get('linkage', {}).get('nodes', {}))
+    metadata = {
+        '_original_edges': original_edges,
+        '_original_nodes': original_nodes,
+    }
+
+    return Mechanism(
+        linkage=linkage,
+        dimension_mapping=dim_mapping,
+        joint_names=joint_names,
+        n_steps=n_steps,
+        metadata=metadata,
+    )
+
+
 class _FitnessWithMeta(Protocol):
     """Protocol for the callable returned by create_mechanism_fitness (has metadata)."""
 
@@ -1291,7 +1351,7 @@ def create_mechanism_fitness(
     target_joint: str | None = None,
     metric: str = 'mse',
     phase_invariant: bool = True,
-    phase_align_method: Literal['fft', 'rotation'] = 'rotation',
+    phase_align_method: Literal['fft', 'rotation', 'frechet'] = 'rotation',
     translation_invariant: bool = False,
 ) -> _FitnessWithMeta:
     """

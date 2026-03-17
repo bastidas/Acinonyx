@@ -39,7 +39,7 @@ def _safe_filename(label: str, index: int) -> str:
     """Turn a config label into a safe filename stem."""
     safe = re.sub(r'[^\w\-]', '_', label)
     safe = safe.strip('_')[:40] or 'config'
-    return f"{index:02d}_{safe}"
+    return f'{index:02d}_{safe}'
 
 
 def main() -> None:
@@ -78,7 +78,7 @@ def main() -> None:
     # Print and log the reflectable edges found
     print_section('Reflectable edges')
     for i, r in enumerate(reflectable_edges):
-        label = f"{r.axis_node_1} – {r.axis_node_2}"
+        label = f'{r.axis_node_1} – {r.axis_node_2}'
         print(f'  [{i+1}] {label}')
         logger.info('reflectable_edge %s %s %s', r.axis_node_1, r.axis_node_2, label)
     if not reflectable_edges:
@@ -88,14 +88,14 @@ def main() -> None:
     # Configurations: identity + one per viable reflection
     configs: list[tuple[str, Mechanism]] = [('Identity', mechanism)]
     for r in reflectable_edges:
-        label = f"Reflect {r.axis_node_1}–{r.axis_node_2}"
+        label = f'Reflect {r.axis_node_1}–{r.axis_node_2}'
         reflected = mechanism.reflect_over_axis(r)
         configs.append((label, reflected))
 
     print_section('Plotting each configuration')
     for i, (label, mech) in enumerate(configs):
         stem = _safe_filename(label, i)
-        out_path = OUTPUT_DIR / f"{stem}.png"
+        out_path = OUTPUT_DIR / f'{stem}.png'
         print(f'  [{i+1}/{len(configs)}] {label} -> {out_path.name}')
         variation_plot(
             target_joint=target_joint,

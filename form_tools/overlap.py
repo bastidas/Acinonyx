@@ -6,7 +6,9 @@ Phase 2 (future): polygon-polygon overlap when links have attached polygons.
 """
 from __future__ import annotations
 
-from typing import Callable, Protocol, TypeAlias
+from collections.abc import Callable
+from typing import Protocol
+from typing import TypeAlias
 
 import numpy as np
 
@@ -72,7 +74,7 @@ def segments_intersect(
     def on_segment(p: np.ndarray, a: np.ndarray, b: np.ndarray) -> bool:
         return bool(
             min(float(a[0]), float(b[0])) - tol <= float(p[0]) <= max(float(a[0]), float(b[0])) + tol
-            and min(float(a[1]), float(b[1])) - tol <= float(p[1]) <= max(float(a[1]), float(b[1])) + tol
+            and min(float(a[1]), float(b[1])) - tol <= float(p[1]) <= max(float(a[1]), float(b[1])) + tol,
         )
 
     def same_point(p: np.ndarray, q: np.ndarray) -> bool:
@@ -88,8 +90,8 @@ def segments_intersect(
             return bool(
                 on_segment(a1_arr, b1_arr, b2_arr)
                 and _not_shared_only(
-                    a1_arr, a2_arr, b1_arr, b2_arr, same_point, exclude_shared_endpoints
-                )
+                    a1_arr, a2_arr, b1_arr, b2_arr, same_point, exclude_shared_endpoints,
+                ),
             )
         tb1 = float(np.dot(b1_arr - a1_arr, da) / dd)
         tb2 = float(np.dot(b2_arr - a1_arr, da) / dd)

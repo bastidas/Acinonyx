@@ -12,7 +12,8 @@ from __future__ import annotations
 
 import logging
 import math
-from typing import Any, cast
+from typing import Any
+from typing import cast
 
 import numpy as np
 from shapely import contains_xy as shapely_contains_xy
@@ -108,11 +109,11 @@ def merge_two_polygons_geometry(
         union_geom = poly_a.union(poly_b)
         if union_geom.is_empty:
             return None
-        if union_geom.geom_type == "Polygon":
+        if union_geom.geom_type == 'Polygon':
             coords = list(union_geom.exterior.coords)
-        elif union_geom.geom_type == "MultiPolygon":
+        elif union_geom.geom_type == 'MultiPolygon':
             hull_geom = union_geom.convex_hull
-            if hull_geom.is_empty or hull_geom.geom_type != "Polygon":
+            if hull_geom.is_empty or hull_geom.geom_type != 'Polygon':
                 return None
             coords = list(hull_geom.exterior.coords)
         else:
@@ -123,29 +124,29 @@ def merge_two_polygons_geometry(
             coords = coords[:-1]
         return [(float(c[0]), float(c[1])) for c in coords]
     except Exception as e:
-        logger.debug("merge_two_polygons_geometry failed: %s", e)
+        logger.debug('merge_two_polygons_geometry failed: %s', e)
         return None
 
 
 def get_link_endpoints(
-    linkage: dict[str, Any], edge_id: str
+    linkage: dict[str, Any], edge_id: str,
 ) -> tuple[tuple[float, float], tuple[float, float]] | None:
     """Get (start, end) positions for an edge from linkage.nodes and linkage.edges."""
-    edges = linkage.get("edges") or {}
-    nodes = linkage.get("nodes") or {}
+    edges = linkage.get('edges') or {}
+    nodes = linkage.get('nodes') or {}
     edge = edges.get(edge_id)
     if not edge:
         return None
-    src_id = edge.get("source") or edge.get("sourceId")
-    tgt_id = edge.get("target") or edge.get("targetId")
+    src_id = edge.get('source') or edge.get('sourceId')
+    tgt_id = edge.get('target') or edge.get('targetId')
     if not src_id or not tgt_id:
         return None
     src_node = nodes.get(src_id)
     tgt_node = nodes.get(tgt_id)
     if not src_node or not tgt_node:
         return None
-    pos_src = src_node.get("position")
-    pos_tgt = tgt_node.get("position")
+    pos_src = src_node.get('position')
+    pos_tgt = tgt_node.get('position')
     if not pos_src or not pos_tgt or len(pos_src) < 2 or len(pos_tgt) < 2:
         return None
     return (tuple(pos_src[:2]), tuple(pos_tgt[:2]))
@@ -167,7 +168,7 @@ def contained_links(
     """
     poly = [(float(p[0]), float(p[1])) for p in polygon_points]
     if len(poly) < 3:
-        logger.debug("contained_links: polygon has fewer than 3 points, returning []")
+        logger.debug('contained_links: polygon has fewer than 3 points, returning []')
         return []
 
     try:
@@ -180,7 +181,7 @@ def contained_links(
     except Exception:
         return []
 
-    edges = linkage.get("edges") or {}
+    edges = linkage.get('edges') or {}
     xs: list[float] = []
     ys: list[float] = []
     edge_data: list[tuple[str, int, int]] = []  # (edge_id, start_idx, end_idx)
@@ -198,7 +199,7 @@ def contained_links(
         edge_data.append((edge_id, i_start, i_start + 1))
 
     if not edge_data:
-        logger.debug("contained_links: no edges with endpoints, returning []")
+        logger.debug('contained_links: no edges with endpoints, returning []')
         return []
 
     x_arr = np.array(xs, dtype=float)
@@ -210,7 +211,7 @@ def contained_links(
             inside[i] = shp.covers(ShapelyPoint(x_arr[i], y_arr[i]))
 
     result = [edge_id for edge_id, i_s, i_e in edge_data if inside[i_s] and inside[i_e]]
-    logger.debug("contained_links: polygon has %d vertices, found %d contained links", len(poly), len(result))
+    logger.debug('contained_links: polygon has %d vertices, found %d contained links', len(poly), len(result))
     return result
 
 
@@ -236,17 +237,17 @@ def validate_polygon_rigidity(
     if len(contained_links) < 2:
         return True, None
 
-    edges = linkage.get("edges") or {}
+    edges = linkage.get('edges') or {}
     link_endpoints: dict[str, tuple[str, str]] = {}
     for eid in contained_links:
         edge = edges.get(eid)
         if not edge:
-            logger.warning("validate_polygon_rigidity: edge %s not in linkage", eid)
-            return False, f"Edge {eid} not in linkage"
-        src = edge.get("source") or edge.get("sourceId")
-        tgt = edge.get("target") or edge.get("targetId")
+            logger.warning('validate_polygon_rigidity: edge %s not in linkage', eid)
+            return False, f'Edge {eid} not in linkage'
+        src = edge.get('source') or edge.get('sourceId')
+        tgt = edge.get('target') or edge.get('targetId')
         if not src or not tgt:
-            return False, f"Edge {eid} missing source/target"
+            return False, f'Edge {eid} missing source/target'
         link_endpoints[eid] = (src, tgt)
 
     link_ids = list(link_endpoints.keys())
@@ -260,20 +261,20 @@ def validate_polygon_rigidity(
             if not _pair_is_rigid(lid_a, lid_b, link_endpoints, trajectory_dict):
                 joint = next(iter({sa, ta} & {sb, tb}))
                 logger.info(
-                    "validate_polygon_rigidity: links %s and %s non-rigid at joint %s",
+                    'validate_polygon_rigidity: links %s and %s non-rigid at joint %s',
                     lid_a, lid_b, joint,
                 )
-                return False, f"Links {lid_a} and {lid_b} move relative to each other at joint {joint}"
+                return False, f'Links {lid_a} and {lid_b} move relative to each other at joint {joint}'
     return True, None
 
 
 def _get_link_endpoint_joints(linkage: dict[str, Any]) -> dict[str, tuple[str, str]]:
     """Return link_id -> (source_joint_id, target_joint_id) from linkage.edges."""
-    edges = linkage.get("edges") or {}
+    edges = linkage.get('edges') or {}
     result: dict[str, tuple[str, str]] = {}
     for eid, edge in edges.items():
-        src = edge.get("source") or edge.get("sourceId")
-        tgt = edge.get("target") or edge.get("targetId")
+        src = edge.get('source') or edge.get('sourceId')
+        tgt = edge.get('target') or edge.get('targetId')
         if src and tgt:
             result[eid] = (src, tgt)
     return result
@@ -286,7 +287,7 @@ def _pair_is_rigid(
     trajectory_dict: dict[str, list[list[float] | tuple[float, float]]],
 ) -> bool:
     """
-    Return True if the two links (which must share a joint) have constant relative 
+    Return True if the two links (which must share a joint) have constant relative
     angle over time.
     """
     sa, ta = link_endpoints.get(lid_a, (None, None))
@@ -379,7 +380,7 @@ def detect_rigid_groups(
 
     for joint, lids in joint_to_links.items():
         for i, la in enumerate(lids):
-            for lb in lids[i + 1 :]:
+            for lb in lids[i + 1:]:
                 if _pair_is_rigid(la, lb, link_endpoints, trajectory_dict):
                     union(la, lb)
 
@@ -421,7 +422,7 @@ def _polygon_contains_hull(
         pt = ShapelyPoint(x, y)
         if buffered_geom.contains(pt):
             continue
-        if hasattr(buffered_geom, "boundary") and buffered_geom.boundary is not None:
+        if hasattr(buffered_geom, 'boundary') and buffered_geom.boundary is not None:
             if buffered_geom.boundary.distance(pt) <= tol:
                 continue
         return False
@@ -429,7 +430,7 @@ def _polygon_contains_hull(
 
 
 def _polygon_contains_all_points(
-    geom: Any, points: list[tuple[float, float]], tol: float = 1e-9
+    geom: Any, points: list[tuple[float, float]], tol: float = 1e-9,
 ) -> bool:
     """Return True if geom contains every point (interior or boundary within tol)."""
     shapely_prepare(geom)
@@ -437,7 +438,7 @@ def _polygon_contains_all_points(
         pt = ShapelyPoint(x, y)
         if geom.contains(pt):
             continue
-        if hasattr(geom, "boundary") and geom.boundary is not None:
+        if hasattr(geom, 'boundary') and geom.boundary is not None:
             try:
                 if geom.boundary.distance(pt) <= tol:
                     continue
@@ -448,7 +449,7 @@ def _polygon_contains_all_points(
 
 
 def _points_outside_geom(
-    geom: Any, points: list[tuple[float, float]], tol: float = 1e-9
+    geom: Any, points: list[tuple[float, float]], tol: float = 1e-9,
 ) -> list[tuple[float, float]]:
     """Return list of points that are not contained in geom (for logging)."""
     shapely_prepare(geom)
@@ -457,7 +458,7 @@ def _points_outside_geom(
         pt = ShapelyPoint(x, y)
         if geom.contains(pt):
             continue
-        if hasattr(geom, "boundary") and geom.boundary is not None:
+        if hasattr(geom, 'boundary') and geom.boundary is not None:
             try:
                 if geom.boundary.distance(pt) <= tol:
                     continue
@@ -475,44 +476,44 @@ def _hull_from_points_shapely(
     Guaranteed to contain all input points. Returns hull exterior as list of (x,y)
     or None if degenerate (e.g. < 3 points or collinear).
     """
-    logger.debug("_hull_from_points_shapely: input points=%d", len(points))
+    logger.debug('_hull_from_points_shapely: input points=%d', len(points))
     if len(points) < 3:
-        logger.debug("_hull_from_points_shapely: degenerate (< 3 points), returning None")
+        logger.debug('_hull_from_points_shapely: degenerate (< 3 points), returning None')
         return None
     try:
         mp = ShapelyMultiPoint(points)
         hull_geom = mp.convex_hull
         if hull_geom.is_empty:
-            logger.debug("_hull_from_points_shapely: convex_hull is empty, returning None")
+            logger.debug('_hull_from_points_shapely: convex_hull is empty, returning None')
             return None
-        if hull_geom.geom_type == "Polygon":
+        if hull_geom.geom_type == 'Polygon':
             coords = list(hull_geom.exterior.coords)
             if coords and len(coords) >= 3:
                 if coords[0] == coords[-1]:
                     coords = coords[:-1]
                 out = [(float(c[0]), float(c[1])) for c in coords]
-                logger.debug("_hull_from_points_shapely: hull vertices=%d", len(out))
+                logger.debug('_hull_from_points_shapely: hull vertices=%d', len(out))
                 return out
-        if hull_geom.geom_type == "LineString":
+        if hull_geom.geom_type == 'LineString':
             # Collinear: buffer the line by a tiny amount to get a polygon
             try:
                 poly = hull_geom.buffer(1e-10)
-                if not poly.is_empty and hasattr(poly, "exterior"):
+                if not poly.is_empty and hasattr(poly, 'exterior'):
                     coords = list(poly.exterior.coords)
                     if len(coords) >= 3:
                         if coords[0] == coords[-1]:
                             coords = coords[:-1]
                         out = [(float(c[0]), float(c[1])) for c in coords]
-                        logger.debug("_hull_from_points_shapely: collinear, buffered line -> %d vertices", len(out))
+                        logger.debug('_hull_from_points_shapely: collinear, buffered line -> %d vertices', len(out))
                         return out
             except Exception:
                 pass
-        if hull_geom.geom_type == "Point":
-            logger.debug("_hull_from_points_shapely: degenerate (Point), returning None")
+        if hull_geom.geom_type == 'Point':
+            logger.debug('_hull_from_points_shapely: degenerate (Point), returning None')
             return None
     except Exception as e:
-        logger.debug("Shapely convex_hull failed: %s", e)
-    logger.debug("_hull_from_points_shapely: degenerate or failed, returning None")
+        logger.debug('Shapely convex_hull failed: %s', e)
+    logger.debug('_hull_from_points_shapely: degenerate or failed, returning None')
     return None
 
 
@@ -561,32 +562,32 @@ def _limit_polygon_sides(coords: list[tuple[float, float]], max_sides: int = 32)
 
 
 def _buffer_hull_and_check(
-    poly: Any, pad: float, check_points: list[tuple[float, float]]
+    poly: Any, pad: float, check_points: list[tuple[float, float]],
 ) -> Any | None:
     """Buffer polygon by pad, return the (single) buffered geom if it contains all check_points, else None."""
     try:
-        if getattr(poly, "is_empty", True):
-            logger.debug("_buffer_hull_and_check: poly is empty, pad=%.6f", pad)
+        if getattr(poly, 'is_empty', True):
+            logger.debug('_buffer_hull_and_check: poly is empty, pad=%.6f', pad)
             return None
         buffered = poly.buffer(pad, join_style=1, quad_segs=4)
         if buffered.is_empty:
-            logger.debug("_buffer_hull_and_check: buffered is empty, pad=%.6f", pad)
+            logger.debug('_buffer_hull_and_check: buffered is empty, pad=%.6f', pad)
             return None
         geom = buffered
-        if buffered.geom_type == "MultiPolygon" and len(buffered.geoms) > 0:
+        if buffered.geom_type == 'MultiPolygon' and len(buffered.geoms) > 0:
             geom = max(buffered.geoms, key=lambda g: g.area)
         if _polygon_contains_all_points(geom, check_points):
-            logger.debug("_buffer_hull_and_check: success, pad=%.6f, check_points=%d", pad, len(check_points))
+            logger.debug('_buffer_hull_and_check: success, pad=%.6f, check_points=%d', pad, len(check_points))
             return geom
         outside = _points_outside_geom(geom, check_points)
         logger.debug(
-            "_buffer_hull_and_check: containment failed, pad=%.6f, %d points outside: %s",
+            '_buffer_hull_and_check: containment failed, pad=%.6f, %d points outside: %s',
             pad,
             len(outside),
             outside[:10] if len(outside) > 10 else outside,
         )
     except Exception as e:
-        logger.debug("_buffer_hull_and_check: exception pad=%.6f: %s", pad, e)
+        logger.debug('_buffer_hull_and_check: exception pad=%.6f: %s', pad, e)
     return None
 
 
@@ -595,15 +596,15 @@ def _to_valid_polygon_geom(vertices: list[tuple[float, float]]) -> Any | None:
     p = ShapelyPolygon(vertices)
     if not p.is_valid:
         p = shapely_make_valid(p)
-        gt = getattr(p, "geom_type", "")
-        if gt == "GeometryCollection":
-            polys = [g for g in p.geoms if g.geom_type == "Polygon" and not g.is_empty]
+        gt = getattr(p, 'geom_type', '')
+        if gt == 'GeometryCollection':
+            polys = [g for g in p.geoms if g.geom_type == 'Polygon' and not g.is_empty]
             p = max(polys, key=lambda g: g.area) if polys else None
-        elif gt == "MultiPolygon" and not p.is_empty and len(p.geoms) > 0:
+        elif gt == 'MultiPolygon' and not p.is_empty and len(p.geoms) > 0:
             p = max(p.geoms, key=lambda g: g.area)
-        elif gt != "Polygon" or getattr(p, "is_empty", True):
+        elif gt != 'Polygon' or getattr(p, 'is_empty', True):
             p = None
-    return p if p is not None and not getattr(p, "is_empty", True) else None
+    return p if p is not None and not getattr(p, 'is_empty', True) else None
 
 
 def _bounding_polygon_shapely_buffer(
@@ -617,18 +618,18 @@ def _bounding_polygon_shapely_buffer(
     Verifies containment of source_points; retries with larger pad; fallback to parallel_offset.
     """
     logger.info(
-        "bounding_polygon_shapely_buffer: hull_vertices=%d, padding=%.6f, max_sides=%d, source_points=%s",
+        'bounding_polygon_shapely_buffer: hull_vertices=%d, padding=%.6f, max_sides=%d, source_points=%s',
         len(hull_vertices), padding, max_sides, len(source_points) if source_points is not None else 0,
     )
     if len(hull_vertices) < 3 or padding <= 0:
-        logger.warning("bounding_polygon_shapely_buffer: skipping (hull_vertices=%d or padding<=0), returning hull as-is", len(hull_vertices))
+        logger.warning('bounding_polygon_shapely_buffer: skipping (hull_vertices=%d or padding<=0), returning hull as-is', len(hull_vertices))
         return hull_vertices
     check_points = source_points if source_points is not None else hull_vertices
     hull_ccw = _ensure_ccw(hull_vertices)
 
     for attempt in range(BOUNDING_POLYGON_CONTAINMENT_RETRIES):
         pad = padding * (1.0 + 0.2 * attempt)
-        logger.debug("bounding_polygon_shapely_buffer: attempt %d, pad=%.6f", attempt + 1, pad)
+        logger.debug('bounding_polygon_shapely_buffer: attempt %d, pad=%.6f', attempt + 1, pad)
         for poly in (_to_valid_polygon_geom(hull_ccw), _to_valid_polygon_geom(list(reversed(hull_ccw)))):
             if poly is None:
                 continue
@@ -639,15 +640,15 @@ def _bounding_polygon_shapely_buffer(
                     coords = coords[:-1]
                 out = [(float(c[0]), float(c[1])) for c in coords]
                 limited = _limit_polygon_sides(out, max_sides)
-                logger.info("bounding_polygon_shapely_buffer: success after attempt %d, output vertices=%d", attempt + 1, len(limited))
+                logger.info('bounding_polygon_shapely_buffer: success after attempt %d, output vertices=%d', attempt + 1, len(limited))
                 return limited
         if attempt > 0:
             logger.warning(
-                "Bounding polygon does not contain all rigid-group points (attempt %d/%d), retrying with larger padding",
+                'Bounding polygon does not contain all rigid-group points (attempt %d/%d), retrying with larger padding',
                 attempt + 1, BOUNDING_POLYGON_CONTAINMENT_RETRIES,
             )
 
-    logger.warning("Bounding polygon failed containment after %d retries; using parallel-offset fallback", BOUNDING_POLYGON_CONTAINMENT_RETRIES)
+    logger.warning('Bounding polygon failed containment after %d retries; using parallel-offset fallback', BOUNDING_POLYGON_CONTAINMENT_RETRIES)
     fallback = _bounding_polygon_parallel_offset(hull_ccw, padding)
     try:
         if len(fallback) >= 3:
@@ -658,10 +659,10 @@ def _bounding_polygon_shapely_buffer(
             if fallback_poly and not fallback_poly.is_empty:
                 outside_fallback = _points_outside_geom(fallback_poly, check_points)
                 if outside_fallback:
-                    logger.warning("bounding_polygon_parallel_offset fallback does not contain %d points: %s", len(outside_fallback), outside_fallback[:15])
+                    logger.warning('bounding_polygon_parallel_offset fallback does not contain %d points: %s', len(outside_fallback), outside_fallback[:15])
     except Exception as e:
-        logger.debug("Could not verify fallback polygon containment: %s", e)
-    logger.info("bounding_polygon_shapely_buffer: returning parallel_offset fallback, vertices=%d", len(fallback))
+        logger.debug('Could not verify fallback polygon containment: %s', e)
+    logger.info('bounding_polygon_shapely_buffer: returning parallel_offset fallback, vertices=%d', len(fallback))
     return fallback
 
 
@@ -698,7 +699,7 @@ def _collect_joint_positions_ordered(
     """
     link_endpoints = _get_link_endpoint_joints(linkage)
     joint_ids = sorted(
-        {jid for lid in link_ids for jid in (link_endpoints.get(lid) or ())}
+        {jid for lid in link_ids for jid in (link_endpoints.get(lid) or ())},
     )
     out: list[tuple[float, float]] = []
     for jid in joint_ids:
@@ -771,14 +772,14 @@ def _polygon_geometry_at_step(
     so that collisions reflect the actual form shape. Otherwise fall back to
     bounding_polygon_for_links (hull of link endpoints at this step).
     """
-    custom_points = polygon_obj.get("points")
+    custom_points = polygon_obj.get('points')
     if isinstance(custom_points, (list, tuple)) and len(custom_points) >= 3:
         pts0 = [(float(p[0]), float(p[1])) for p in custom_points]
         ref_pos = _collect_joint_positions_ordered(
-            link_ids, linkage, trajectory_dict, 0
+            link_ids, linkage, trajectory_dict, 0,
         )
         step_pos = _collect_joint_positions_ordered(
-            link_ids, linkage, trajectory_dict, step
+            link_ids, linkage, trajectory_dict, step,
         )
         if len(ref_pos) >= 2 and len(ref_pos) == len(step_pos):
             transform = _rigid_transform_2d(ref_pos, step_pos)
@@ -787,7 +788,7 @@ def _polygon_geometry_at_step(
                 return _apply_rigid_transform(pts0, R, t)
         # Fallback: custom points invalid or transform failed (e.g. single joint)
         logger.debug(
-            "polygon_geometry_at_step: using bounding_polygon_for_links fallback (custom points not transformable)"
+            'polygon_geometry_at_step: using bounding_polygon_for_links fallback (custom points not transformable)',
         )
     return bounding_polygon_for_links(
         link_ids,
@@ -826,7 +827,7 @@ def _pill_polygon_for_two_points(
 
 
 def _bounding_polygon_parallel_offset(
-    hull_vertices: list[tuple[float, float]], padding: float
+    hull_vertices: list[tuple[float, float]], padding: float,
 ) -> list[tuple[float, float]]:
     """
     Build a bounding polygon by taking each edge of the convex hull and
@@ -835,7 +836,7 @@ def _bounding_polygon_parallel_offset(
     V_i + n*padding and V_{i+1} + n*padding, where n is the outward normal.
     Used as fallback when Shapely buffer is not applicable.
     """
-    logger.debug("_bounding_polygon_parallel_offset: hull_vertices=%d, padding=%.6f", len(hull_vertices), padding)
+    logger.debug('_bounding_polygon_parallel_offset: hull_vertices=%d, padding=%.6f', len(hull_vertices), padding)
     if len(hull_vertices) < 3 or padding <= 0:
         return hull_vertices
     n = len(hull_vertices)
@@ -856,7 +857,7 @@ def _bounding_polygon_parallel_offset(
         pt_b = (v_next[0] + n_x * padding, v_next[1] + n_y * padding)
         result.append(pt_a)
         result.append(pt_b)
-    logger.debug("_bounding_polygon_parallel_offset: result vertices=%d (edge list, not closed polygon)", len(result))
+    logger.debug('_bounding_polygon_parallel_offset: result vertices=%d (edge list, not closed polygon)', len(result))
     return result
 
 
@@ -876,15 +877,15 @@ def _verify_bounding_contains_points(
             outside = _points_outside_geom(result_poly, points_tuples)
             if outside:
                 logger.error(
-                    "bounding_polygon_for_links: final polygon does NOT contain all %d source points; %d outside: %s",
+                    'bounding_polygon_for_links: final polygon does NOT contain all %d source points; %d outside: %s',
                     len(points_tuples),
                     len(outside),
                     outside[:20],
                 )
             else:
-                logger.debug("bounding_polygon_for_links: verified final polygon contains all %d source points", len(points_tuples))
+                logger.debug('bounding_polygon_for_links: verified final polygon contains all %d source points', len(points_tuples))
     except Exception as e:
-        logger.debug("bounding_polygon_for_links: could not verify containment: %s", e)
+        logger.debug('bounding_polygon_for_links: could not verify containment: %s', e)
 
 
 def bounding_polygon_for_links(
@@ -905,29 +906,29 @@ def bounding_polygon_for_links(
         List of [x, y] vertices (closed polygon; first point not repeated at end).
     """
     logger.info(
-        "bounding_polygon_for_links: link_ids=%d, step=%d, margin_units=%s, margin_fraction=%.4f",
+        'bounding_polygon_for_links: link_ids=%d, step=%d, margin_units=%s, margin_fraction=%.4f',
         len(link_ids), step, margin_units, margin_fraction,
     )
     points_tuples = _collect_link_points_at_step(link_ids, linkage, trajectory_dict, step)
-    logger.info("bounding_polygon_for_links: collected %d points from trajectory (step=%d)", len(points_tuples), step)
+    logger.info('bounding_polygon_for_links: collected %d points from trajectory (step=%d)', len(points_tuples), step)
 
     if len(points_tuples) == 2 and margin_units is not None and margin_units > 0:
         result = _pill_polygon_for_two_points(points_tuples[0], points_tuples[1], margin_units)
         if len(result) <= 2:
-            logger.warning("bounding_polygon_for_links: 2-point degenerate (zero length), returning as-is")
+            logger.warning('bounding_polygon_for_links: 2-point degenerate (zero length), returning as-is')
             return points_tuples
-        logger.info("bounding_polygon_for_links: 2-point pill -> %d vertices", len(result))
+        logger.info('bounding_polygon_for_links: 2-point pill -> %d vertices', len(result))
         return result
 
     if len(points_tuples) < 3:
-        logger.warning("bounding_polygon_for_links: fewer than 3 points, returning as-is")
+        logger.warning('bounding_polygon_for_links: fewer than 3 points, returning as-is')
         return points_tuples
 
     hull_pts = _hull_from_points_shapely(points_tuples)
     if hull_pts is None:
-        logger.warning("bounding_polygon_for_links: hull degenerate (collinear/point), returning %d points as-is", len(points_tuples))
+        logger.warning('bounding_polygon_for_links: hull degenerate (collinear/point), returning %d points as-is', len(points_tuples))
         return points_tuples
-    logger.info("bounding_polygon_for_links: hull has %d vertices", len(hull_pts))
+    logger.info('bounding_polygon_for_links: hull has %d vertices', len(hull_pts))
 
     if margin_units is not None and margin_units > 0:
         result = _bounding_polygon_shapely_buffer(hull_pts, margin_units, max_sides=32, source_points=points_tuples)
@@ -938,10 +939,10 @@ def bounding_polygon_for_links(
             cast(tuple[float, float], tuple(float(x) for x in (centroid + scale * (np.array(p) - centroid))))
             for p in hull_pts
         ]
-        logger.info("bounding_polygon_for_links: margin_fraction path, result vertices=%d", len(result))
+        logger.info('bounding_polygon_for_links: margin_fraction path, result vertices=%d', len(result))
 
     _verify_bounding_contains_points(result, points_tuples)
-    logger.info("bounding_polygon_for_links: returning polygon with %d vertices", len(result))
+    logger.info('bounding_polygon_for_links: returning polygon with %d vertices', len(result))
     return result
 
 
@@ -977,8 +978,8 @@ def build_polygon_entity_conflict_pairs(
     for step in range(n_steps_actual):
         polys_at_step: dict[str, list[tuple[float, float]]] = {}
         for o in polygons_for_z:
-            pid = o.get("id")
-            contained = o.get("contained_links") or []
+            pid = o.get('id')
+            contained = o.get('contained_links') or []
             if not pid or not contained:
                 continue
             # Use custom polygon points when present (merged/user-drawn shapes) so
@@ -993,10 +994,10 @@ def build_polygon_entity_conflict_pairs(
                 margin_units=margin_units,
             )
             if len(pts) >= 3:
-                polys_at_step["polygon:" + pid] = pts
+                polys_at_step['polygon:' + pid] = pts
         keys = list(polys_at_step.keys())
         for i, eid1 in enumerate(keys):
-            for eid2 in keys[i + 1 :]:
+            for eid2 in keys[i + 1:]:
                 if polygons_intersect(polys_at_step[eid1], polys_at_step[eid2]):
                     pairs.append((eid1, eid2))
     return list({cast(tuple[str, str], tuple(sorted((a, b)))) for a, b in pairs})

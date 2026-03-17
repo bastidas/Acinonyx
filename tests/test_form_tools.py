@@ -11,18 +11,14 @@ from pathlib import Path
 import pytest
 
 from form_tools.overlap import segments_intersect
-from form_tools.polygon_utils import (
-    bounding_polygon_for_links,
-    build_polygon_entity_conflict_pairs,
-    contained_links,
-    merge_two_polygons_geometry,
-    validate_polygon_rigidity,
-)
-from form_tools.z_level import (
-    DEFAULT_Z_LEVEL_CONFIG,
-    ZLevelHeuristicConfig,
-    compute_link_z_levels,
-)
+from form_tools.polygon_utils import bounding_polygon_for_links
+from form_tools.polygon_utils import build_polygon_entity_conflict_pairs
+from form_tools.polygon_utils import contained_links
+from form_tools.polygon_utils import merge_two_polygons_geometry
+from form_tools.polygon_utils import validate_polygon_rigidity
+from form_tools.z_level import compute_link_z_levels
+from form_tools.z_level import DEFAULT_Z_LEVEL_CONFIG
+from form_tools.z_level import ZLevelHeuristicConfig
 from pylink_tools.mechanism import create_mechanism_from_dict
 
 
@@ -65,7 +61,7 @@ class TestSegmentsIntersect:
         # (0,0)-(1,0) and (1,0)-(2,0) only share (1,0)
         assert (
             segments_intersect(
-                (0, 0), (1, 0), (1, 0), (2, 0), exclude_shared_endpoints=True
+                (0, 0), (1, 0), (1, 0), (2, 0), exclude_shared_endpoints=True,
             )
             is False
         )
@@ -74,7 +70,7 @@ class TestSegmentsIntersect:
         """When exclude_shared_endpoints=False, shared endpoint counts as intersection."""
         assert (
             segments_intersect(
-                (0, 0), (1, 0), (1, 0), (2, 0), exclude_shared_endpoints=False
+                (0, 0), (1, 0), (1, 0), (2, 0), exclude_shared_endpoints=False,
             )
             is True
         )
@@ -93,10 +89,10 @@ class TestSegmentsIntersect:
 @pytest.fixture
 def fourbar_pylink_data():
     """Load 4-bar linkage from demo/test_graphs."""
-    path = Path(__file__).parent.parent / "demo" / "test_graphs" / "4bar.json"
+    path = Path(__file__).parent.parent / 'demo' / 'test_graphs' / '4bar.json'
     with open(path) as f:
         data = json.load(f)
-    data["n_steps"] = 24
+    data['n_steps'] = 24
     return data
 
 
@@ -110,19 +106,19 @@ class TestComputeLinkZLevels:
         assert len(assignments) >= 1
         first = assignments[0]
         # 4-bar has 4 edges: ground, crank_link, coupler, rocker
-        linkage = fourbar_pylink_data.get("linkage", {})
-        edge_ids = set(linkage.get("edges", {}).keys())
+        linkage = fourbar_pylink_data.get('linkage', {})
+        edge_ids = set(linkage.get('edges', {}).keys())
         assert edge_ids
         for eid in edge_ids:
-            assert eid in first, f"missing z-level for link {eid}"
+            assert eid in first, f'missing z-level for link {eid}'
             assert isinstance(first[eid], int)
 
     def test_with_pylink_data(self, fourbar_pylink_data):
         """compute_link_z_levels(pylink_data=...) returns same shape as mechanism path."""
         assignments = compute_link_z_levels(pylink_data=fourbar_pylink_data, n_steps=24)
         assert len(assignments) >= 1
-        linkage = fourbar_pylink_data.get("linkage", {})
-        edge_ids = set(linkage.get("edges", {}).keys())
+        linkage = fourbar_pylink_data.get('linkage', {})
+        edge_ids = set(linkage.get('edges', {}).keys())
         for eid in edge_ids:
             assert eid in assignments[0]
             assert isinstance(assignments[0][eid], int)
@@ -135,8 +131,8 @@ class TestComputeLinkZLevels:
             z_level_config=DEFAULT_Z_LEVEL_CONFIG,
         )
         assert len(assignments) >= 1
-        linkage = fourbar_pylink_data.get("linkage", {})
-        edge_ids = set(linkage.get("edges", {}).keys())
+        linkage = fourbar_pylink_data.get('linkage', {})
+        edge_ids = set(linkage.get('edges', {}).keys())
         for eid in edge_ids:
             assert eid in assignments[0]
             assert isinstance(assignments[0][eid], int)
@@ -163,12 +159,12 @@ class TestComputeLinkZLevels:
         )
         assert len(assignments) >= 1
         for link_id, z in assignments[0].items():
-            assert z >= 2, f"link {link_id} got z={z}"
+            assert z >= 2, f'link {link_id} got z={z}'
 
     def test_crank_z_preference(self, fourbar_pylink_data):
         """With crank_z=2 and weight_crank=1, root (crank-incident) link tends to get z=2."""
         config = ZLevelHeuristicConfig(
-            min_z=0, crank_z=2, weight_crank=2.0, weight_reduce_deltas=1.0
+            min_z=0, crank_z=2, weight_crank=2.0, weight_reduce_deltas=1.0,
         )
         assignments = compute_link_z_levels(
             pylink_data=fourbar_pylink_data,
@@ -178,12 +174,12 @@ class TestComputeLinkZLevels:
         )
         assert len(assignments) >= 1
         z_vals = list(assignments[0].values())
-        assert 2 in z_vals, "crank_z=2 should appear in assignment"
+        assert 2 in z_vals, 'crank_z=2 should appear in assignment'
 
     def test_soft_pin_preference(self, fourbar_pylink_data):
         """Soft pin a link to target z=3 with high weight; that link gets z=3."""
-        linkage = fourbar_pylink_data.get("linkage", {})
-        edge_ids = list(linkage.get("edges", {}).keys())
+        linkage = fourbar_pylink_data.get('linkage', {})
+        edge_ids = list(linkage.get('edges', {}).keys())
         assert len(edge_ids) >= 1
         link_id = edge_ids[0]
         config = ZLevelHeuristicConfig(
@@ -201,11 +197,11 @@ class TestComputeLinkZLevels:
 
     def test_hard_pin_below_min_z_raises(self, fourbar_pylink_data):
         """Fixed entity z-level below min_z raises ValueError."""
-        linkage = fourbar_pylink_data.get("linkage", {})
-        edge_ids = list(linkage.get("edges", {}).keys())
+        linkage = fourbar_pylink_data.get('linkage', {})
+        edge_ids = list(linkage.get('edges', {}).keys())
         assert len(edge_ids) >= 1
         config = ZLevelHeuristicConfig(min_z=2)
-        with pytest.raises(ValueError, match="min_z"):
+        with pytest.raises(ValueError, match='min_z'):
             compute_link_z_levels(
                 pylink_data=fourbar_pylink_data,
                 n_steps=24,
@@ -243,17 +239,17 @@ class TestComputeLinkZLevels:
 def minimal_linkage():
     """Minimal linkage with nodes and edges for contained_links tests."""
     return {
-        "nodes": {
-            "A": {"id": "A", "position": [0, 0]},
-            "B": {"id": "B", "position": [2, 0]},
-            "C": {"id": "C", "position": [2, 2]},
-            "D": {"id": "D", "position": [0, 2]},
+        'nodes': {
+            'A': {'id': 'A', 'position': [0, 0]},
+            'B': {'id': 'B', 'position': [2, 0]},
+            'C': {'id': 'C', 'position': [2, 2]},
+            'D': {'id': 'D', 'position': [0, 2]},
         },
-        "edges": {
-            "e1": {"source": "A", "target": "B"},
-            "e2": {"source": "B", "target": "C"},
-            "e3": {"source": "C", "target": "D"},
-            "e4": {"source": "D", "target": "A"},
+        'edges': {
+            'e1': {'source': 'A', 'target': 'B'},
+            'e2': {'source': 'B', 'target': 'C'},
+            'e3': {'source': 'C', 'target': 'D'},
+            'e4': {'source': 'D', 'target': 'A'},
         },
     }
 
@@ -273,7 +269,7 @@ class TestContainedLinks:
         # Triangle containing A and B (e1)
         polygon = [(0, 0), (2, 0), (1, -0.5)]
         result = contained_links(minimal_linkage, polygon)
-        assert "e1" in result
+        assert 'e1' in result
         assert len(result) == 1
 
     def test_polygon_contains_two_links(self, minimal_linkage):
@@ -281,8 +277,8 @@ class TestContainedLinks:
         # Square that contains A, B, C (so e1 and e2)
         polygon = [(0, 0), (3, 0), (3, 3), (0, 3)]
         result = contained_links(minimal_linkage, polygon)
-        assert "e1" in result
-        assert "e2" in result
+        assert 'e1' in result
+        assert 'e2' in result
         assert len(result) >= 2
 
 
@@ -296,12 +292,12 @@ class TestValidatePolygonRigidity:
 
     def test_single_link_returns_true(self):
         """Zero or one link returns (True, None)."""
-        linkage = {"edges": {"e1": {"source": "A", "target": "B"}}}
-        traj = {"A": [[0, 0], [1, 0]], "B": [[1, 0], [2, 0]]}
+        linkage = {'edges': {'e1': {'source': 'A', 'target': 'B'}}}
+        traj = {'A': [[0, 0], [1, 0]], 'B': [[1, 0], [2, 0]]}
         ok, msg = validate_polygon_rigidity(linkage, [], traj)
         assert ok is True
         assert msg is None
-        ok, msg = validate_polygon_rigidity(linkage, ["e1"], traj)
+        ok, msg = validate_polygon_rigidity(linkage, ['e1'], traj)
         assert ok is True
         assert msg is None
 
@@ -309,42 +305,42 @@ class TestValidatePolygonRigidity:
         """Two links sharing a joint with constant relative angle return (True, None)."""
         # Links e1 (A-B) and e2 (B-C). Keep angle between (A->B) and (B->C) constant.
         linkage = {
-            "edges": {
-                "e1": {"source": "A", "target": "B"},
-                "e2": {"source": "B", "target": "C"},
-            }
+            'edges': {
+                'e1': {'source': 'A', 'target': 'B'},
+                'e2': {'source': 'B', 'target': 'C'},
+            },
         }
         # Rigid: B at origin, A and C rotate together (same angle)
         n = 8
         trajectory = {
-            "A": [[1, 0], [0.7, 0.7], [0, 1], [-0.7, 0.7], [-1, 0], [-0.7, -0.7], [0, -1], [0.7, -0.7]],
-            "B": [[0, 0]] * n,
-            "C": [[0, 1], [-0.7, 0.7], [-1, 0], [-0.7, -0.7], [0, -1], [0.7, -0.7], [1, 0], [0.7, 0.7]],
+            'A': [[1, 0], [0.7, 0.7], [0, 1], [-0.7, 0.7], [-1, 0], [-0.7, -0.7], [0, -1], [0.7, -0.7]],
+            'B': [[0, 0]] * n,
+            'C': [[0, 1], [-0.7, 0.7], [-1, 0], [-0.7, -0.7], [0, -1], [0.7, -0.7], [1, 0], [0.7, 0.7]],
         }
         # Normalize length for C so it's like a rigid bar
-        trajectory["C"] = [[p[0] * 0.5, p[1] * 0.5] for p in trajectory["C"]]
-        ok, msg = validate_polygon_rigidity(linkage, ["e1", "e2"], trajectory)
+        trajectory['C'] = [[p[0] * 0.5, p[1] * 0.5] for p in trajectory['C']]
+        ok, msg = validate_polygon_rigidity(linkage, ['e1', 'e2'], trajectory)
         assert ok is True
         assert msg is None
 
     def test_non_rigid_pair_returns_false(self):
         """Two links with changing relative angle return (False, message)."""
         linkage = {
-            "edges": {
-                "e1": {"source": "A", "target": "B"},
-                "e2": {"source": "B", "target": "C"},
-            }
+            'edges': {
+                'e1': {'source': 'A', 'target': 'B'},
+                'e2': {'source': 'B', 'target': 'C'},
+            },
         }
         # B fixed; A and C move so angle between (A->B) and (B->C) changes
         trajectory = {
-            "A": [[1, 0], [0.9, 0.1], [0.8, 0.2], [0.7, 0.3]],
-            "B": [[0, 0], [0, 0], [0, 0], [0, 0]],
-            "C": [[0, 1], [0.1, 0.9], [0.3, 0.8], [0.5, 0.7]],  # different angular motion
+            'A': [[1, 0], [0.9, 0.1], [0.8, 0.2], [0.7, 0.3]],
+            'B': [[0, 0], [0, 0], [0, 0], [0, 0]],
+            'C': [[0, 1], [0.1, 0.9], [0.3, 0.8], [0.5, 0.7]],  # different angular motion
         }
-        ok, msg = validate_polygon_rigidity(linkage, ["e1", "e2"], trajectory)
+        ok, msg = validate_polygon_rigidity(linkage, ['e1', 'e2'], trajectory)
         assert ok is False
         assert msg is not None
-        assert "e1" in msg or "e2" in msg or "relative" in msg.lower() or "joint" in msg.lower()
+        assert 'e1' in msg or 'e2' in msg or 'relative' in msg.lower() or 'joint' in msg.lower()
 
 
 # -----------------------------------------------------------------------------
@@ -385,18 +381,18 @@ class TestBoundingPolygonForLinks:
     def test_returns_polygon_containing_endpoints(self):
         """Minimal link set and trajectory yield polygon with >=3 vertices containing endpoints."""
         linkage = {
-            "edges": {
-                "e1": {"source": "A", "target": "B"},
-                "e2": {"source": "B", "target": "C"},
-            }
+            'edges': {
+                'e1': {'source': 'A', 'target': 'B'},
+                'e2': {'source': 'B', 'target': 'C'},
+            },
         }
         trajectory = {
-            "A": [[0, 0]],
-            "B": [[2, 0]],
-            "C": [[2, 2]],
+            'A': [[0, 0]],
+            'B': [[2, 0]],
+            'C': [[2, 2]],
         }
         result = bounding_polygon_for_links(
-            ["e1", "e2"],
+            ['e1', 'e2'],
             linkage,
             trajectory,
             margin_fraction=0.1,
@@ -406,7 +402,7 @@ class TestBoundingPolygonForLinks:
         # All points (0,0), (2,0), (2,2) should be inside or on boundary
         from form_tools.polygon_utils import is_point_in_polygon
         for pt in [(0, 0), (2, 0), (2, 2)]:
-            assert is_point_in_polygon(pt, result), f"point {pt} not in result polygon"
+            assert is_point_in_polygon(pt, result), f'point {pt} not in result polygon'
 
 
 # -----------------------------------------------------------------------------
@@ -420,54 +416,54 @@ class TestBuildPolygonEntityConflictPairs:
     def test_custom_polygon_points_detect_overlap(self):
         """Two forms with overlapping custom geometry (larger than link hull) get a conflict pair."""
         linkage = {
-            "edges": {
-                "e1": {"source": "A", "target": "B"},
-                "e2": {"source": "B", "target": "C"},
-                "e3": {"source": "C", "target": "D"},
-                "e4": {"source": "D", "target": "A"},
-            }
+            'edges': {
+                'e1': {'source': 'A', 'target': 'B'},
+                'e2': {'source': 'B', 'target': 'C'},
+                'e3': {'source': 'C', 'target': 'D'},
+                'e4': {'source': 'D', 'target': 'A'},
+            },
         }
         # Form 1: link e1 only; custom points are a large box that extends into form 2
         # Form 2: link e3 only; custom points are a large box overlapping form 1
         # Link hulls would be small (single segment each); custom shapes overlap.
         trajectories = {
-            "A": [[0, 0], [0, 0]],
-            "B": [[2, 0], [2, 0]],
-            "C": [[2, 2], [2, 2]],
-            "D": [[0, 2], [0, 2]],
+            'A': [[0, 0], [0, 0]],
+            'B': [[2, 0], [2, 0]],
+            'C': [[2, 2], [2, 2]],
+            'D': [[0, 2], [0, 2]],
         }
         polygons_for_z = [
             {
-                "id": "p1",
-                "contained_links": ["e1"],
-                "points": [(0, 0), (2, 0), (2, 1.5), (0, 1.5)],  # wide box overlapping below
+                'id': 'p1',
+                'contained_links': ['e1'],
+                'points': [(0, 0), (2, 0), (2, 1.5), (0, 1.5)],  # wide box overlapping below
             },
             {
-                "id": "p2",
-                "contained_links": ["e3"],
-                "points": [(2, 2), (2, 0.5), (0, 0.5), (0, 2)],  # box overlapping above
+                'id': 'p2',
+                'contained_links': ['e3'],
+                'points': [(2, 2), (2, 0.5), (0, 0.5), (0, 2)],  # box overlapping above
             },
         ]
         pairs = build_polygon_entity_conflict_pairs(
-            polygons_for_z, linkage, trajectories, margin_fraction=0.05
+            polygons_for_z, linkage, trajectories, margin_fraction=0.05,
         )
         # Should detect overlap of custom shapes (e.g. at step 0 they overlap in y in [0.5, 1.5])
         assert any(
-            ("polygon:p1", "polygon:p2") == tuple(sorted((a, b))) for a, b in pairs
-        ), "expected conflict pair (polygon:p1, polygon:p2) when custom shapes overlap"
+            ('polygon:p1', 'polygon:p2') == tuple(sorted((a, b))) for a, b in pairs
+        ), 'expected conflict pair (polygon:p1, polygon:p2) when custom shapes overlap'
 
     def test_fallback_to_bounding_when_no_custom_points(self):
         """When polygon has no 'points', bounding_polygon_for_links is used."""
         linkage = {
-            "edges": {"e1": {"source": "A", "target": "B"}, "e2": {"source": "B", "target": "C"}},
+            'edges': {'e1': {'source': 'A', 'target': 'B'}, 'e2': {'source': 'B', 'target': 'C'}},
         }
-        trajectories = {"A": [[0, 0]], "B": [[1, 0]], "C": [[1, 1]]}
+        trajectories = {'A': [[0, 0]], 'B': [[1, 0]], 'C': [[1, 1]]}
         polygons_for_z = [
-            {"id": "p1", "contained_links": ["e1"]},  # no points
-            {"id": "p2", "contained_links": ["e2"]},  # no points
+            {'id': 'p1', 'contained_links': ['e1']},  # no points
+            {'id': 'p2', 'contained_links': ['e2']},  # no points
         ]
         pairs = build_polygon_entity_conflict_pairs(
-            polygons_for_z, linkage, trajectories, margin_fraction=0.05
+            polygons_for_z, linkage, trajectories, margin_fraction=0.05,
         )
         # No overlap at step 0: e1 is (0,0)-(1,0), e2 is (1,0)-(1,1); hulls may touch at B
         # So we may or may not get a pair depending on margin; just ensure no error

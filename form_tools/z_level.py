@@ -22,9 +22,12 @@ are preferences only, expressed as weighted cost terms:
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass, field
+from dataclasses import dataclass
+from dataclasses import field
 from pathlib import Path
-from typing import TYPE_CHECKING, TypedDict, cast
+from typing import cast
+from typing import TYPE_CHECKING
+from typing import TypedDict
 
 import numpy as np
 
@@ -250,9 +253,9 @@ def _normalize_input(
     """
     n_sources = sum(1 for x in (mechanism, path, pylink_data) if x is not None)
     if n_sources == 0:
-        raise ValueError("Exactly one of mechanism, path, or pylink_data must be provided")
+        raise ValueError('Exactly one of mechanism, path, or pylink_data must be provided')
     if n_sources > 1:
-        raise ValueError("Only one of mechanism, path, or pylink_data may be provided")
+        raise ValueError('Only one of mechanism, path, or pylink_data may be provided')
 
     if path is not None:
         path = Path(path)
@@ -266,34 +269,34 @@ def _normalize_input(
         from pylink_tools.hypergraph_adapter import sync_hypergraph_distances
         from pylink_tools.mechanism import create_mechanism_from_dict
 
-        if "linkage" in pylink_data and "nodes" in pylink_data.get("linkage", {}):
+        if 'linkage' in pylink_data and 'nodes' in pylink_data.get('linkage', {}):
             pylink_data = sync_hypergraph_distances(pylink_data, verbose=False)
         data = dict(pylink_data)
-        data["n_steps"] = n_steps
+        data['n_steps'] = n_steps
         mechanism = create_mechanism_from_dict(data, n_steps=n_steps)
 
     # mechanism is set here (either passed in or built from path/dict)
     assert mechanism is not None
-    meta = getattr(mechanism, "_metadata", None) or {}
-    original_edges = meta.get("_original_edges", {})
-    original_nodes = meta.get("_original_nodes", {})
+    meta = getattr(mechanism, '_metadata', None) or {}
+    original_edges = meta.get('_original_edges', {})
+    original_nodes = meta.get('_original_nodes', {})
 
     if not original_edges:
         joint_names = list(mechanism._joint_names)
-        nodes_roles = {n: "follower" for n in joint_names}
+        nodes_roles = {n: 'follower' for n in joint_names}
         return mechanism, [], joint_names, nodes_roles
 
     edges_list = []
     for link_id, edge in original_edges.items():
-        src = edge.get("source")
-        tgt = edge.get("target")
+        src = edge.get('source')
+        tgt = edge.get('target')
         if src is not None and tgt is not None:
             edges_list.append((link_id, src, tgt))
 
     joint_names = list(mechanism._joint_names)
     nodes_roles = {}
     for nid, node in original_nodes.items():
-        nodes_roles[nid] = (node.get("role") or "follower").lower()
+        nodes_roles[nid] = (node.get('role') or 'follower').lower()
 
     return mechanism, edges_list, joint_names, nodes_roles
 
@@ -305,10 +308,10 @@ def _build_entity_graph(
     """Build polygon_links, link_to_entity, entity_to_links, entity_ids from drawn_objects."""
     polygon_links: dict[str, list[str]] = {}
     for obj in drawn_objects:
-        if obj.get("type") != "polygon":
+        if obj.get('type') != 'polygon':
             continue
-        pid = obj.get("id")
-        contained = obj.get("contained_links") or []
+        pid = obj.get('id')
+        contained = obj.get('contained_links') or []
         if not pid or not contained:
             continue
         polygon_links[pid] = [lid for lid in contained if lid in link_ids]
@@ -318,7 +321,7 @@ def _build_entity_graph(
     for pid, lids in polygon_links.items():
         if not lids:
             continue
-        eid = "polygon:" + pid
+        eid = 'polygon:' + pid
         entity_to_links[eid] = lids
         for lid in lids:
             link_to_entity[lid] = eid
@@ -418,8 +421,8 @@ def _validate_fixed_entity_z_levels(
         for other in entity_conflict.get(eid, set()):
             if other in fixed_entity_z_levels and fixed_entity_z_levels[other] == z:
                 raise ValueError(
-                    "Z-level assignment impossible with current fixed layers; "
-                    "two conflicting forms share the same z-level. Try unfixing some forms or changing their order."
+                    'Z-level assignment impossible with current fixed layers; '
+                    'two conflicting forms share the same z-level. Try unfixing some forms or changing their order.',
                 )
 
 
@@ -439,7 +442,7 @@ def _compute_z_levels_with_polygons(
     assign z to entities, return link_id -> z and polygon_id -> z.
     """
     polygon_links, link_to_entity, entity_to_links, entity_ids = _build_entity_graph(
-        drawn_objects, link_ids
+        drawn_objects, link_ids,
     )
     entity_conflict, entity_structural = _build_entity_conflict_and_structural(
         entity_ids,
@@ -450,7 +453,7 @@ def _compute_z_levels_with_polygons(
         extra_entity_conflict_pairs or [],
     )
 
-    crank_nodes = {n for n, r in nodes_roles.items() if r == "crank"}
+    crank_nodes = {n for n, r in nodes_roles.items() if r == 'crank'}
     root_link = None
     for lid, sa, ta in edges_list:
         if sa in crank_nodes or ta in crank_nodes:
@@ -474,15 +477,15 @@ def _compute_z_levels_with_polygons(
     )
     if not entity_assignments:
         raise ValueError(
-            "Z-level assignment impossible with current fixed layers; "
-            "try unfixing some forms or changing their order."
+            'Z-level assignment impossible with current fixed layers; '
+            'try unfixing some forms or changing their order.',
         )
 
     ass = entity_assignments[0]
     link_assignments = {lid: ass[link_to_entity[lid]] for lid in link_ids}
     polygon_z_levels = {}
     for pid in polygon_links:
-        eid = "polygon:" + pid
+        eid = 'polygon:' + pid
         if eid in ass:
             polygon_z_levels[pid] = ass[eid]
     return ([link_assignments], polygon_z_levels)
@@ -566,8 +569,8 @@ def _assign_z_levels_generic(
     for eid, z in fixed.items():
         if z < cfg.min_z:
             raise ValueError(
-                f"Hard-pinned entity {eid} has z={z} but min_z={cfg.min_z}; "
-                "all z-levels must be >= min_z."
+                f'Hard-pinned entity {eid} has z={z} but min_z={cfg.min_z}; '
+                'all z-levels must be >= min_z.',
             )
     results: list[dict[str, int]] = []
     initial_assignment = dict(fixed)
@@ -767,7 +770,7 @@ def _assign_z_levels(
         return [{}]
 
     # Crank node(s) and root link for BFS
-    crank_nodes = {n for n, r in nodes_roles.items() if r == "crank"}
+    crank_nodes = {n for n, r in nodes_roles.items() if r == 'crank'}
     root_link = None
     for lid, sa, ta in edges_list:
         if sa in crank_nodes or ta in crank_nodes:

@@ -141,7 +141,7 @@ def _build_trajectory_with_initial(
         return result, False
 
     if check_closed and np.allclose(
-        initial_row[0], trajectory_array[n_steps - 1], rtol=rtol, atol=atol
+        initial_row[0], trajectory_array[n_steps - 1], rtol=rtol, atol=atol,
     ):
         # Closed: use last row as first (avoid reading initial), then trajectory[0..n_steps-2]
         result[0] = trajectory_array[n_steps - 1]
@@ -722,7 +722,7 @@ def compute_pylink_trajectory(request: dict):
         # Build exactly n_steps with frame 0 = doc state; check closure and set trajectory_did_not_close when not closed.
         initial_row = np.asarray(mechanism._initial_positions, dtype=float).reshape(1, -1, 2)
         trajectory_array, trajectory_did_not_close = _build_trajectory_with_initial(
-            trajectory_array, initial_row, n_steps, check_closed=True
+            trajectory_array, initial_row, n_steps, check_closed=True,
         )
 
         # Mechanism is solvable - convert array to dict format
@@ -814,7 +814,7 @@ def compute_pylink_trajectories_batch(request: dict):
                     continue
                 initial_row = np.asarray(mechanism._initial_positions, dtype=float).reshape(1, -1, 2)
                 trajectory_array, _ = _build_trajectory_with_initial(
-                    trajectory_array, initial_row, n_steps, check_closed=False
+                    trajectory_array, initial_row, n_steps, check_closed=False,
                 )
                 trajectories = {}
                 for j, joint_name in enumerate(mechanism._joint_names):
@@ -1026,7 +1026,7 @@ def create_polygons_from_rigid_groups_endpoint(request: dict):
 
             initial_row = np.asarray(mechanism._initial_positions, dtype=float).reshape(1, -1, 2)
             trajectory_array, _ = _build_trajectory_with_initial(
-                trajectory_array, initial_row, n_steps, check_closed=False
+                trajectory_array, initial_row, n_steps, check_closed=False,
             )
             n_steps_effective = n_steps
 

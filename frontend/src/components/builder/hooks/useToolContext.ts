@@ -103,8 +103,9 @@ export function useToolContext(params: UseToolContextParams): ToolContext {
       polygonId: string
       polygonPoints: [number, number][]
       selectedLinkName?: string
+      attachOnlyIfSingleContainedLink?: boolean
     }) => {
-      const { polygonId, polygonPoints, selectedLinkName } = args
+      const { polygonId, polygonPoints, selectedLinkName, attachOnlyIfSingleContainedLink } = args
       const linkageForRequest = buildLinkageWithCurrentPositions(linkageDoc.linkage, getJointPosition)
       const body = {
         pylink_data: { linkage: linkageForRequest, meta: linkageDoc.meta },
@@ -122,6 +123,14 @@ export function useToolContext(params: UseToolContextParams): ToolContext {
       const p = data.polygon
       const selectedFullyInside = p.selected_link_fully_inside
       if (selectedLinkName != null && selectedFullyInside === false) {
+        return data
+      }
+      const contained = p.contained_links as string[] | undefined
+      if (
+        attachOnlyIfSingleContainedLink &&
+        contained &&
+        contained.length > 1
+      ) {
         return data
       }
       setDrawnObjects(prev => {

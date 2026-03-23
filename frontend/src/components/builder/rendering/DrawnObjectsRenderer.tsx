@@ -75,7 +75,8 @@ function renderDrawnObject(
   const handleClick = (e: React.MouseEvent) => {
     if (mergeMode && onMergePolygonClick) {
       e.stopPropagation()
-      onMergePolygonClick(obj.id, isMerged)
+      // Shift+click unmerges; plain click selects / completes merge (including polygon→polygon with merged forms).
+      onMergePolygonClick(obj.id, isMerged && e.shiftKey)
       return
     }
     e.stopPropagation()
@@ -110,7 +111,7 @@ function renderDrawnObject(
           fontWeight="500"
           style={{ pointerEvents: 'none' }}
         >
-          {obj.name}{isUnmergeCandidate ? ' (click to unmerge)' : ''}
+          {obj.name}{isUnmergeCandidate ? ' (Shift+click to unmerge)' : ''}
         </text>
       )}
     </g>

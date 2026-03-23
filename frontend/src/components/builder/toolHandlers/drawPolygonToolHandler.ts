@@ -41,9 +41,22 @@ export const drawPolygonToolHandler: ToolHandler = {
       }))
       context.setPolygonDrawState(initialPolygonDrawState)
       context.showStatus(`Completed ${polygonDrawState.points.length}-sided polygon (${newDrawnObject.id})`, 'success', 2500)
-      context.apiMergePolygon?.({ polygonId: newDrawnObject.id, polygonPoints }).then(data => {
-        if (data.status === 'success' && data.polygon?.contained_links?.length) {
-          context.showStatus(`Polygon contains ${data.polygon.contained_links.length} link(s)`, 'info', 2000)
+      context.apiMergePolygon?.({
+        polygonId: newDrawnObject.id,
+        polygonPoints,
+        attachOnlyIfSingleContainedLink: true
+      }).then(data => {
+        const n = data.polygon?.contained_links?.length ?? 0
+        if (data.status === 'success' && n > 0) {
+          if (n > 1) {
+            context.showStatus(
+              `Polygon contains ${n} links — not auto-attached; use Merge to bind a link`,
+              'info',
+              3500
+            )
+          } else {
+            context.showStatus('Polygon contains 1 link', 'info', 2000)
+          }
         }
       })
     } else {

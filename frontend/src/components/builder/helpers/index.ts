@@ -110,6 +110,12 @@ export type { OptimizerSyncResult } from './optimizerSyncStatus'
 export { exploreRegion, getExploreRegionOptionsForMaxPoints, getCombinatorialSecondOptions } from './exploreRegion'
 export type { ExploreRegionPoint, ExploreRegionOptions, ExploreRegionOptionsForMaxPoints } from './exploreRegion'
 
+// Drawn objects: edge id references vs linkage.edges
+export {
+  remapEdgeReferencesInDrawnObjects,
+  removeDrawnObjectsReferencingDeletedEdges
+} from './drawnObjectsSync'
+
 // Drag-end sync: build synced document after single-node drop (trajectory hop fix)
 export { buildSyncedDocAfterDrop } from './dragEndSync'
 

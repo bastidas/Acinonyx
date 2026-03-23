@@ -1218,7 +1218,8 @@ def merge_polygon_endpoint(request: dict):
     create-polygons-from-rigid-groups and merge stay consistent.
 
     Request: pylink_data (or flat) with linkage, meta; polygon_id; polygon_points (list of [x,y]);
-    optional selected_link_name (if user had selected a link before clicking polygon);
+    optional selected_link_name: if set and that link is inside the polygon, contained_links and
+    primary attachment are restricted to that link only (multi-link enclosure otherwise returns all);
     optional restrict_to_links (list of link IDs): if set, contained_links is restricted to this set only (e.g. rigid group).
     Returns: { status, polygon: { contained_links, mergedLinkName, ..., selected_link_fully_inside? } }
     """
@@ -1271,6 +1272,9 @@ def merge_polygon_endpoint(request: dict):
                 'merge-polygon: selected_link_name=%s is not fully inside polygon_id=%s; contained_links=%s',
                 selected_link_name, polygon_id, contained,
             )
+        elif selected_link_name and selected_link_name in contained:
+            # User picked a specific link in merge mode — attach only that link, not every enclosed link.
+            contained = [selected_link_name]
 
         primary = contained[0]
         endpoints = polygon_utils.get_link_endpoints(linkage, primary)

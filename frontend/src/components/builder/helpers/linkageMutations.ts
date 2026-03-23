@@ -206,7 +206,8 @@ export function renameNode(
     },
     meta: {
       ...doc.meta,
-      nodes: newNodeMeta
+      nodes: newNodeMeta,
+      ...(doc.meta.target_joint === oldId ? { target_joint: newId } : {})
     }
   }
 }

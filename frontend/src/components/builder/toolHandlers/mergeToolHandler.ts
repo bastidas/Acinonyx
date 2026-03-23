@@ -17,7 +17,7 @@ import { initialMergePolygonState } from '../../BuilderTools'
 export interface HandleMergePolygonClickParams {
   polygonId: string
   polygonName: string
-  /** True if polygon is already merged — perform unmerge using current link positions. */
+  /** True when user explicitly requests unmerge (Shift+click on a merged polygon). */
   isUnmerge?: boolean
   mergedLinkName?: string
   mergedLinkOriginalStart?: CanvasPoint
@@ -64,17 +64,23 @@ export function handleMergeLinkClick(
       context.showStatus('Merge requires backend connection', 'error', 3000)
       return true
     }
-    context.apiMergePolygon({ polygonId, polygonPoints: polygon.points }).then(data => {
-      if (data.status === 'success' && data.polygon?.contained_links?.length) {
-        context.showStatus(`✓ Merged polygon with ${data.polygon.contained_links.length} link(s)`, 'success', 3000)
-      } else if (data.status === 'success') {
-        context.showStatus('No fully bounded links inside polygon', 'warning', 3000)
-      } else {
-        context.showStatus(data.message ?? 'Merge failed', 'error', 3000)
-      }
-      context.setMergePolygonState(initialMergePolygonState)
-      context.setSelectedLinks([])
-    })
+    context
+      .apiMergePolygon({
+        polygonId,
+        polygonPoints: polygon.points,
+        selectedLinkName: linkName
+      })
+      .then(data => {
+        if (data.status === 'success' && data.polygon?.contained_links?.length) {
+          context.showStatus(`✓ Merged polygon with link "${linkName}"`, 'success', 3000)
+        } else if (data.status === 'success') {
+          context.showStatus('No fully bounded links inside polygon', 'warning', 3000)
+        } else {
+          context.showStatus(data.message ?? 'Merge failed', 'error', 3000)
+        }
+        context.setMergePolygonState(initialMergePolygonState)
+        context.setSelectedLinks([])
+      })
     return true
   }
 
@@ -92,7 +98,8 @@ export function handleMergeLinkClick(
 
 /**
  * Handle polygon click in merge mode. Call from renderDrawnObjects when user clicks a polygon.
- * Handles: unmerge (if isUnmerge), select polygon, complete merge with selected link, or switch polygon.
+ * Order matters: complete merge-with-link and merge-two-polygons before unmerge so merged targets work on first click.
+ * Unmerge uses Shift+click (see DrawnObjectsRenderer).
  * Returns true if the click was handled.
  */
 export function handleMergePolygonClick(context: ToolContext, params: HandleMergePolygonClickParams): boolean {
@@ -100,62 +107,6 @@ export function handleMergePolygonClick(context: ToolContext, params: HandleMerg
 
   const { polygonId, polygonName, isUnmerge, mergedLinkName, mergedLinkOriginalStart, mergedLinkOriginalEnd, polygonPoints } = params
   const { mergePolygonState } = context
-
-  if (isUnmerge && mergedLinkName) {
-    let finalPoints = polygonPoints
-    if (mergedLinkOriginalStart && mergedLinkOriginalEnd) {
-      const linkMeta = context.getLinkMeta(mergedLinkName)
-      if (linkMeta) {
-        const currentStart = context.getJointPosition(linkMeta.connects[0])
-        const currentEnd = context.getJointPosition(linkMeta.connects[1])
-        if (currentStart && currentEnd) {
-          finalPoints = context.transformPolygonPoints(
-            polygonPoints,
-            mergedLinkOriginalStart,
-            mergedLinkOriginalEnd,
-            currentStart,
-            currentEnd
-          )
-        }
-      }
-    }
-    context.setDrawnObjects((prev: { objects: unknown[]; selectedIds: string[] }) => ({
-      ...prev,
-      objects: (prev.objects as Array<Record<string, unknown>>).map(obj => {
-        if (obj.id === polygonId) {
-          return {
-            ...obj,
-            points: finalPoints,
-            mergedLinkName: undefined,
-            mergedLinkOriginalStart: undefined,
-            mergedLinkOriginalEnd: undefined,
-            contained_links: undefined,
-            contained_links_valid: undefined,
-            fillColor: 'rgba(156, 39, 176, 0.15)',
-            fillOpacity: 0.15,
-            strokeColor: '#9c27b0'
-          }
-        }
-        return obj
-      })
-    }))
-    context.showStatus(`✓ Unmerged polygon "${polygonName}" from link "${mergedLinkName}"`, 'success', 3000)
-    context.setMergePolygonState(initialMergePolygonState)
-    context.setSelectedLinks([])
-    return true
-  }
-
-  if (mergePolygonState.step === 'idle' || mergePolygonState.step === 'awaiting_selection') {
-    context.setMergePolygonState({
-      step: 'polygon_selected',
-      selectedPolygonId: polygonId,
-      selectedLinkName: null
-    })
-    context.setDrawnObjects((prev: { objects: unknown[]; selectedIds: string[] }) => ({ ...prev, selectedIds: [polygonId] }))
-    context.setSelectedLinks([])
-    context.showStatus(`Selected polygon "${polygonName}" — click a link or another polygon form to merge with`, 'action')
-    return true
-  }
 
   if (mergePolygonState.step === 'link_selected') {
     const selectedLinkName = mergePolygonState.selectedLinkName ?? undefined
@@ -173,7 +124,13 @@ export function handleMergePolygonClick(context: ToolContext, params: HandleMerg
       if (selectedLinkName && selectedFullyInside === false) {
         context.showStatus(`Link "${selectedLinkName}" is not fully inside polygon`, 'error', 3500)
       } else if (data.status === 'success' && p?.contained_links?.length) {
-        context.showStatus(`✓ Merged polygon "${polygonName}" with ${p.contained_links.length} link(s)`, 'success', 3000)
+        context.showStatus(
+          selectedLinkName
+            ? `✓ Merged polygon "${polygonName}" with link "${selectedLinkName}"`
+            : `✓ Merged polygon "${polygonName}" with ${p.contained_links.length} link(s)`,
+          'success',
+          3000
+        )
       } else if (data.status === 'success') {
         context.showStatus('No fully bounded links inside polygon', 'warning', 3000)
       } else {
@@ -266,11 +223,68 @@ export function handleMergePolygonClick(context: ToolContext, params: HandleMerg
     })
     return true
   }
+
+  if (isUnmerge && mergedLinkName) {
+    let finalPoints = polygonPoints
+    if (mergedLinkOriginalStart && mergedLinkOriginalEnd) {
+      const linkMeta = context.getLinkMeta(mergedLinkName)
+      if (linkMeta) {
+        const currentStart = context.getJointPosition(linkMeta.connects[0])
+        const currentEnd = context.getJointPosition(linkMeta.connects[1])
+        if (currentStart && currentEnd) {
+          finalPoints = context.transformPolygonPoints(
+            polygonPoints,
+            mergedLinkOriginalStart,
+            mergedLinkOriginalEnd,
+            currentStart,
+            currentEnd
+          )
+        }
+      }
+    }
+    context.setDrawnObjects((prev: { objects: unknown[]; selectedIds: string[] }) => ({
+      ...prev,
+      objects: (prev.objects as Array<Record<string, unknown>>).map(obj => {
+        if (obj.id === polygonId) {
+          return {
+            ...obj,
+            points: finalPoints,
+            mergedLinkName: undefined,
+            mergedLinkOriginalStart: undefined,
+            mergedLinkOriginalEnd: undefined,
+            contained_links: undefined,
+            contained_links_valid: undefined,
+            fillColor: 'rgba(156, 39, 176, 0.15)',
+            fillOpacity: 0.15,
+            strokeColor: '#9c27b0'
+          }
+        }
+        return obj
+      })
+    }))
+    context.showStatus(`✓ Unmerged polygon "${polygonName}" from link "${mergedLinkName}"`, 'success', 3000)
+    context.setMergePolygonState(initialMergePolygonState)
+    context.setSelectedLinks([])
+    return true
+  }
+
+  if (mergePolygonState.step === 'idle' || mergePolygonState.step === 'awaiting_selection') {
+    context.setMergePolygonState({
+      step: 'polygon_selected',
+      selectedPolygonId: polygonId,
+      selectedLinkName: null
+    })
+    context.setDrawnObjects((prev: { objects: unknown[]; selectedIds: string[] }) => ({ ...prev, selectedIds: [polygonId] }))
+    context.setSelectedLinks([])
+    context.showStatus(`Selected polygon "${polygonName}" — click a link or another polygon form to merge with`, 'action')
+    return true
+  }
+
   return true
 }
 
-/** Internal: perform merge via backend and reset state. */
-function completeMerge(context: ToolContext, polygonId: string): boolean {
+/** Internal: perform merge via backend and reset state. Pass selectedLinkName when merge mode already picked a link. */
+function completeMerge(context: ToolContext, polygonId: string, selectedLinkName: string): boolean {
   const polygon = context.drawnObjects.objects.find((obj: { id: string }) => obj.id === polygonId) as { id: string; name?: string; points: CanvasPoint[] } | undefined
   if (!polygon?.points || polygon.points.length < 3) {
     context.showStatus('Error: Could not find polygon or invalid points', 'error', 2000)
@@ -282,17 +296,19 @@ function completeMerge(context: ToolContext, polygonId: string): boolean {
     context.setMergePolygonState(initialMergePolygonState)
     return false
   }
-  context.apiMergePolygon({ polygonId, polygonPoints: polygon.points }).then(data => {
-    if (data.status === 'success' && data.polygon?.contained_links?.length) {
-      context.showStatus(`Merged polygon with ${data.polygon.contained_links.length} link(s)`, 'success', 3000)
-    } else if (data.status === 'success') {
-      context.showStatus('No fully bounded links inside polygon', 'warning', 3000)
-    } else {
-      context.showStatus(data.message ?? 'Merge failed', 'error', 3000)
-    }
-    context.setMergePolygonState(initialMergePolygonState)
-    context.setSelectedLinks([])
-  })
+  context
+    .apiMergePolygon({ polygonId, polygonPoints: polygon.points, selectedLinkName })
+    .then(data => {
+      if (data.status === 'success' && data.polygon?.contained_links?.length) {
+        context.showStatus(`Merged polygon with link "${selectedLinkName}"`, 'success', 3000)
+      } else if (data.status === 'success') {
+        context.showStatus('No fully bounded links inside polygon', 'warning', 3000)
+      } else {
+        context.showStatus(data.message ?? 'Merge failed', 'error', 3000)
+      }
+      context.setMergePolygonState(initialMergePolygonState)
+      context.setSelectedLinks([])
+    })
   return true
 }
 
@@ -369,7 +385,11 @@ export const mergeToolHandler: ToolHandler = {
 
     if (mergePolygonState.step === 'polygon_selected') {
       if (nearestLink) {
-        const success = completeMerge(context, mergePolygonState.selectedPolygonId!)
+        const success = completeMerge(
+          context,
+          mergePolygonState.selectedPolygonId!,
+          nearestLink.name
+        )
         if (!success) {
           context.showStatus('Link endpoints must be inside the polygon. Try another link.', 'warning', 2500)
         }
@@ -405,7 +425,12 @@ export const mergeToolHandler: ToolHandler = {
 
       const clickedPolygon = findClickedPolygon()
       if (clickedPolygon) {
-        const success = completeMerge(context, clickedPolygon.id)
+        const linkName = mergePolygonState.selectedLinkName
+        if (!linkName) {
+          context.showStatus('No link selected', 'error', 2000)
+          return true
+        }
+        const success = completeMerge(context, clickedPolygon.id, linkName)
         if (!success) {
           context.showStatus('Link endpoints must be inside the polygon. Try another polygon.', 'warning', 2500)
         }

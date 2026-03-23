@@ -337,6 +337,9 @@ export interface NodeMeta {
 
   /** Whether to show trajectory path for this node during animation */
   showPath?: boolean
+
+  /** User-defined arbitrary metadata string (Edit Joint -> Meta value) */
+  metaValue?: string
 }
 
 /**
@@ -363,6 +366,9 @@ export interface LinkageMeta {
 
   /** Metadata for edges, keyed by edge ID */
   edges: Record<EdgeId, EdgeMeta>
+
+  /** Target joint for trajectory / optimization UI (node id); persisted with graph JSON */
+  target_joint?: string
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════

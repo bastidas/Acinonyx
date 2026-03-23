@@ -36,6 +36,7 @@ export interface BuilderModalsProps {
   renameLink: (oldName: string, newName: string) => void
   updateJointProperty: (jointName: string, property: string, value: string) => void
   updateLinkProperty: (linkName: string, property: string, value: string | string[] | boolean) => void
+  onJointMetaValueChange: (jointName: string, metaValue: string) => void
   onJointShowPathChange: (jointName: string, showPath: boolean) => void
   setEditingJointData: React.Dispatch<React.SetStateAction<JointData | null>>
   setEditingLinkData: React.Dispatch<React.SetStateAction<LinkData | null>>
@@ -60,6 +61,7 @@ export function BuilderModals({
   renameLink,
   updateJointProperty,
   updateLinkProperty,
+  onJointMetaValueChange,
   onJointShowPathChange,
   setEditingJointData,
   setEditingLinkData,
@@ -126,6 +128,7 @@ export function BuilderModals({
         jointTypes={jointTypes}
         onRename={renameJoint}
         onTypeChange={(jointName, newType) => updateJointProperty(jointName, 'type', newType)}
+        onMetaValueChange={onJointMetaValueChange}
         onShowPathChange={(jointName, showPath) => {
           onJointShowPathChange(jointName, showPath)
           setEditingJointData(prev => prev ? { ...prev, showPath } : null)

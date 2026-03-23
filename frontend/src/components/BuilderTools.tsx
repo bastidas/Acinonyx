@@ -5,7 +5,24 @@ import {
   FormControlLabel, Switch, Tooltip, Popover
 } from '@mui/material'
 import CloseIcon from '@mui/icons-material/Close'
+import TokenIcon from '@mui/icons-material/Token'
+import LinkIcon from '@mui/icons-material/Link'
+import WorkspacesOutlinedIcon from '@mui/icons-material/WorkspacesOutlined'
+import CategoryIcon from '@mui/icons-material/Category'
+import WifiTetheringIcon from '@mui/icons-material/WifiTethering'
+import LocationSearchingIcon from '@mui/icons-material/LocationSearching'
+import JoinFullIcon from '@mui/icons-material/JoinFull'
+import StraightenIcon from '@mui/icons-material/Straighten'
+import HighlightOffIcon from '@mui/icons-material/HighlightOff'
+import ControlCameraIcon from '@mui/icons-material/ControlCamera'
+import AddIcon from '@mui/icons-material/Add'
+import RouteIcon from '@mui/icons-material/Route'
 import { graphColors, statusColors, colors, jointColors } from '../theme'
+
+/** MUI / glyph size in the floating-toolbar toggle row */
+const TOOLBAR_TOGGLE_ICON_PX = 22
+/** MUI / glyph size in the Tools grid */
+const TOOLS_GRID_ICON_PX = 22
 import acinonyxLogo from '../assets/acinonyx_logo.png'
 import { Edge, EdgeId, NodeId } from '../types'
 
@@ -25,7 +42,7 @@ export interface ToolbarPosition {
 export interface DraggableToolbarProps {
   id: string
   title: string
-  icon: string
+  icon: React.ReactNode
   children: React.ReactNode
   initialPosition?: ToolbarPosition
   onClose: () => void
@@ -134,7 +151,19 @@ export const DraggableToolbar: React.FC<DraggableToolbarProps> = ({
         }}
       >
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-          <Typography sx={{ fontSize: '1rem' }}>{icon}</Typography>
+          <Box
+            sx={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              width: 24,
+              height: 24,
+              flexShrink: 0,
+              '& .MuiSvgIcon-root': { fontSize: TOOLBAR_TOGGLE_ICON_PX }
+            }}
+          >
+            {icon}
+          </Box>
           <Typography sx={{ fontSize: '0.85rem', fontWeight: 600, color: 'text.primary' }}>
             {title}
           </Typography>
@@ -172,9 +201,26 @@ export const DraggableToolbar: React.FC<DraggableToolbarProps> = ({
 export interface ToolbarConfig {
   id: string
   title: string
-  icon: string
+  icon: React.ReactNode
   defaultPosition: ToolbarPosition
 }
+
+const toolbarToggleGlyph = (glyph: string) => (
+  <Box
+    component="span"
+    sx={{
+      width: TOOLBAR_TOGGLE_ICON_PX,
+      height: TOOLBAR_TOGGLE_ICON_PX,
+      display: 'inline-flex',
+      alignItems: 'center',
+      justifyContent: 'center',
+      fontSize: '1.05rem',
+      lineHeight: 1
+    }}
+  >
+    {glyph}
+  </Box>
+)
 
 // Default toolbar positions - positioned for optimal workspace layout
 // Tools & More: FULL LEFT ALIGNED, Tools below toggle buttons, More well below Tools
@@ -182,13 +228,13 @@ export interface ToolbarConfig {
 // Settings: gear icon, opens settings panel
 // Optimize: dedicated optimization panel
 export const TOOLBAR_CONFIGS: ToolbarConfig[] = [
-  { id: 'tools', title: 'Tools', icon: '⚒', defaultPosition: { x: 8, y: 60 } },        // Full left, below toggle buttons
-  { id: 'more', title: 'More', icon: '≡', defaultPosition: { x: 8, y: 410 } },         // Full left, 40px below Tools so it doesn't block
-  { id: 'optimize', title: 'Optimize', icon: '✦', defaultPosition: { x: 8, y: -630 } }, // Bottom left (negative y = from bottom)
-  { id: 'links', title: 'Links', icon: '—', defaultPosition: { x: -220, y: 8 } },      // Far right edge (negative = from right)
-  { id: 'nodes', title: 'Nodes', icon: '○', defaultPosition: { x: -220, y: 500 } },    // Below Links on far right
-  { id: 'forms', title: 'Forms', icon: '▢', defaultPosition: { x: -263, y: 260 } },     // Right side with 8px padding (255 minWidth + 8)
-  { id: 'settings', title: 'Settings', icon: '⚙', defaultPosition: { x: -280, y: 12 } } // Upper right, flush so panel stays on-screen (x = canvasWidth - panelWidth)
+  { id: 'tools', title: 'Tools', icon: toolbarToggleGlyph('⚒'), defaultPosition: { x: 8, y: 60 } },
+  { id: 'more', title: 'More', icon: toolbarToggleGlyph('≡'), defaultPosition: { x: 8, y: 410 } },
+  { id: 'optimize', title: 'Optimize', icon: toolbarToggleGlyph('✦'), defaultPosition: { x: 8, y: -630 } },
+  { id: 'links', title: 'Links', icon: <LinkIcon sx={{ fontSize: TOOLBAR_TOGGLE_ICON_PX }} />, defaultPosition: { x: -220, y: 8 } },
+  { id: 'nodes', title: 'Nodes', icon: <WorkspacesOutlinedIcon sx={{ fontSize: TOOLBAR_TOGGLE_ICON_PX }} />, defaultPosition: { x: -220, y: 500 } },
+  { id: 'forms', title: 'Forms', icon: <TokenIcon sx={{ fontSize: TOOLBAR_TOGGLE_ICON_PX }} />, defaultPosition: { x: -263, y: 260 } },
+  { id: 'settings', title: 'Settings', icon: toolbarToggleGlyph('⚙'), defaultPosition: { x: -280, y: 12 } }
 ]
 
 export interface ToolbarToggleButtonsProps {
@@ -243,7 +289,6 @@ export const ToolbarToggleButtons: React.FC<ToolbarToggleButtonsProps> = ({
               width: 36,
               height: 36,
               borderRadius: 1.5,
-              fontSize: '1.1rem',
               backgroundColor: isOpen
                 ? 'primary.main'
                 : darkMode ? 'rgba(60, 60, 60, 0.9)' : 'rgba(255,255,255,0.9)',
@@ -266,7 +311,18 @@ export const ToolbarToggleButtons: React.FC<ToolbarToggleButtonsProps> = ({
             }}
             title={config.title}
           >
-            {config.icon}
+            <Box
+              sx={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                width: '100%',
+                height: '100%',
+                '& .MuiSvgIcon-root': { fontSize: TOOLBAR_TOGGLE_ICON_PX }
+              }}
+            >
+              {config.icon}
+            </Box>
           </IconButton>
         )
       })}
@@ -294,31 +350,47 @@ export type ToolMode =
 export interface ToolInfo {
   id: ToolMode
   label: string
-  icon: string
+  icon: React.ReactNode
   description: string
   shortcut?: string
 }
+
+const toolsGridGlyph = (glyph: string) => (
+  <Box
+    component="span"
+    sx={{
+      display: 'inline-flex',
+      alignItems: 'center',
+      justifyContent: 'center',
+      fontSize: `${Math.round(TOOLS_GRID_ICON_PX * 0.9)}px`,
+      lineHeight: 1,
+      fontWeight: 300
+    }}
+  >
+    {glyph}
+  </Box>
+)
 
 export const TOOLS: ToolInfo[] = [
   // Row 1: Core editing tools
   {
     id: 'draw_link',
     label: 'Create Link',
-    icon: '╱',
+    icon: <AddIcon sx={{ fontSize: TOOLS_GRID_ICON_PX }} />,
     description: 'Click two points to create a new link between them.',
     shortcut: 'C'
   },
   {
     id: 'select',
     label: 'Select',
-    icon: '⎚',
+    icon: <LocationSearchingIcon sx={{ fontSize: TOOLS_GRID_ICON_PX }} />,
     description: 'Click to select individual joints or links. Drag to move.',
     shortcut: 'S'
   },
   {
     id: 'delete',
     label: 'Delete',
-    icon: '⌫',
+    icon: <HighlightOffIcon sx={{ fontSize: TOOLS_GRID_ICON_PX }} />,
     description: 'Click a joint or link to delete it. Deleting a link removes orphan nodes. Deleting a node removes connected links.',
     shortcut: 'X'
   },
@@ -326,21 +398,21 @@ export const TOOLS: ToolInfo[] = [
   {
     id: 'group_select',
     label: 'Group Select',
-    icon: '⊡',
+    icon: toolsGridGlyph('⊡'),
     description: 'Drag a box to select multiple elements at once.',
     shortcut: 'G'
   },
   {
     id: 'mechanism_select',
     label: 'Mechanism Select',
-    icon: '⚙',
+    icon: <ControlCameraIcon sx={{ fontSize: TOOLS_GRID_ICON_PX }} />,
     description: 'Click any element to select its entire connected mechanism.',
     shortcut: 'M'
   },
   {
     id: 'measure',
     label: 'Measure',
-    icon: '⌗',
+    icon: <StraightenIcon sx={{ fontSize: TOOLS_GRID_ICON_PX }} />,
     description: 'Click two points to measure the distance between them.',
     shortcut: 'R'
   },
@@ -348,28 +420,28 @@ export const TOOLS: ToolInfo[] = [
   {
     id: 'draw_polygon',
     label: 'Draw Polygon',
-    icon: '⬡',
+    icon: <CategoryIcon sx={{ fontSize: TOOLS_GRID_ICON_PX }} />,
     description: 'Click multiple points to create a polygon shape. Double-click to close.',
     shortcut: 'P'
   },
   {
     id: 'merge',
     label: 'Merge Polygon',
-    icon: '⋒',
-    description: 'Merge a polygon with a link or another polygon form; click a merged polygon to unmerge',
+    icon: <JoinFullIcon sx={{ fontSize: TOOLS_GRID_ICON_PX }} />,
+    description: 'Merge a polygon with a link or another polygon form; Shift+click a merged polygon to unmerge',
     shortcut: 'E'
   },
   {
     id: 'draw_path',
     label: 'Draw Trajectory',
-    icon: '⌇',
+    icon: <RouteIcon sx={{ fontSize: TOOLS_GRID_ICON_PX }} />,
     description: 'Draw a target trajectory for optimization. Click to add points, double-click or press Enter to finish.',
     shortcut: 'T'
   },
   {
     id: 'explore_node_trajectories',
     label: 'Explore Trajectories',
-    icon: '⊙',
+    icon: <WifiTetheringIcon sx={{ fontSize: TOOLS_GRID_ICON_PX }} />,
     description: 'Click a non-fixed joint to preview valid trajectories in a circle around it. Green = valid, red = invalid.',
     shortcut: 'Y'
   }
@@ -1294,7 +1366,7 @@ const getToolHint = (
       if (mergePolygonState?.step === 'link_selected') {
         return 'Click a polygon to merge with link'
       }
-      return 'Click a polygon or link to merge • Click merged polygon to unmerge'
+      return 'Click a polygon or link to merge • Shift+click merged polygon to unmerge'
     case 'add_joint':
       return 'Click on a link to add a joint'
     case 'draw_path':
@@ -1376,7 +1448,20 @@ export const FooterToolbar: React.FC<FooterToolbarProps> = ({
       {/* LEFT: Tool indicator + Selection */}
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, minWidth: 200 }}>
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75 }}>
-          <Typography sx={{ fontSize: '1.1rem', color: darkMode ? '#e0e0e0' : 'inherit' }}>{activeTool?.icon}</Typography>
+          <Box
+            sx={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              width: 22,
+              height: 22,
+              flexShrink: 0,
+              color: darkMode ? '#e0e0e0' : 'inherit',
+              '& .MuiSvgIcon-root': { fontSize: 20 }
+            }}
+          >
+            {activeTool?.icon}
+          </Box>
           <Typography sx={{ fontSize: '0.8rem', fontWeight: 600, color: darkMode ? '#e0e0e0' : 'inherit' }}>
             {activeTool?.label}
           </Typography>
@@ -1897,6 +1982,7 @@ export interface JointData {
   mechanismGroup?: string
   connectedLinks?: string[]
   showPath?: boolean
+  metaValue?: string
 }
 
 export interface JointEditModalProps {
@@ -1906,6 +1992,7 @@ export interface JointEditModalProps {
   jointTypes: readonly string[]
   onRename: (oldName: string, newName: string) => void
   onTypeChange: (jointName: string, newType: string) => void
+  onMetaValueChange?: (jointName: string, metaValue: string) => void
   onShowPathChange?: (jointName: string, showPath: boolean) => void
   darkMode?: boolean
 }
@@ -1917,17 +2004,20 @@ export const JointEditModal: React.FC<JointEditModalProps> = ({
   jointTypes,
   onRename,
   onTypeChange,
+  onMetaValueChange,
   onShowPathChange,
   darkMode = false
 }) => {
   const [editedName, setEditedName] = useState('')
   const [hasNameError, setHasNameError] = useState(false)
+  const [editedMetaValue, setEditedMetaValue] = useState('')
 
   // Reset edited name when modal opens with new data
   useEffect(() => {
     if (jointData) {
       setEditedName(jointData.name)
       setHasNameError(false)
+      setEditedMetaValue(jointData.metaValue ?? '')
     }
   }, [jointData])
 
@@ -1944,6 +2034,10 @@ export const JointEditModal: React.FC<JointEditModalProps> = ({
     if (trimmedName && trimmedName !== jointData.name) {
       onRename(jointData.name, trimmedName)
     }
+  }
+
+  const handleMetaValueSubmit = () => {
+    onMetaValueChange?.(jointData.name, editedMetaValue)
   }
 
   const modalStyle = {
@@ -2056,6 +2150,27 @@ export const JointEditModal: React.FC<JointEditModalProps> = ({
                 ))}
               </Select>
             </FormControl>
+
+            <TextField
+              size="small"
+              label="Meta value"
+              value={editedMetaValue}
+              onChange={(e) => setEditedMetaValue(e.target.value)}
+              onBlur={handleMetaValueSubmit}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  handleMetaValueSubmit()
+                  ;(e.target as HTMLInputElement).blur()
+                }
+              }}
+              disabled={!onMetaValueChange}
+              fullWidth
+              sx={{
+                mb: 2,
+                '& .MuiInputBase-input': { fontSize: '0.85rem' },
+                '& .MuiInputLabel-root': { fontSize: '0.8rem' }
+              }}
+            />
 
             {/* Show Path toggle for Crank/Revolute */}
             {(jointData.type === 'Crank' || jointData.type === 'Revolute') && onShowPathChange && (

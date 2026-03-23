@@ -431,7 +431,11 @@ export {
   // Explore region (circle sampling for trajectory exploration)
   exploreRegion,
   getExploreRegionOptionsForMaxPoints,
-  getCombinatorialSecondOptions
+  getCombinatorialSecondOptions,
+
+  // Drawn objects vs linkage.edges id sync
+  remapEdgeReferencesInDrawnObjects,
+  removeDrawnObjectsReferencingDeletedEdges
 } from './helpers'
 
 export type { CreateLinkResult, ApplyLoadedDocumentParams, OptimizerSyncResult, ExploreRegionPoint, ExploreRegionOptions, ExploreRegionOptionsForMaxPoints } from './helpers'

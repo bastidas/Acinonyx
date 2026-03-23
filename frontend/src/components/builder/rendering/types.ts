@@ -253,7 +253,7 @@ export interface DrawnObjectsRendererProps {
   hoveredPolygonId?: string | null
   /** Called when pointer enters/leaves a polygon in merge mode (polygonId or null). */
   onMergePolygonHover?: (polygonId: string | null) => void
-  /** Called when user clicks a polygon in merge mode (objId, isUnmerge). */
+  /** Called when user clicks a polygon in merge mode; isUnmerge is true on Shift+click for merged polygons. */
   onMergePolygonClick?: (objId: string, isUnmerge: boolean) => void
   /** When true (e.g. draw_polygon mode), polygon paths use pointer-events: none so clicks pass through to canvas. */
   pointerEventsNoneForDrawPolygon?: boolean

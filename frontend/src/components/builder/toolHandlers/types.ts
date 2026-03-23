@@ -215,7 +215,13 @@ export interface ToolContext {
   /** Drawn objects (for box-select and merge detection) */
   drawnObjects: { objects: Array<{ id: string; name?: string; type?: string; points: CanvasPoint[]; mergedLinkName?: string; contained_links?: string[] }> }
   /** Call backend merge-polygon; if provided, merge tool uses it instead of local logic */
-  apiMergePolygon?: (params: { polygonId: string; polygonPoints: CanvasPoint[]; selectedLinkName?: string }) => Promise<MergePolygonApiResult>
+  apiMergePolygon?: (params: {
+    polygonId: string
+    polygonPoints: CanvasPoint[]
+    selectedLinkName?: string
+    /** When true (e.g. fresh draw), do not set mergedLinkName/contained_links if more than one link is inside. */
+    attachOnlyIfSingleContainedLink?: boolean
+  }) => Promise<MergePolygonApiResult>
   /** Call backend merge-two-polygons; returns outer bounding polygon geometry for two polygons */
   apiMergeTwoPolygons?: (params: { polygonIdA: string; polygonPointsA: CanvasPoint[]; polygonIdB: string; polygonPointsB: CanvasPoint[] }) => Promise<MergeTwoPolygonsApiResult>
   /** Call backend find-associated-polygons (e.g. after drag); sets broken state from all_inside */

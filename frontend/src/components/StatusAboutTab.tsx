@@ -7,6 +7,8 @@ import {
 } from '@mui/material'
 import cheetahGif2 from '../assets/cheetah_run2.gif'
 import acinonyxLogo from '../assets/acinonyx_logo.png'
+import worldIcon from '../assets/social/world.png'
+import githubIcon from '../assets/social/github.png'
 
 const StatusAboutTab: React.FC = () => {
   const [loading, setLoading] = useState(true)
@@ -152,7 +154,7 @@ const StatusAboutTab: React.FC = () => {
             <kbd>M</kbd> <Typography variant="body2" sx={{ color: 'var(--color-text-secondary)' }}>Select Mechanism — click to select entire connected mechanism</Typography>
             <kbd>R</kbd> <Typography variant="body2" sx={{ color: 'var(--color-text-secondary)' }}>Measure — click two points to measure distance</Typography>
             <kbd>P</kbd> <Typography variant="body2" sx={{ color: 'var(--color-text-secondary)' }}>Draw Polygon — click to add vertices, double-click to close</Typography>
-            <kbd>E</kbd> <Typography variant="body2" sx={{ color: 'var(--color-text-secondary)' }}>Merge — merge a polygon with a link, or unmerge</Typography>
+            <kbd>E</kbd> <Typography variant="body2" sx={{ color: 'var(--color-text-secondary)' }}>Merge — merge polygon/link/forms; Shift+click merged form to unmerge</Typography>
             <kbd>T</kbd> <Typography variant="body2" sx={{ color: 'var(--color-text-secondary)' }}>Draw Path — draw a target trajectory for optimization</Typography>
             <kbd>Y</kbd> <Typography variant="body2" sx={{ color: 'var(--color-text-secondary)' }}>Explore Trajectories — click a joint to see valid/invalid positions in a circle; click a valid (green) dot to apply that position</Typography>
           </Box>
@@ -432,6 +434,49 @@ const StatusAboutTab: React.FC = () => {
           }} />
           Backend: {loading ? 'checking...' : error ? 'offline' : 'online'}
         </Typography>
+
+        {/* Social Links */}
+        <Box sx={{
+          display: 'flex',
+          gap: 1.5,
+          mt: 2,
+          alignItems: 'center'
+        }}>
+          <a
+            href="http://www.alexanderbastidasfry.com"
+            target="_blank"
+            rel="noopener noreferrer"
+            style={{ lineHeight: 0 }}
+          >
+            <img
+              src={worldIcon}
+              alt="website"
+              style={{
+                width: '36px',
+                height: '36px',
+                objectFit: 'contain',
+                display: 'block'
+              }}
+            />
+          </a>
+          <a
+            href="https://github.com/bastidas/Game-Theory"
+            target="_blank"
+            rel="noopener noreferrer"
+            style={{ lineHeight: 0 }}
+          >
+            <img
+              src={githubIcon}
+              alt="github"
+              style={{
+                width: '36px',
+                height: '36px',
+                objectFit: 'contain',
+                display: 'block'
+              }}
+            />
+          </a>
+        </Box>
       </Box>
     </Box>
   )

@@ -10,6 +10,7 @@ const TOOL_BUTTON_SIZE = 48
 const TOOLS_GRID_GAP = 6
 const TOOLS_PADDING = 12
 const TOOLS_BOX_WIDTH = (TOOL_BUTTON_SIZE * 3) + (TOOLS_GRID_GAP * 2) + (TOOLS_PADDING * 2)
+const TOOLS_GRID_ICON_PX = 22
 
 export interface ToolsToolbarProps {
   toolMode: ToolMode
@@ -82,7 +83,6 @@ export const ToolsToolbar: React.FC<ToolsToolbarProps> = ({
                   minWidth: TOOL_BUTTON_SIZE,
                   maxWidth: TOOL_BUTTON_SIZE,
                   borderRadius: 2,
-                  fontSize: isDelete ? '1.2rem' : '1.5rem',
                   overflow: 'hidden',
                   backgroundColor: isActive
                     ? (isDelete ? '#d32f2f' : 'primary.main')
@@ -98,16 +98,19 @@ export const ToolsToolbar: React.FC<ToolsToolbarProps> = ({
                   }
                 }}
               >
-                <span style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  width: '100%',
-                  height: '100%',
-                  lineHeight: 1
-                }}>
+                <Box
+                  sx={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    width: '100%',
+                    height: '100%',
+                    lineHeight: 1,
+                    '& .MuiSvgIcon-root': { fontSize: TOOLS_GRID_ICON_PX }
+                  }}
+                >
                   {tool.icon}
-                </span>
+                </Box>
               </IconButton>
             </Tooltip>
           )

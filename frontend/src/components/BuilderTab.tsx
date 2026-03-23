@@ -79,6 +79,8 @@ import {
   exploreRegion,
   getExploreRegionOptionsForMaxPoints,
   getCombinatorialSecondOptions,
+  remapEdgeReferencesInDrawnObjects,
+  removeDrawnObjectsReferencingDeletedEdges,
   updateEdgeMeta,
   updateNodeMeta,
   // Hypergraph operations (new API)
@@ -200,6 +202,71 @@ const BuilderTab: React.FC = () => {
   const pylinkDoc: PylinkDocument = useMemo(() => {
     return convertLinkageDocumentToLegacy(linkageDoc)
   }, [linkageDoc])
+
+  /**
+   * Apply default metaValue heuristic without overwriting user-defined values.
+   * - large: fixed/crank nodes
+   * - medium: direct neighbors of fixed/crank nodes
+   * - small: all others
+   */
+  const applyMetaValueHeuristicDefaults = useCallback((doc: LinkageDocument): LinkageDocument => {
+    const nodes = Object.values(doc.linkage.nodes)
+    if (nodes.length === 0) return doc
+
+    const primaryNodeIds = new Set(
+      nodes
+        .filter(node => node.role === 'fixed' || node.role === 'crank')
+        .map(node => node.id)
+    )
+
+    const mediumNodeIds = new Set<string>()
+    for (const edge of Object.values(doc.linkage.edges)) {
+      if (primaryNodeIds.has(edge.source) && !primaryNodeIds.has(edge.target)) {
+        mediumNodeIds.add(edge.target)
+      }
+      if (primaryNodeIds.has(edge.target) && !primaryNodeIds.has(edge.source)) {
+        mediumNodeIds.add(edge.source)
+      }
+    }
+
+    let changed = false
+    const nextNodeMeta = { ...doc.meta.nodes }
+
+    for (const node of nodes) {
+      const existingMeta = doc.meta.nodes[node.id]
+      if (existingMeta?.metaValue !== undefined) continue
+
+      const heuristicValue = primaryNodeIds.has(node.id)
+        ? 'large'
+        : mediumNodeIds.has(node.id)
+          ? 'medium'
+          : 'small'
+
+      nextNodeMeta[node.id] = {
+        ...(existingMeta ?? { color: '', zlevel: 0 }),
+        metaValue: heuristicValue
+      }
+      changed = true
+    }
+
+    if (!changed) return doc
+
+    return {
+      ...doc,
+      meta: {
+        ...doc.meta,
+        nodes: nextNodeMeta
+      }
+    }
+  }, [])
+
+  // Keep heuristic defaults populated as structure changes; preserve user-set values.
+  useEffect(() => {
+    const nextDoc = applyMetaValueHeuristicDefaults(linkageDoc)
+    if (nextDoc !== linkageDoc) {
+      setLinkageDoc(nextDoc)
+    }
+  }, [linkageDoc, applyMetaValueHeuristicDefaults, setLinkageDoc])
 
   // Status state (consolidated: statusMessage, showStatus, clearStatus, statusHistory)
   const { statusMessage, showStatus, clearStatus, statusHistory, clearStatusHistory } = useStatusState()
@@ -1026,7 +1093,8 @@ const BuilderTab: React.FC = () => {
       type: joint.type,
       position,
       connectedLinks,
-      showPath: meta?.show_path ?? false
+      showPath: meta?.show_path ?? false,
+      metaValue: linkageDoc.meta.nodes[jointName]?.metaValue
     }
 
     // Add type-specific data
@@ -1048,7 +1116,7 @@ const BuilderTab: React.FC = () => {
     }
 
     return baseData
-  }, [pylinkDoc.pylinkage.joints, pylinkDoc.meta.joints, pylinkDoc.meta.links, getJointPosition])
+  }, [pylinkDoc.pylinkage.joints, pylinkDoc.meta.joints, pylinkDoc.meta.links, linkageDoc.meta.nodes, getJointPosition])
 
   /**
    * Build LinkData for the link edit modal
@@ -1178,6 +1246,19 @@ const BuilderTab: React.FC = () => {
     // Update state directly with hypergraph format
     setLinkageDoc(result.doc)
 
+    setDrawnObjects(prev => {
+      const { objects, removedIds } = removeDrawnObjectsReferencingDeletedEdges(
+        prev.objects,
+        new Set(result.deletedEdges)
+      )
+      const removed = new Set(removedIds)
+      return {
+        ...prev,
+        objects: objects as DrawnObject[],
+        selectedIds: prev.selectedIds.filter(id => !removed.has(id))
+      }
+    })
+
     // Clear optimized mechanism flag - structure changed (deleted link)
     clearOptimizedMechanismFlag()
 
@@ -1186,7 +1267,7 @@ const BuilderTab: React.FC = () => {
     setSelectedJoints([])
 
     showStatus(result.message, 'success', 2500)
-  }, [linkageDoc, showStatus, clearOptimizedMechanismFlag])
+  }, [linkageDoc, showStatus, clearOptimizedMechanismFlag, setDrawnObjects])
 
   // Delete a joint (node) and all connected edges, plus any resulting orphans
   const deleteJoint = useCallback((jointName: string) => {
@@ -1200,6 +1281,19 @@ const BuilderTab: React.FC = () => {
     // Update state directly with hypergraph format
     setLinkageDoc(result.doc)
 
+    setDrawnObjects(prev => {
+      const { objects, removedIds } = removeDrawnObjectsReferencingDeletedEdges(
+        prev.objects,
+        new Set(result.deletedEdges)
+      )
+      const removed = new Set(removedIds)
+      return {
+        ...prev,
+        objects: objects as DrawnObject[],
+        selectedIds: prev.selectedIds.filter(id => !removed.has(id))
+      }
+    })
+
     // Clear optimized mechanism flag - structure changed (deleted node)
     clearOptimizedMechanismFlag()
 
@@ -1208,7 +1302,7 @@ const BuilderTab: React.FC = () => {
     setSelectedJoints([])
 
     showStatus(result.message, 'success', 2500)
-  }, [linkageDoc, showStatus, clearOptimizedMechanismFlag])
+  }, [linkageDoc, showStatus, clearOptimizedMechanismFlag, setDrawnObjects])
 
   // Move a joint (node) to a new position
   // In hypergraph format, we just update the node position and sync edge distances
@@ -1490,11 +1584,26 @@ const BuilderTab: React.FC = () => {
     setLinkageDoc(result.doc)
     setSelectedJoints([targetJoint])
 
+    if (result.deletedEdges.length > 0) {
+      setDrawnObjects(prev => {
+        const { objects, removedIds } = removeDrawnObjectsReferencingDeletedEdges(
+          prev.objects,
+          new Set(result.deletedEdges)
+        )
+        const removed = new Set(removedIds)
+        return {
+          ...prev,
+          objects: objects as DrawnObject[],
+          selectedIds: prev.selectedIds.filter(id => !removed.has(id))
+        }
+      })
+    }
+
     // Clear optimized mechanism flag - structure changed (merged nodes)
     clearOptimizedMechanismFlag()
 
     showStatus(result.message, 'success', 2500)
-  }, [linkageDoc, showStatus, triggerMechanismChange, clearOptimizedMechanismFlag])
+  }, [linkageDoc, showStatus, triggerMechanismChange, clearOptimizedMechanismFlag, setDrawnObjects])
   // Create a new link between two points/joints using hypergraph operations
   // If user clicked on an existing joint, use it. Otherwise create a new joint.
   // New joints become 'follower' if connected to a kinematic node, 'fixed' otherwise.
@@ -1536,12 +1645,16 @@ const BuilderTab: React.FC = () => {
     let doc = linkageDoc
     let totalDeletedEdges = linksToDelete.length
     let totalDeletedNodes = jointsToDelete.length
+    const allDeletedEdgeIds = new Set<string>()
 
     // First delete edges (links) - this handles orphan detection
     if (linksToDelete.length > 0) {
       const edgeResult = deleteEdgesOp(doc, linksToDelete)
       doc = edgeResult.doc
       totalDeletedEdges = edgeResult.deletedEdges.length
+      for (const id of edgeResult.deletedEdges) {
+        allDeletedEdgeIds.add(id)
+      }
       // Orphaned nodes are counted separately
       totalDeletedNodes += edgeResult.orphanedNodes.length
     }
@@ -1552,28 +1665,32 @@ const BuilderTab: React.FC = () => {
       doc = nodeResult.doc
       totalDeletedNodes = nodeResult.deletedNodes.length
       totalDeletedEdges += nodeResult.deletedEdges.length
-    }
-
-    // Also delete DrawnObjects that are merged with any deleted link
-    const allDrawnObjectsToDelete = new Set(drawnObjectsToDelete)
-    const allDeletedEdges = new Set(linksToDelete)
-    drawnObjects.objects.forEach(obj => {
-      if (obj.mergedLinkName && allDeletedEdges.has(obj.mergedLinkName)) {
-        allDrawnObjectsToDelete.add(obj.id)
+      for (const id of nodeResult.deletedEdges) {
+        allDeletedEdgeIds.add(id)
       }
-    })
+    }
 
     // Apply state update
     setLinkageDoc(doc)
 
-    if (allDrawnObjectsToDelete.size > 0) {
-      const newDrawnObjects = drawnObjects.objects.filter(obj => !allDrawnObjectsToDelete.has(obj.id))
-      setDrawnObjects(prev => ({
+    let deletedDrawnObjects = 0
+    setDrawnObjects(prev => {
+      const { objects: afterPrune, removedIds } = removeDrawnObjectsReferencingDeletedEdges(
+        prev.objects,
+        allDeletedEdgeIds
+      )
+      const explicit = new Set(drawnObjectsToDelete)
+      const nextObjects = afterPrune.filter(
+        o => !explicit.has((o as DrawnObject).id)
+      ) as DrawnObject[]
+      deletedDrawnObjects = prev.objects.length - nextObjects.length
+      const removedForSelection = new Set([...removedIds, ...drawnObjectsToDelete])
+      return {
         ...prev,
-        objects: newDrawnObjects,
-        selectedIds: prev.selectedIds.filter(id => !allDrawnObjectsToDelete.has(id))
-      }))
-    }
+        objects: nextObjects,
+        selectedIds: prev.selectedIds.filter(id => !removedForSelection.has(id))
+      }
+    })
 
     // Clear selections and trigger update
     setSelectedJoints([])
@@ -1589,9 +1706,9 @@ const BuilderTab: React.FC = () => {
     return {
       deletedJoints: totalDeletedNodes,
       deletedLinks: totalDeletedEdges,
-      deletedDrawnObjects: allDrawnObjectsToDelete.size
+      deletedDrawnObjects
     }
-  }, [linkageDoc, drawnObjects.objects, moveGroupState.isActive, triggerMechanismChange])
+  }, [linkageDoc, moveGroupState.isActive, triggerMechanismChange, setDrawnObjects])
 
   // Handle delete with confirmation for multiple items
   const handleDeleteSelected = useCallback(() => {
@@ -2044,12 +2161,17 @@ const BuilderTab: React.FC = () => {
 
     setLinkageDoc(result.doc)
 
+    setDrawnObjects(prev => ({
+      ...prev,
+      objects: remapEdgeReferencesInDrawnObjects(prev.objects, oldName, newName) as DrawnObject[]
+    }))
+
     // Update the modal data with new name if modal is open
     if (editingLinkData && editingLinkData.name === oldName) {
       setEditingLinkData(prev => prev ? { ...prev, name: newName } : null)
     }
     showStatus(`Renamed to ${newName}`, 'success', 1500)
-  }, [linkageDoc, showStatus, editingLinkData])
+  }, [linkageDoc, showStatus, editingLinkData, setDrawnObjects])
 
   // Z-level palette: distinct colors for each layer (same z => same color)
   const Z_LEVEL_PALETTE = [
@@ -3643,6 +3765,10 @@ const BuilderTab: React.FC = () => {
         renameLink={renameLink}
         updateJointProperty={updateJointProperty}
         updateLinkProperty={updateLinkProperty}
+        onJointMetaValueChange={(jointName, metaValue) => {
+          setLinkageDoc(prev => updateNodeMeta(prev, jointName, { metaValue }))
+          setEditingJointData(prev => (prev && prev.name === jointName ? { ...prev, metaValue } : prev))
+        }}
         onJointShowPathChange={(jointName, showPath) =>
           setLinkageDoc(prev => updateNodeMeta(prev, jointName, { showPath }))
         }

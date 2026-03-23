@@ -35,6 +35,23 @@ if __name__ == '__main__':
     # Idempotent; acinonyx_api and other modules just use logging.getLogger(__name__).
     setup_logging(level=python_level)
 
+    # Get the project root directory
+    project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    
+    # Define directories to watch (exclude root to avoid watching backend.log)
+    reload_dirs = [
+        os.path.join(project_root, 'backend'),
+        os.path.join(project_root, 'configs'),
+        # os.path.join(project_root, 'demo'),
+        os.path.join(project_root, 'form_tools'),
+        #os.path.join(project_root, 'multi'),
+        os.path.join(project_root, 'optimizers'),
+        os.path.join(project_root, 'pylink_tools'),
+        os.path.join(project_root, 'target_gen'),
+        os.path.join(project_root, 'traj_dist'),
+        #sos.path.join(project_root, 'viz_tools'),
+    ]
+
     print(f'🐆 Starting Acinonyx Backend Server on port {BACKEND_PORT}...')
     print(f'📊 Log level: {log_level} (set LOG_LEVEL env var to change)')
     uvicorn.run(
@@ -42,5 +59,6 @@ if __name__ == '__main__':
         host='0.0.0.0',
         port=BACKEND_PORT,
         reload=True,
+        reload_dirs=reload_dirs,
         log_level=uvicorn_log_level,
     )

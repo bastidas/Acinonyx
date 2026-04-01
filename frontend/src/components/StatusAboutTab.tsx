@@ -153,7 +153,7 @@ const StatusAboutTab: React.FC = () => {
             <kbd>G</kbd> <Typography variant="body2" sx={{ color: 'var(--color-text-secondary)' }}>Group Select — drag a box to select multiple elements</Typography>
             <kbd>M</kbd> <Typography variant="body2" sx={{ color: 'var(--color-text-secondary)' }}>Select Mechanism — click to select entire connected mechanism</Typography>
             <kbd>R</kbd> <Typography variant="body2" sx={{ color: 'var(--color-text-secondary)' }}>Measure — click two points to measure distance</Typography>
-            <kbd>P</kbd> <Typography variant="body2" sx={{ color: 'var(--color-text-secondary)' }}>Draw Polygon — click to add vertices, double-click to close</Typography>
+            <kbd>P</kbd> <Typography variant="body2" sx={{ color: 'var(--color-text-secondary)' }}>Draw Polygon — click to add vertices, double-click to close; Shift+click to start a circle (center), then set radius</Typography>
             <kbd>E</kbd> <Typography variant="body2" sx={{ color: 'var(--color-text-secondary)' }}>Merge — merge polygon/link/forms; Shift+click merged form to unmerge</Typography>
             <kbd>T</kbd> <Typography variant="body2" sx={{ color: 'var(--color-text-secondary)' }}>Draw Path — draw a target trajectory for optimization</Typography>
             <kbd>Y</kbd> <Typography variant="body2" sx={{ color: 'var(--color-text-secondary)' }}>Explore Trajectories — click a joint to see valid/invalid positions in a circle; click a valid (green) dot to apply that position</Typography>

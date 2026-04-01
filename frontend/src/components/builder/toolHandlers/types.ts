@@ -111,6 +111,8 @@ export interface ToolContext {
   getLinksWithPositions: () => LinkWithPosition[]
   /** Position of a joint by name */
   getJointPosition: (jointName: string) => [number, number] | null
+  /** Link connectivity (same as pylinkDoc.meta.links) for group-select / mechanism helpers */
+  linksMeta: Record<string, { connects: string[] }>
   /** Find nearest joint to point within threshold */
   findNearestJoint: (
     point: CanvasPoint,

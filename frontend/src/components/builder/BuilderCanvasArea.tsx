@@ -48,6 +48,7 @@ export interface BuilderCanvasAreaProps {
   renderGrid?: CanvasLayerRender
   renderCanvases?: CanvasLayerRender
   renderDrawnObjects?: CanvasLayerRender
+  renderDrawnObjectLabels?: CanvasLayerRender
   renderLinks?: CanvasLayerRender
   renderPreviewLine?: CanvasLayerRender
   renderPolygonPreview?: CanvasLayerRender
@@ -80,6 +81,7 @@ export interface BuilderCanvasAreaProps {
   onCancelAction?: () => void
   openToolbars: Set<string>
   onToggleToolbar: (id: string) => void
+  onRestoreToolbar?: (id: string) => void
   onToolbarInteract?: () => void
   darkMode?: boolean
   children?: React.ReactNode
@@ -102,6 +104,7 @@ export function BuilderCanvasArea({
   renderGrid,
   renderCanvases,
   renderDrawnObjects,
+  renderDrawnObjectLabels,
   renderLinks,
   renderPreviewLine,
   renderPolygonPreview,
@@ -133,6 +136,7 @@ export function BuilderCanvasArea({
   onCancelAction,
   openToolbars,
   onToggleToolbar,
+  onRestoreToolbar,
   onToolbarInteract,
   darkMode = false,
   children
@@ -218,6 +222,7 @@ export function BuilderCanvasArea({
         renderGrid={renderGrid}
         renderCanvases={renderCanvases}
         renderDrawnObjects={renderDrawnObjects}
+        renderDrawnObjectLabels={renderDrawnObjectLabels}
         renderLinks={renderLinks}
         renderPreviewLine={renderPreviewLine}
         renderPolygonPreview={renderPolygonPreview}
@@ -258,6 +263,7 @@ export function BuilderCanvasArea({
       <ToolbarToggleButtons
         openToolbars={openToolbars}
         onToggleToolbar={onToggleToolbar}
+        onRestoreToolbar={onRestoreToolbar}
         darkMode={darkMode}
         onInteract={onToolbarInteract}
       />

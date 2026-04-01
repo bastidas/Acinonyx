@@ -39,17 +39,48 @@ export interface ToolbarPosition {
   y: number
 }
 
+export interface ToolbarDimensions {
+  minWidth: number
+  maxHeight: number
+  minHeight?: number
+  defaultHeight?: number
+}
+
+export interface ToolbarViewportBounds {
+  width: number
+  height: number
+}
+
+export function clampToolbarPosition(
+  position: ToolbarPosition,
+  viewportBounds: ToolbarViewportBounds,
+  dimensions: ToolbarDimensions
+): ToolbarPosition {
+  const maxX = Math.max(0, viewportBounds.width - dimensions.minWidth)
+  const effectiveHeight = dimensions.defaultHeight ?? dimensions.maxHeight
+  const maxY = Math.max(0, viewportBounds.height - effectiveHeight)
+  return {
+    x: Math.min(Math.max(0, position.x), maxX),
+    y: Math.min(Math.max(0, position.y), maxY)
+  }
+}
+
 export interface DraggableToolbarProps {
   id: string
   title: string
   icon: React.ReactNode
   children: React.ReactNode
   initialPosition?: ToolbarPosition
+  initialHeight?: number
   onClose: () => void
   onPositionChange?: (id: string, position: ToolbarPosition) => void
+  onHeightChange?: (id: string, height: number) => void
   onInteract?: () => void  // Called when user clicks/interacts with toolbar
   minWidth?: number
+  minHeight?: number
+  defaultHeight?: number
   maxHeight?: number
+  viewportBounds?: ToolbarViewportBounds
 }
 
 export const DraggableToolbar: React.FC<DraggableToolbarProps> = ({
@@ -58,16 +89,28 @@ export const DraggableToolbar: React.FC<DraggableToolbarProps> = ({
   icon,
   children,
   initialPosition = { x: 100, y: 100 },
+  initialHeight,
   onClose,
   onPositionChange,
+  onHeightChange,
   onInteract,
   minWidth = 200,
-  maxHeight = 400
+  minHeight = 220,
+  defaultHeight = 320,
+  maxHeight = 400,
+  viewportBounds
 }) => {
   const [position, setPosition] = useState<ToolbarPosition>(initialPosition)
   const [isDragging, setIsDragging] = useState(false)
+  const [isResizing, setIsResizing] = useState(false)
+  const [toolbarHeight, setToolbarHeight] = useState<number>(
+    Math.max(minHeight, Math.min(initialHeight ?? defaultHeight, maxHeight))
+  )
+  const [hasVerticalOverflow, setHasVerticalOverflow] = useState(false)
   const dragOffset = useRef<{ x: number; y: number }>({ x: 0, y: 0 })
+  const resizeStart = useRef<{ y: number; height: number }>({ y: 0, height: 0 })
   const toolbarRef = useRef<HTMLDivElement>(null)
+  const contentRef = useRef<HTMLDivElement>(null)
 
   const handleMouseDown = useCallback((e: React.MouseEvent) => {
     if ((e.target as HTMLElement).closest('.toolbar-close')) return
@@ -80,21 +123,72 @@ export const DraggableToolbar: React.FC<DraggableToolbarProps> = ({
   }, [position])
 
   useEffect(() => {
-    if (!isDragging) return
+    setPosition(initialPosition)
+  }, [initialPosition])
+
+  useEffect(() => {
+    const baseHeight = initialHeight ?? defaultHeight
+    const clampedHeight = Math.max(minHeight, Math.min(baseHeight, maxHeight))
+    setToolbarHeight(clampedHeight)
+  }, [initialHeight, defaultHeight, minHeight, maxHeight])
+
+  useEffect(() => {
+    if (!viewportBounds) return
+    const clamped = clampToolbarPosition(
+      position,
+      viewportBounds,
+      { minWidth, maxHeight, defaultHeight: toolbarHeight }
+    )
+    if (clamped.x !== position.x || clamped.y !== position.y) {
+      setPosition(clamped)
+      onPositionChange?.(id, clamped)
+    }
+  }, [viewportBounds, position, minWidth, maxHeight, toolbarHeight, onPositionChange, id])
+
+  useEffect(() => {
+    const el = contentRef.current
+    if (!el) return
+    const updateOverflow = () => setHasVerticalOverflow(el.scrollHeight > el.clientHeight + 1)
+    updateOverflow()
+    const observer = new ResizeObserver(updateOverflow)
+    observer.observe(el)
+    return () => observer.disconnect()
+  }, [children, toolbarHeight])
+
+  useEffect(() => {
+    if (!isDragging && !isResizing) return
 
     const handleMouseMove = (e: MouseEvent) => {
+      if (isResizing) {
+        const candidateHeight = resizeStart.current.height + (e.clientY - resizeStart.current.y)
+        const clampedHeight = Math.max(minHeight, Math.min(maxHeight, candidateHeight))
+        setToolbarHeight(clampedHeight)
+        return
+      }
+
       const newX = e.clientX - dragOffset.current.x
       const newY = e.clientY - dragOffset.current.y
-      // Keep within reasonable bounds
-      const boundedX = Math.max(0, newX)
-      const boundedY = Math.max(0, newY)
-      setPosition({ x: boundedX, y: boundedY })
+      const nextPosition = { x: Math.max(0, newX), y: Math.max(0, newY) }
+      if (viewportBounds) {
+        const clamped = clampToolbarPosition(
+          nextPosition,
+          viewportBounds,
+          { minWidth, maxHeight, defaultHeight: toolbarHeight }
+        )
+        setPosition(clamped)
+      } else {
+        setPosition(nextPosition)
+      }
     }
 
     const handleMouseUp = () => {
       setIsDragging(false)
+      setIsResizing(false)
       if (onPositionChange) {
         onPositionChange(id, position)
+      }
+      if (onHeightChange) {
+        onHeightChange(id, toolbarHeight)
       }
     }
 
@@ -105,7 +199,9 @@ export const DraggableToolbar: React.FC<DraggableToolbarProps> = ({
       document.removeEventListener('mousemove', handleMouseMove)
       document.removeEventListener('mouseup', handleMouseUp)
     }
-  }, [isDragging, id, position, onPositionChange])
+  }, [isDragging, isResizing, id, position, onPositionChange, onHeightChange, minHeight, maxHeight, minWidth, toolbarHeight, viewportBounds])
+
+  const canResize = hasVerticalOverflow || toolbarHeight > defaultHeight
 
   return (
     <Paper
@@ -117,6 +213,8 @@ export const DraggableToolbar: React.FC<DraggableToolbarProps> = ({
         left: position.x,
         top: position.y,
         minWidth,
+        height: toolbarHeight,
+        minHeight,
         maxHeight,
         overflow: 'hidden',
         display: 'flex',
@@ -124,12 +222,19 @@ export const DraggableToolbar: React.FC<DraggableToolbarProps> = ({
         backgroundColor: 'rgba(255, 255, 255, 0.98)',
         backdropFilter: 'blur(12px)',
         borderRadius: 3,
-        border: '1px solid rgba(0,0,0,0.1)',
+        border: '1px solid rgba(0,0,0,0.12)',
         boxShadow: isDragging
           ? '0 12px 40px rgba(0,0,0,0.2)'
           : '0 4px 20px rgba(0,0,0,0.12)',
         transition: isDragging ? 'none' : 'box-shadow 0.2s ease',
-        zIndex: isDragging ? 1400 : 1300
+        zIndex: isDragging || isResizing ? 1400 : 1300,
+        'body.dark-mode &': {
+          backgroundColor: 'rgba(35, 35, 35, 0.96)',
+          border: '1px solid rgba(255,255,255,0.22)',
+          boxShadow: isDragging
+            ? '0 12px 40px rgba(0,0,0,0.6), 0 0 0 1px rgba(255,255,255,0.22)'
+            : '0 6px 24px rgba(0,0,0,0.45), 0 0 0 1px rgba(255,255,255,0.2)'
+        }
       }}
     >
       {/* Title bar - draggable; only title bar has userSelect: none so slider thumb remains draggable in content */}
@@ -147,7 +252,11 @@ export const DraggableToolbar: React.FC<DraggableToolbarProps> = ({
           backgroundColor: 'rgba(0,0,0,0.03)',
           borderBottom: '1px solid rgba(0,0,0,0.08)',
           cursor: isDragging ? 'grabbing' : 'grab',
-          userSelect: 'none'
+          userSelect: 'none',
+          'body.dark-mode &': {
+            backgroundColor: 'rgba(255,255,255,0.06)',
+            borderBottom: '1px solid rgba(255,255,255,0.18)'
+          }
         }}
       >
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
@@ -187,9 +296,35 @@ export const DraggableToolbar: React.FC<DraggableToolbarProps> = ({
       </Box>
 
       {/* Content area - allow text selection and pointer events for sliders/controls */}
-      <Box sx={{ overflow: 'auto', flex: 1, userSelect: 'text', pointerEvents: 'auto' }} data-draggable-toolbar-content>
+      <Box
+        ref={contentRef}
+        sx={{ overflow: 'auto', flex: 1, userSelect: 'text', pointerEvents: 'auto' }}
+        data-draggable-toolbar-content
+      >
         {children}
       </Box>
+      {canResize && (
+        <Box
+          onMouseDown={(e) => {
+            e.preventDefault()
+            e.stopPropagation()
+            onInteract?.()
+            setIsResizing(true)
+            resizeStart.current = { y: e.clientY, height: toolbarHeight }
+          }}
+          sx={{
+            height: 8,
+            cursor: 'ns-resize',
+            borderTop: '1px solid',
+            borderTopColor: 'rgba(0,0,0,0.08)',
+            background: 'linear-gradient(to bottom, rgba(0,0,0,0.02), rgba(0,0,0,0.06))',
+            '&:hover': {
+              borderTopColor: 'primary.main',
+              background: 'linear-gradient(to bottom, rgba(25,118,210,0.08), rgba(25,118,210,0.14))'
+            }
+          }}
+        />
+      )}
     </Paper>
   )
 }
@@ -240,6 +375,7 @@ export const TOOLBAR_CONFIGS: ToolbarConfig[] = [
 export interface ToolbarToggleButtonsProps {
   openToolbars: Set<string>
   onToggleToolbar: (id: string) => void
+  onRestoreToolbar?: (id: string) => void
   darkMode?: boolean
   onInteract?: () => void  // Called when user clicks/interacts with toolbar buttons
 }
@@ -253,6 +389,7 @@ export interface ToolbarToggleButtonsProps {
 export const ToolbarToggleButtons: React.FC<ToolbarToggleButtonsProps> = ({
   openToolbars,
   onToggleToolbar,
+  onRestoreToolbar,
   darkMode = false,
   onInteract
 }) => {
@@ -285,6 +422,12 @@ export const ToolbarToggleButtons: React.FC<ToolbarToggleButtonsProps> = ({
           <IconButton
             key={config.id}
             onClick={() => onToggleToolbar(config.id)}
+            onDoubleClick={(e) => {
+              e.preventDefault()
+              e.stopPropagation()
+              onInteract?.()
+              onRestoreToolbar?.(config.id)
+            }}
             sx={{
               width: 36,
               height: 36,
@@ -421,7 +564,7 @@ export const TOOLS: ToolInfo[] = [
     id: 'draw_polygon',
     label: 'Draw Polygon',
     icon: <CategoryIcon sx={{ fontSize: TOOLS_GRID_ICON_PX }} />,
-    description: 'Click multiple points to create a polygon shape. Double-click to close.',
+    description: 'Click multiple points to create a polygon shape. Double-click to close. Shift+click to start a circle (center) then click to set radius.',
     shortcut: 'P'
   },
   {
@@ -566,12 +709,22 @@ export const initialGroupSelectionState: GroupSelectionState = {
 
 export interface PolygonDrawState {
   isDrawing: boolean
-  points: [number, number][]  // Points for the polygon (not joints, just coordinates)
+  mode: 'polygon' | 'circle'
+  // Points for the polygon (not joints, just coordinates). Used when mode='polygon'.
+  points: [number, number][]
+  // Circle mode state: center + radius preview (radius is derived from circleRadiusPoint).
+  circleCenter: [number, number] | null
+  circleRadiusPoint: [number, number] | null
+  circleRadius: number | null
 }
 
 export const initialPolygonDrawState: PolygonDrawState = {
   isDrawing: false,
-  points: []
+  mode: 'polygon',
+  points: [],
+  circleCenter: null,
+  circleRadiusPoint: null,
+  circleRadius: null
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -1341,13 +1494,19 @@ const getToolHint = (
       return 'Click first point to start drawing'
     case 'draw_polygon':
       if (polygonDrawState?.isDrawing) {
+        if (polygonDrawState.mode === 'circle') {
+          if (polygonDrawState.circleRadius != null && polygonDrawState.circleRadius > 0) {
+            return `Circle • r=${polygonDrawState.circleRadius.toFixed(2)} units • Click to create`
+          }
+          return 'Circle • Move mouse to set radius • Click to create'
+        }
         const sides = polygonDrawState.points.length
         if (sides >= 3) {
           return `${sides} sides • Click near start to close`
         }
         return `${sides} point(s) • Click to add more sides`
       }
-      return 'Click to start polygon'
+      return 'Click to start polygon (Shift+click for circle)'
     case 'measure':
       if (measureState?.isMeasuring) {
         return 'Click second point to measure'
@@ -1405,6 +1564,13 @@ export const FooterToolbar: React.FC<FooterToolbarProps> = ({
   const historyAnchorRef = React.useRef<HTMLButtonElement>(null)
   const activeTool = TOOLS.find(t => t.id === toolMode)
   const toolHint = getToolHint(toolMode, linkCreationState, polygonDrawState, measureState, groupSelectionState, selectedJoints, selectedLinks, mergePolygonState, pathDrawState)
+  const circleRadiusSuffix =
+    toolMode === 'draw_polygon' &&
+    polygonDrawState?.isDrawing &&
+    polygonDrawState.mode === 'circle' &&
+    polygonDrawState.circleRadius != null
+      ? ` • r=${polygonDrawState.circleRadius.toFixed(2)}`
+      : ''
   const hasIssues = statusHistory.length > 0
   const lastIssueType = hasIssues ? statusHistory[0].type : null
   const issueColor = lastIssueType === 'error'
@@ -1522,6 +1688,7 @@ export const FooterToolbar: React.FC<FooterToolbarProps> = ({
             }}
           >
             {statusMessage.text}
+            {circleRadiusSuffix}
           </Typography>
           {showCancelHint && onCancelAction && (
             <Typography
@@ -1561,6 +1728,7 @@ export const FooterToolbar: React.FC<FooterToolbarProps> = ({
             }}
           >
             {toolHint}
+            {circleRadiusSuffix}
           </Typography>
         </Box>
       ) : null}

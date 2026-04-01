@@ -974,7 +974,74 @@ def build_polygon_entity_conflict_pairs(
     n_steps_actual = min(len(v) for v in trajectories.values() if v) if trajectories else 0
     if not linkage or n_steps_actual <= 0 or len(polygons_for_z) < 2:
         return []
+    link_endpoints = _get_link_endpoint_joints(linkage)
+    joint_to_links: dict[str, list[str]] = {}
+    for lid, (sa, ta) in link_endpoints.items():
+        joint_to_links.setdefault(sa, []).append(lid)
+        joint_to_links.setdefault(ta, []).append(lid)
     pairs: list[tuple[str, str]] = []
+
+    def _joint_xy(joint_name: str, step_idx: int) -> tuple[float, float] | None:
+        series = trajectories.get(joint_name)
+        if not isinstance(series, (list, tuple)) or step_idx >= len(series):
+            return None
+        point = series[step_idx]
+        if not isinstance(point, (list, tuple)) or len(point) < 2:
+            return None
+        return (float(point[0]), float(point[1]))
+
+    def _point_touches_or_inside_polygon(
+        point: tuple[float, float],
+        polygon_points: list[tuple[float, float]],
+    ) -> bool:
+        if len(polygon_points) < 3:
+            return False
+        try:
+            poly = ShapelyPolygon(polygon_points)
+            if not poly.is_valid:
+                poly = poly.buffer(0)
+            if poly.is_empty:
+                return False
+            pt = ShapelyPoint(point[0], point[1])
+            return bool(poly.contains(pt) or poly.touches(pt))
+        except Exception:
+            return False
+
+    def _polygon_geom(polygon_points: list[tuple[float, float]]) -> Any | None:
+        if len(polygon_points) < 3:
+            return None
+        try:
+            poly = ShapelyPolygon(polygon_points)
+            if not poly.is_valid:
+                poly = poly.buffer(0)
+            if poly.is_empty:
+                return None
+            return poly
+        except Exception:
+            return None
+
+    def _is_true_connector_link(link_id: str) -> bool:
+        sa, ta = link_endpoints.get(link_id, (None, None))
+        if sa is None or ta is None:
+            return False
+        left_neighbors = [lid for lid in joint_to_links.get(sa, []) if lid != link_id]
+        right_neighbors = [lid for lid in joint_to_links.get(ta, []) if lid != link_id]
+        # True connector: this link bridges two other links (one on each side).
+        return len(left_neighbors) > 0 and len(right_neighbors) > 0
+
+    connector_forms: dict[str, str] = {}
+    for o in polygons_for_z:
+        pid = o.get('id')
+        contained = o.get('contained_links') or []
+        if (
+            pid
+            and len(contained) == 1
+            and isinstance(contained[0], str)
+            and _is_true_connector_link(contained[0])
+        ):
+            connector_forms['polygon:' + str(pid)] = contained[0]
+
+    polygon_geoms_over_time: dict[str, list[Any]] = {}
     for step in range(n_steps_actual):
         polys_at_step: dict[str, list[tuple[float, float]]] = {}
         for o in polygons_for_z:
@@ -994,10 +1061,60 @@ def build_polygon_entity_conflict_pairs(
                 margin_units=margin_units,
             )
             if len(pts) >= 3:
-                polys_at_step['polygon:' + pid] = pts
+                eid = 'polygon:' + pid
+                polys_at_step[eid] = pts
+                geom = _polygon_geom(pts)
+                if geom is not None:
+                    polygon_geoms_over_time.setdefault(eid, []).append(geom)
         keys = list(polys_at_step.keys())
         for i, eid1 in enumerate(keys):
             for eid2 in keys[i + 1:]:
                 if polygons_intersect(polys_at_step[eid1], polys_at_step[eid2]):
                     pairs.append((eid1, eid2))
+
+        # Hard guard: connector link-form joints cannot overlap any other form body.
+        for connector_eid, connector_link in connector_forms.items():
+            source_joint, target_joint = link_endpoints.get(connector_link, (None, None))
+            for joint_name in (source_joint, target_joint):
+                if not joint_name:
+                    continue
+                joint_point = _joint_xy(joint_name, step)
+                if joint_point is None:
+                    continue
+                for other_eid, poly in polys_at_step.items():
+                    if other_eid == connector_eid:
+                        continue
+                    if _point_touches_or_inside_polygon(joint_point, poly):
+                        pairs.append((connector_eid, other_eid))
+
+    # Hard guard (swept): connector joint trajectory cannot pass through another form's swept area.
+    for connector_eid, connector_link in connector_forms.items():
+        source_joint, target_joint = link_endpoints.get(connector_link, (None, None))
+        for joint_name in (source_joint, target_joint):
+            if not joint_name:
+                continue
+            trajectory_points: list[tuple[float, float]] = []
+            for step in range(n_steps_actual):
+                p = _joint_xy(joint_name, step)
+                if p is not None:
+                    trajectory_points.append(p)
+            if not trajectory_points:
+                continue
+            joint_geom: Any
+            if len(trajectory_points) == 1:
+                joint_geom = ShapelyPoint(*trajectory_points[0])
+            else:
+                try:
+                    joint_geom = ShapelyLineString(trajectory_points)
+                except Exception:
+                    # Degenerate trajectory (all points identical) can fail as a line.
+                    joint_geom = ShapelyPoint(*trajectory_points[0])
+            for other_eid, geoms in polygon_geoms_over_time.items():
+                if other_eid == connector_eid or not geoms:
+                    continue
+                try:
+                    if any(g.intersects(joint_geom) for g in geoms):
+                        pairs.append((connector_eid, other_eid))
+                except Exception:
+                    continue
     return list({cast(tuple[str, str], tuple(sorted((a, b)))) for a, b in pairs})

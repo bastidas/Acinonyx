@@ -18,9 +18,12 @@ are preferences only, expressed as weighted cost terms:
 - **Soft pin:** Target z with weight; violation adds cost, does not invalidate.
 - **Min z:** Minimum allowed z-level (default 0); all z >= min_z.
 - **Role-based:** Prefer crank-incident (root) entity at a given z (default 1).
+- **Sandwich bodies:** Prefer minimum |Δz| between two bodies sharing a connector; when a body
+  has several connectors, nudge toward co-endpoints already assigned on other connectors.
 """
 from __future__ import annotations
 
+import heapq
 import json
 from dataclasses import dataclass
 from dataclasses import field
@@ -68,8 +71,20 @@ class ZLevelHeuristicConfig:
     weight_crank: float = 1.0
     """Weight for preferring root entity at crank_z (when crank_z is not None)."""
 
+    weight_prefer_sandwich: float = 5.0
+    """Weight for preferring connector entities between connected neighbors."""
+
 
 DEFAULT_Z_LEVEL_CONFIG = ZLevelHeuristicConfig()
+
+# Penalty scale for sandwich body pairs with |Δz| > 2 (room for connector is already satisfied).
+# Full weight_prefer_sandwich would overpower reduce_deltas and push bodies to extreme z (e.g. z=5 vs z=0).
+_SANDWICH_EXCESS_BODY_SPAN_FRAC = 0.35
+
+# When a sandwich partner is not yet assigned, nudge z toward that partner's *other* assigned
+# sandwich endpoint (same partner on a different connector) so multi-connector bodies can pick
+# one z that satisfies both sandwiches (e.g. legzeta: rigid_group_3 vs rigid_group_0 at rigid_group_2).
+_SANDWICH_UNASSIGNED_PARTNER_ALIGN_FRAC = 0.12
 
 
 class _ZLevelConfigDict(TypedDict):
@@ -80,6 +95,7 @@ class _ZLevelConfigDict(TypedDict):
     min_z: int
     crank_z: int | None
     weight_crank: float
+    weight_prefer_sandwich: float
 
 
 def config_from_request(data: dict | None) -> ZLevelHeuristicConfig | None:
@@ -99,6 +115,7 @@ def config_from_request(data: dict | None) -> ZLevelHeuristicConfig | None:
         'min_z': DEFAULT_Z_LEVEL_CONFIG.min_z,
         'crank_z': DEFAULT_Z_LEVEL_CONFIG.crank_z,
         'weight_crank': DEFAULT_Z_LEVEL_CONFIG.weight_crank,
+        'weight_prefer_sandwich': DEFAULT_Z_LEVEL_CONFIG.weight_prefer_sandwich,
     }
     if 'weight_reduce_deltas' in data and data['weight_reduce_deltas'] is not None:
         out['weight_reduce_deltas'] = float(data['weight_reduce_deltas'])
@@ -111,6 +128,8 @@ def config_from_request(data: dict | None) -> ZLevelHeuristicConfig | None:
         out['crank_z'] = None if v is None or v == 'null' else int(v)
     if 'weight_crank' in data and data['weight_crank'] is not None:
         out['weight_crank'] = float(data['weight_crank'])
+    if 'weight_prefer_sandwich' in data and data['weight_prefer_sandwich'] is not None:
+        out['weight_prefer_sandwich'] = float(data['weight_prefer_sandwich'])
     if 'hard_pins' in data and isinstance(data['hard_pins'], dict):
         out['hard_pins'] = {str(k): int(v) for k, v in data['hard_pins'].items()}
     if 'soft_pins' in data and isinstance(data['soft_pins'], dict):
@@ -129,6 +148,7 @@ def config_from_request(data: dict | None) -> ZLevelHeuristicConfig | None:
         min_z=out['min_z'],
         crank_z=out['crank_z'],
         weight_crank=out['weight_crank'],
+        weight_prefer_sandwich=out['weight_prefer_sandwich'],
     )
 
 
@@ -412,6 +432,69 @@ def _entity_bfs_order(
     return order
 
 
+def _entity_order_respecting_sandwich_prereqs(
+    entity_ids: list[str],
+    base_order: list[str],
+    sandwich_pairs: dict[str, list[tuple[str, str]]],
+    *,
+    entity_structural: dict[str, set[str]] | None = None,
+) -> list[str]:
+    """
+    Topological order so connector entities are assigned after both neighbors
+    in each sandwich pair; ties follow base_order (BFS). Falls back to base_order on cycle.
+
+    When entity_structural is set, sandwich *body* pairs (the two flanking entities) are
+    ordered so the structurally simpler body (fewer neighbors) is assigned first; the
+    second body can then use sandwich span cost against the first. Ties use base_order.
+    """
+    entity_set = set(entity_ids)
+    pos = {e: i for i, e in enumerate(base_order)}
+    prereqs: dict[str, set[str]] = {e: set() for e in entity_ids}
+    for eid, pairs in sandwich_pairs.items():
+        if eid not in entity_set or not pairs:
+            continue
+        for n1, n2 in pairs:
+            if n1 in entity_set and n2 in entity_set and n1 != eid and n2 != eid:
+                prereqs[eid].add(n1)
+                prereqs[eid].add(n2)
+    if entity_structural is not None:
+        for eid, pairs in sandwich_pairs.items():
+            if eid not in entity_set or not pairs:
+                continue
+            for n1, n2 in pairs:
+                if n1 not in entity_set or n2 not in entity_set or n1 == n2:
+                    continue
+                d1 = len(entity_structural.get(n1, ()))
+                d2 = len(entity_structural.get(n2, ()))
+                if d1 < d2:
+                    prereqs[n2].add(n1)
+                elif d2 < d1:
+                    prereqs[n1].add(n2)
+                elif pos[n1] < pos[n2]:
+                    prereqs[n2].add(n1)
+                else:
+                    prereqs[n1].add(n2)
+    graph: dict[str, list[str]] = {e: [] for e in entity_ids}
+    in_degree = {e: len(prereqs[e]) for e in entity_ids}
+    for eid, ps in prereqs.items():
+        for p in ps:
+            graph[p].append(eid)
+    ind = dict(in_degree)
+    heap: list[tuple[int, str]] = [(pos[e], e) for e in entity_ids if ind[e] == 0]
+    heapq.heapify(heap)
+    out: list[str] = []
+    while heap:
+        _, e = heapq.heappop(heap)
+        out.append(e)
+        for succ in graph[e]:
+            ind[succ] -= 1
+            if ind[succ] == 0:
+                heapq.heappush(heap, (pos[succ], succ))
+    if len(out) != len(entity_ids):
+        return base_order
+    return out
+
+
 def _validate_fixed_entity_z_levels(
     fixed_entity_z_levels: dict[str, int],
     entity_conflict: dict[str, set[str]],
@@ -462,7 +545,44 @@ def _compute_z_levels_with_polygons(
     root_link = root_link or link_ids[0]
     root_entity = link_to_entity[root_link]
 
-    entity_order = _entity_bfs_order(entity_ids, entity_structural, root_entity)
+    entity_order_bfs = _entity_bfs_order(entity_ids, entity_structural, root_entity)
+    link_to_endpoints = {e[0]: (e[1], e[2]) for e in edges_list}
+    joint_to_links: dict[str, list[str]] = {}
+    for lid, sa, ta in edges_list:
+        joint_to_links.setdefault(sa, []).append(lid)
+        joint_to_links.setdefault(ta, []).append(lid)
+    sandwich_pairs: dict[str, list[tuple[str, str]]] = {eid: [] for eid in entity_ids}
+    for eid, lids in entity_to_links.items():
+        # Hard connector constraints apply only to single-link polygon forms.
+        if len(lids) != 1 or not eid.startswith('polygon:'):
+            continue
+        lid = lids[0]
+        sa, ta = link_to_endpoints.get(lid, (None, None))
+        if sa is None or ta is None:
+            continue
+        left_entities = {
+            link_to_entity[nl]
+            for nl in joint_to_links.get(sa, [])
+            if nl != lid and nl in link_to_entity and link_to_entity[nl] != eid
+        }
+        right_entities = {
+            link_to_entity[nl]
+            for nl in joint_to_links.get(ta, [])
+            if nl != lid and nl in link_to_entity and link_to_entity[nl] != eid
+        }
+        if not left_entities or not right_entities:
+            continue
+        for left in left_entities:
+            for right in right_entities:
+                if left != right:
+                    sandwich_pairs[eid].append((left, right))
+
+    entity_order = _entity_order_respecting_sandwich_prereqs(
+        entity_ids,
+        entity_order_bfs,
+        sandwich_pairs,
+        entity_structural=entity_structural,
+    )
 
     if fixed_entity_z_levels:
         _validate_fixed_entity_z_levels(fixed_entity_z_levels, entity_conflict)
@@ -474,6 +594,9 @@ def _compute_z_levels_with_polygons(
         max_assignments=max_assignments,
         fixed_assignments=fixed_entity_z_levels,
         z_level_config=z_level_config,
+        sandwich_pairs=sandwich_pairs,
+        hard_connector_between_pairs=sandwich_pairs,
+        crank_preferred_entity=root_entity,
     )
     if not entity_assignments:
         raise ValueError(
@@ -551,6 +674,35 @@ def _candidate_z_levels(
     return candidates
 
 
+def _partner_z_allowed_for_conflicts(
+    partner_z: int,
+    partner_eid: str,
+    conflict_graph: dict[str, set[str]],
+    assignment: dict[str, int],
+    min_z: int,
+) -> bool:
+    if partner_z < min_z:
+        return False
+    for c in conflict_graph.get(partner_eid, set()):
+        if c in assignment and assignment[c] == partner_z:
+            return False
+    return True
+
+
+def _has_feasible_tight_sandwich_z_for_partner(
+    z_self: int,
+    partner_eid: str,
+    conflict_graph: dict[str, set[str]],
+    assignment: dict[str, int],
+    min_z: int,
+) -> bool:
+    """True if partner could later be placed at z_self±2 without conflicting assigned entities."""
+    for zb in (z_self - 2, z_self + 2):
+        if _partner_z_allowed_for_conflicts(zb, partner_eid, conflict_graph, assignment, min_z):
+            return True
+    return False
+
+
 def _assign_z_levels_generic(
     order: list[str],
     conflict_graph: dict[str, set[str]],
@@ -558,6 +710,9 @@ def _assign_z_levels_generic(
     max_assignments: int,
     fixed_assignments: dict[str, int] | None = None,
     z_level_config: ZLevelHeuristicConfig | None = None,
+    sandwich_pairs: dict[str, list[tuple[str, str]]] | None = None,
+    hard_connector_between_pairs: dict[str, list[tuple[str, str]]] | None = None,
+    crank_preferred_entity: str | None = None,
 ) -> list[dict[str, int]]:
     """
     Return up to max_assignments valid z-level assignments for the given order.
@@ -577,6 +732,28 @@ def _assign_z_levels_generic(
     initial_used = set(fixed.values())
     # When min_z is set (including 0), use ascending palette so all z >= min_z
     min_z_for_palette: int | None = cfg.min_z
+    connector_pairs = sandwich_pairs or {}
+    hard_connector_pairs = hard_connector_between_pairs or {}
+    # Endpoints that sandwich the same connector (not the connector id itself).
+    sandwich_body_neighbors: dict[str, set[str]] = {}
+    for pairs in connector_pairs.values():
+        for a, b in pairs:
+            sandwich_body_neighbors.setdefault(a, set()).add(b)
+            sandwich_body_neighbors.setdefault(b, set()).add(a)
+
+    def _violates_hard_connector_between(
+        z: int,
+        eid: str,
+        assignment: dict[str, int],
+    ) -> bool:
+        for n1, n2 in hard_connector_pairs.get(eid, []):
+            if n1 not in assignment or n2 not in assignment:
+                continue
+            lo = min(assignment[n1], assignment[n2])
+            hi = max(assignment[n1], assignment[n2])
+            if z < lo or z > hi:
+                return True
+        return False
 
     def total_cost(z: int, eid: str, assignment: dict[str, int]) -> float:
         cost = 0.0
@@ -591,9 +768,71 @@ def _assign_z_levels_generic(
         if eid in cfg.soft_pins:
             target_z, w = cfg.soft_pins[eid]
             cost += w * abs(z - target_z)
-        # Crank: prefer root entity at crank_z
-        if order and eid == order[0] and cfg.crank_z is not None and cfg.weight_crank != 0:
+        # Crank: prefer the designated crank-preferred entity at crank_z.
+        crank_entity = crank_preferred_entity if crank_preferred_entity is not None else (order[0] if order else None)
+        if crank_entity is not None and eid == crank_entity and cfg.crank_z is not None and cfg.weight_crank != 0:
             cost += cfg.weight_crank * abs(z - cfg.crank_z)
+        # Sandwich: prefer connector entity z within connected-neighbor interval
+        if cfg.weight_prefer_sandwich != 0:
+            for n1, n2 in connector_pairs.get(eid, []):
+                if n1 not in assignment or n2 not in assignment:
+                    continue
+                z1 = assignment[n1]
+                z2 = assignment[n2]
+                lo = min(z1, z2)
+                hi = max(z1, z2)
+                if z < lo:
+                    cost += cfg.weight_prefer_sandwich * (lo - z)
+                elif z > hi:
+                    cost += cfg.weight_prefer_sandwich * (z - hi)
+                else:
+                    cost += cfg.weight_prefer_sandwich * 0.1 * min(z - lo, hi - z)
+        # Sandwich bodies: two entities flanking the same connector need |Δz| >= 2 so the
+        # connector can sit strictly between; prefer the minimum (2), penalize excess span.
+        if cfg.weight_prefer_sandwich != 0:
+            for other in sandwich_body_neighbors.get(eid, set()):
+                if other in assignment:
+                    zo = assignment[other]
+                    span = abs(z - zo)
+                    if span < 2:
+                        cost += cfg.weight_prefer_sandwich * float(2 - span)
+                    elif span > 2:
+                        cost += (
+                            cfg.weight_prefer_sandwich
+                            * _SANDWICH_EXCESS_BODY_SPAN_FRAC
+                            * float(span - 2)
+                        )
+                elif not _has_feasible_tight_sandwich_z_for_partner(
+                    z,
+                    other,
+                    conflict_graph,
+                    assignment,
+                    cfg.min_z,
+                ):
+                    # Partner not yet assigned: avoid z where both z±2 are blocked for them.
+                    cost += cfg.weight_prefer_sandwich * 2.0
+                else:
+                    # Partner still unassigned: prefer z near other sandwich co-endpoints of that partner.
+                    seen_co: set[tuple[str, str]] = set()
+                    for pairs in connector_pairs.values():
+                        for a, b in pairs:
+                            if a == other and b != eid:
+                                anchor = b
+                            elif b == other and a != eid:
+                                anchor = a
+                            else:
+                                continue
+                            if anchor not in assignment:
+                                continue
+                            key = (other, anchor)
+                            if key in seen_co:
+                                continue
+                            seen_co.add(key)
+                            cost += (
+                                _SANDWICH_UNASSIGNED_PARTNER_ALIGN_FRAC
+                                * cfg.weight_prefer_sandwich
+                                * abs(z - assignment[anchor])
+                            )
         # Height: prefer smaller span (max - min over assignment including z)
         if cfg.weight_reduce_height != 0 and assignment:
             vals = set(assignment.values()) | {z}
@@ -625,6 +864,8 @@ def _assign_z_levels_generic(
         )
         choices.sort(key=lambda z: total_cost(z, eid, assignment))
         for z in choices:
+            if _violates_hard_connector_between(z, eid, assignment):
+                continue
             assignment[eid] = z
             used_vals.add(z)
             backtrack(idx + 1, assignment, used_vals)
@@ -651,6 +892,7 @@ def _assign_z_levels_generic(
                 max_candidates=10,
             )
             candidates.sort(key=lambda z: total_cost(z, eid, assignment))
+            candidates = [z for z in candidates if not _violates_hard_connector_between(z, eid, assignment)]
             if not candidates:
                 return []
             assignment[eid] = candidates[0]
@@ -666,6 +908,9 @@ def _assign_entity_z_levels(
     max_assignments: int,
     fixed_assignments: dict[str, int] | None = None,
     z_level_config: ZLevelHeuristicConfig | None = None,
+    sandwich_pairs: dict[str, list[tuple[str, str]]] | None = None,
+    hard_connector_between_pairs: dict[str, list[tuple[str, str]]] | None = None,
+    crank_preferred_entity: str | None = None,
 ) -> list[dict[str, int]]:
     """Assign z-levels to entities (polygon or link IDs). Uses generic assign with optional fixed pins."""
     return _assign_z_levels_generic(
@@ -675,6 +920,9 @@ def _assign_entity_z_levels(
         max_assignments=max_assignments,
         fixed_assignments=fixed_assignments,
         z_level_config=z_level_config,
+        sandwich_pairs=sandwich_pairs,
+        hard_connector_between_pairs=hard_connector_between_pairs,
+        crank_preferred_entity=crank_preferred_entity,
     )
 
 
@@ -807,6 +1055,23 @@ def _assign_z_levels(
         structural_neighbors[lid] = (
             set(joint_to_links.get(sa, [])) | set(joint_to_links.get(ta, []))
         ) - {lid}
+    sandwich_pairs: dict[str, list[tuple[str, str]]] = {lid: [] for lid in link_ids}
+    for lid, sa, ta in edges_list:
+        left_links = {n for n in joint_to_links.get(sa, []) if n != lid}
+        right_links = {n for n in joint_to_links.get(ta, []) if n != lid}
+        if not left_links or not right_links:
+            continue
+        for left in left_links:
+            for right in right_links:
+                if left != right:
+                    sandwich_pairs[lid].append((left, right))
+
+    order = _entity_order_respecting_sandwich_prereqs(
+        link_ids,
+        order,
+        sandwich_pairs,
+        entity_structural=structural_neighbors,
+    )
 
     return _assign_z_levels_generic(
         order=order,
@@ -815,4 +1080,6 @@ def _assign_z_levels(
         max_assignments=max_assignments,
         fixed_assignments=fixed_assignments,
         z_level_config=z_level_config,
+        sandwich_pairs=sandwich_pairs,
+        crank_preferred_entity=root_link,
     )

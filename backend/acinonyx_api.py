@@ -892,12 +892,44 @@ def compute_link_z_levels_endpoint(request: dict):
         else:
             fixed_entity_z_levels = None
 
-        z_level_config = config_from_request(request.get('z_level_config'))
+        raw_z_cfg = request.get('z_level_config')
+        z_level_config = config_from_request(raw_z_cfg)
+        try:
+            logger.info('compute-link-z-levels: raw z_level_config from client=%s', raw_z_cfg)
+            if z_level_config is not None:
+                logger.info(
+                    'compute-link-z-levels: parsed z_level_config=%s',
+                    asdict(z_level_config),
+                )
+            else:
+                logger.info('compute-link-z-levels: no usable z_level_config in request; solver uses defaults')
+        except Exception as log_exc:
+            logger.debug('compute-link-z-levels: could not log z_level_config: %s', log_exc)
 
         extra_entity_conflict_pairs = []
         linkage_for_z = request.get('linkage')
         if not linkage_for_z and isinstance(request.get('pylink_data'), dict):
             linkage_for_z = request.get('pylink_data', {}).get('linkage')
+
+        # Polygon-aware conflicts (overlap + connector joint vs body) need trajectories.
+        if polygons_for_z and len(polygons_for_z) >= 2 and isinstance(linkage_for_z, dict) and not trajectories:
+            try:
+                from pylink_tools.hypergraph_adapter import sync_hypergraph_distances
+                from pylink_tools.mechanism import create_mechanism_from_dict
+
+                doc = dict(request)
+                doc['n_steps'] = n_steps
+                if 'linkage' in doc and 'nodes' in doc.get('linkage', {}):
+                    doc = sync_hypergraph_distances(doc, verbose=False)
+                mech = create_mechanism_from_dict(doc, n_steps=n_steps)
+                traj_d = mech.simulate_dict()
+                trajectories = {
+                    str(k): [[float(p[0]), float(p[1])] for p in seq]
+                    for k, seq in traj_d.items()
+                }
+            except Exception as e:
+                logger.warning('compute-link-z-levels: simulate for polygon conflicts failed: %s', e)
+
         if polygons_for_z and trajectories and len(polygons_for_z) >= 2 and isinstance(linkage_for_z, dict):
             try:
                 margin_units = request.get('margin_units')
@@ -962,8 +994,9 @@ def create_polygons_from_rigid_groups_endpoint(request: dict):
     re-simulating so polygons match the frontend's displayed trajectory exactly.
     Optional: mode = "rigid_groups" (default) or "per_link"; margin_fraction, margin_units.
 
-    mode "rigid_groups": Detect rigid groups, one polygon per group.
-    mode "per_link": One polygon per link (bounding polygon around that link only).
+    mode "rigid_groups": Detect rigid groups, one polygon per group (groups with only one
+    link are skipped; those links get link forms in per_link mode for correct z sandwiching).
+    mode "per_link": One polygon per link not already part of a multi-link rigid group.
 
     Returns: {
         "status": "success",
@@ -1048,6 +1081,35 @@ def create_polygons_from_rigid_groups_endpoint(request: dict):
         z_level_config = config_from_request(request.get('z_level_config'))
         skip_existing_forms = request.get('skip_existing_forms', True)
         existing_drawn = request.get('existing_drawn_objects') or []
+        traj_typed = cast(dict[str, list[list[float] | tuple[float, float]]], trajectories)
+
+        def _drawn_objects_for_z(existing: list[Any], new_polygons: list[dict]) -> list[dict]:
+            """Union of canvas/synthetic polygons and new suggestions for one z-level solve."""
+            seen: set[str] = set()
+            out: list[dict] = []
+            for o in existing:
+                if not isinstance(o, dict) or o.get('type') != 'polygon':
+                    continue
+                pid = o.get('id')
+                cl = o.get('contained_links') or []
+                if not pid or not cl:
+                    continue
+                if pid in seen:
+                    continue
+                seen.add(str(pid))
+                row: dict = {'id': str(pid), 'type': 'polygon', 'contained_links': list(cl)}
+                pts = o.get('points')
+                if isinstance(pts, list) and len(pts) >= 3:
+                    row['points'] = pts
+                out.append(row)
+            for o in new_polygons:
+                pid = o.get('id')
+                if not pid or str(pid) in seen:
+                    continue
+                seen.add(str(pid))
+                out.append(dict(o))
+            return out
+
         covered_link_ids: set[str] = set()
         if skip_existing_forms and existing_drawn:
             for o in existing_drawn:
@@ -1055,9 +1117,20 @@ def create_polygons_from_rigid_groups_endpoint(request: dict):
                     for lid in o.get('contained_links') or []:
                         covered_link_ids.add(str(lid))
 
+        rigid_groups_all = polygon_utils.detect_rigid_groups(
+            linkage, cast(dict[str, list[list[float] | tuple[float, float]]], trajectories),
+        )
+        links_in_multi_rigid: set[str] = set()
+        for g in rigid_groups_all:
+            if len(g) >= 2:
+                links_in_multi_rigid.update(str(lid) for lid in g)
+
         if mode == 'per_link':
             edges = linkage.get('edges') or {}
-            link_ids = list(edges.keys())
+            link_ids = [
+                lid for lid in edges.keys()
+                if lid not in links_in_multi_rigid
+            ]
             if skip_existing_forms and covered_link_ids:
                 link_ids = [lid for lid in link_ids if lid not in covered_link_ids]
             if not link_ids:
@@ -1075,13 +1148,27 @@ def create_polygons_from_rigid_groups_endpoint(request: dict):
                 {'id': _link_form_id(lid), 'type': 'polygon', 'contained_links': [lid]}
                 for lid in link_ids
             ]
+            drawn_for_z = _drawn_objects_for_z(existing_drawn, suggested_drawn)
+            extra_pairs: list[tuple[str, str]] = []
+            if len(drawn_for_z) >= 2:
+                try:
+                    extra_pairs = polygon_utils.build_polygon_entity_conflict_pairs(
+                        drawn_for_z,
+                        linkage,
+                        traj_typed,
+                        margin_fraction=margin_fraction,
+                        margin_units=margin_units,
+                    )
+                except Exception as e:
+                    logger.warning('create-polygons-from-rigid-groups: polygon conflict pairs: %s', e)
             result = compute_link_z_levels(
                 pylink_data=request,
                 n_steps=n_steps_int,
                 use_trajectory_conflicts=True,
                 max_assignments=1,
-                drawn_objects=suggested_drawn,
+                drawn_objects=drawn_for_z,
                 trajectories=trajectories,
+                extra_entity_conflict_pairs=extra_pairs if extra_pairs else None,
                 z_level_config=z_level_config,
             )
             if not isinstance(result, tuple) or len(result) != 2:
@@ -1118,9 +1205,8 @@ def create_polygons_from_rigid_groups_endpoint(request: dict):
             })
 
         # mode == 'rigid_groups'
-        rigid_groups = polygon_utils.detect_rigid_groups(
-            linkage, cast(dict[str, list[list[float] | tuple[float, float]]], trajectories),
-        )
+        # Only true rigid bodies (2+ links); singleton "groups" are connector links → per_link forms.
+        rigid_groups = [g for g in rigid_groups_all if len(g) >= 2]
         if not rigid_groups:
             return sanitize_for_json({
                 'status': 'success',
@@ -1142,13 +1228,27 @@ def create_polygons_from_rigid_groups_endpoint(request: dict):
             {'id': f'rigid_group_{i}', 'type': 'polygon', 'contained_links': list(g)}
             for i, g in enumerate(rigid_groups)
         ]
+        drawn_for_z_rigid = _drawn_objects_for_z(existing_drawn, suggested_drawn)
+        extra_pairs_rigid: list[tuple[str, str]] = []
+        if len(drawn_for_z_rigid) >= 2:
+            try:
+                extra_pairs_rigid = polygon_utils.build_polygon_entity_conflict_pairs(
+                    drawn_for_z_rigid,
+                    linkage,
+                    traj_typed,
+                    margin_fraction=margin_fraction,
+                    margin_units=margin_units,
+                )
+            except Exception as e:
+                logger.warning('create-polygons-from-rigid-groups: polygon conflict pairs: %s', e)
         result = compute_link_z_levels(
             pylink_data=request,
             n_steps=n_steps_int,
             use_trajectory_conflicts=True,
             max_assignments=1,
-            drawn_objects=suggested_drawn,
+            drawn_objects=drawn_for_z_rigid,
             trajectories=trajectories,
+            extra_entity_conflict_pairs=extra_pairs_rigid if extra_pairs_rigid else None,
             z_level_config=z_level_config,
         )
         if not isinstance(result, tuple) or len(result) != 2:

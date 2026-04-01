@@ -14,6 +14,8 @@ import {
   Collapse,
   TextField
 } from '@mui/material'
+import PushPinIcon from '@mui/icons-material/PushPin'
+import SettingsApplicationsIcon from '@mui/icons-material/SettingsApplications'
 import type { DrawnObject } from '../rendering/types'
 
 export interface ZLevelRow {
@@ -25,6 +27,7 @@ export interface ZLevelRow {
 export interface ZLevelHeuristicConfig {
   weight_reduce_deltas?: number
   weight_reduce_height?: number
+  weight_prefer_sandwich?: number
   min_z?: number
   crank_z?: number | null
   weight_crank?: number
@@ -35,6 +38,7 @@ export interface ZLevelHeuristicConfig {
 export const DEFAULT_Z_LEVEL_CONFIG: ZLevelHeuristicConfig = {
   weight_reduce_deltas: 1,
   weight_reduce_height: 0.3,
+  weight_prefer_sandwich: 5,
   min_z: 0,
   crank_z: 1,
   weight_crank: 1
@@ -55,7 +59,7 @@ export interface FormsToolbarProps {
   /** Polygon drawn objects (forms) */
   objects: DrawnObject[]
   selectedIds: string[]
-  onSelectForms: (ids: string[]) => void
+  onSelectForms: (ids: string[], event?: React.MouseEvent) => void
   openFormEdit: (formId: string) => void
   showStatus?: (message: string, severity: 'success' | 'error' | 'warning' | 'info' | 'action', duration?: number) => void
   /** When true, use light text for dark backgrounds */
@@ -106,9 +110,23 @@ export const FormsToolbar: React.FC<FormsToolbarProps> = ({
   const [zConfigOpen, setZConfigOpen] = useState(false)
   const config = { ...DEFAULT_Z_LEVEL_CONFIG, ...(zLevelConfig ?? {}) }
 
-  const polygons = Array.isArray(objects)
-    ? objects.filter((o): o is DrawnObject => o && typeof o === 'object' && o.type === 'polygon' && Array.isArray(o.points) && o.points.length >= 3)
-    : []
+  // Defensive normalization: some legacy callers may pass DrawnObjectsState-like payloads.
+  const objectList: unknown[] = Array.isArray(objects)
+    ? objects
+    : (
+        (objects as unknown as { objects?: unknown[] } | null)?.objects &&
+        Array.isArray((objects as unknown as { objects?: unknown[] }).objects)
+          ? ((objects as unknown as { objects?: unknown[] }).objects as unknown[])
+          : []
+      )
+
+  const polygons = objectList
+    .filter(
+        (o): o is DrawnObject =>
+          o != null &&
+          typeof o === 'object' &&
+          (o as { type?: string }).type === 'polygon'
+      )
   const sortedPolygons = [...polygons].sort((a, b) => {
     const za = typeof a.z_level === 'number' && Number.isFinite(a.z_level) ? a.z_level : 0
     const zb = typeof b.z_level === 'number' && Number.isFinite(b.z_level) ? b.z_level : 0
@@ -139,7 +157,7 @@ export const FormsToolbar: React.FC<FormsToolbarProps> = ({
   }
 
   return (
-    <Box sx={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden', p: 2, ...(textPrimary ? { color: textPrimary } : {}) }}>
+    <Box sx={{ display: 'flex', flexDirection: 'column', p: 2, ...(textPrimary ? { color: textPrimary } : {}) }}>
       <Typography variant="caption" sx={{ fontWeight: 600, color: textSecondary ?? 'text.secondary' }}>
         Padding (units) {formPaddingUnits}
       </Typography>
@@ -251,17 +269,29 @@ export const FormsToolbar: React.FC<FormsToolbarProps> = ({
       {onZLevelConfigChange && (
         <>
           <Button
+            variant="outlined"
             size="small"
             fullWidth
+            startIcon={<SettingsApplicationsIcon fontSize="small" />}
             onClick={() => setZConfigOpen((o) => !o)}
-            sx={{ textTransform: 'none', fontSize: '0.7rem', mb: 0.5, color: textSecondary ?? 'text.secondary' }}
+            sx={{
+              textTransform: 'none',
+              fontSize: '0.75rem',
+              mb: 0.75,
+              color: textPrimary ?? 'text.primary',
+              borderColor: darkMode ? 'rgba(232,228,220,0.35)' : undefined,
+              '&:hover': {
+                borderColor: darkMode ? 'rgba(232,228,220,0.6)' : undefined,
+                backgroundColor: darkMode ? 'rgba(255,255,255,0.05)' : undefined
+              }
+            }}
           >
-            {zConfigOpen ? 'Hide' : 'Z-level config'}…
+            {zConfigOpen ? 'Hide Z-level config' : 'Z-level config'}
           </Button>
           <Collapse in={zConfigOpen}>
             <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.5, mb: 1, pl: 0.5 }}>
               <Tooltip
-                title="Weight for preferring adjacent-level connections (N↔N±1)"
+                title="Adjacent-level weight: penalizes larger z gaps to structural neighbors. Higher values more strongly prefer N↔N±1."
                 placement="left"
                 leaveDelay={0}
                 disableInteractive
@@ -278,7 +308,7 @@ export const FormsToolbar: React.FC<FormsToolbarProps> = ({
                 />
               </Tooltip>
               <Tooltip
-                title="Weight for preferring smaller total z span (max−min)"
+                title="Height weight: penalizes larger overall stack height (max z − min z). Higher values compress the z-range."
                 placement="left"
                 leaveDelay={0}
                 disableInteractive
@@ -295,7 +325,24 @@ export const FormsToolbar: React.FC<FormsToolbarProps> = ({
                 />
               </Tooltip>
               <Tooltip
-                title="Minimum allowed z-level; all assignments must have z ≥ this."
+                title="Sandwich weight: connector z outside its two-neighbor interval is heavily penalized; inside the interval gets only a small penalty."
+                placement="left"
+                leaveDelay={0}
+                disableInteractive
+                enterDelay={300}
+              >
+                <TextField
+                  size="small"
+                  label="Sandwich weight"
+                  type="number"
+                  value={config.weight_prefer_sandwich ?? 5}
+                  onChange={(e) => onZLevelConfigChange({ ...(zLevelConfig ?? {}), weight_prefer_sandwich: Number(e.target.value) || 0 })}
+                  inputProps={{ min: 0, step: 0.1 }}
+                  sx={{ '& .MuiInputBase-input': { fontSize: '0.75rem' } }}
+                />
+              </Tooltip>
+              <Tooltip
+                title="Min z: hard lower bound. Any assignment below this is invalid."
                 placement="left"
                 leaveDelay={0}
                 disableInteractive
@@ -312,7 +359,7 @@ export const FormsToolbar: React.FC<FormsToolbarProps> = ({
                 />
               </Tooltip>
               <Tooltip
-                title="Preferred z for crank-incident (root) entity; empty = no role-based preference."
+                title="Crank z: preferred z for the crank-incident root entity. Leave empty to disable crank preference."
                 placement="left"
                 leaveDelay={0}
                 disableInteractive
@@ -333,7 +380,7 @@ export const FormsToolbar: React.FC<FormsToolbarProps> = ({
                 />
               </Tooltip>
               <Tooltip
-                title="Weight for preferring root entity at crank_z (when crank_z is set)."
+                title="Crank weight: penalty for root distance from crank z. Higher values pull the root closer to crank z."
                 placement="left"
                 leaveDelay={0}
                 disableInteractive
@@ -389,7 +436,7 @@ export const FormsToolbar: React.FC<FormsToolbarProps> = ({
       <Typography variant="caption" sx={{ fontWeight: 600, color: textSecondary ?? 'text.secondary' }}>
         Forms ({polygons.length})
       </Typography>
-      <Box sx={{ overflow: 'auto', flex: 1, minHeight: 0 }}>
+      <Box>
         {sortedPolygons.length === 0 ? (
           <Box sx={{ p: 2, textAlign: 'center' }}>
             <Typography variant="caption" sx={{ color: textSecondary ?? 'text.secondary' }}>No forms yet</Typography>
@@ -400,6 +447,10 @@ export const FormsToolbar: React.FC<FormsToolbarProps> = ({
             const isSelected = selectedIds.includes(obj.id)
             const isDragging = draggedFormId === obj.id
             const isDropTarget = dropTargetIndex === index
+            const zValue = typeof obj.z_level === 'number' && Number.isFinite(obj.z_level) ? obj.z_level : null
+            const zColor = zValue != null
+              ? (safeZLevelRows.find((r) => r.z === zValue)?.color ?? obj.fillColor ?? '#888888')
+              : (obj.fillColor ?? '#888888')
             const handleClick = (e: React.MouseEvent) => {
               if (formClickTimeoutRef.current) {
                 clearTimeout(formClickTimeoutRef.current)
@@ -409,7 +460,7 @@ export const FormsToolbar: React.FC<FormsToolbarProps> = ({
                 openFormEdit(obj.id)
               } else {
                 formClickTimeoutRef.current = setTimeout(() => {
-                  onSelectForms([obj.id])
+                  onSelectForms([obj.id], e)
                   formClickTimeoutRef.current = null
                 }, 200)
               }
@@ -462,16 +513,23 @@ export const FormsToolbar: React.FC<FormsToolbarProps> = ({
                   backgroundColor: isDropTarget
                     ? (darkMode ? 'rgba(255,255,255,0.12)' : 'action.selected')
                     : isSelected
-                      ? 'primary.main'
+                      ? (darkMode ? 'rgba(25, 118, 210, 0.42)' : 'rgba(25, 118, 210, 0.22)')
                       : 'transparent',
                   color: isSelected ? 'primary.contrastText' : (textPrimary ?? 'text.primary'),
-                  borderLeft: `3px solid ${obj.fillColor}`,
+                  border: isSelected ? '1px solid #1976d2' : '1px solid transparent',
+                  borderLeft: `4px solid ${zColor}`,
+                  borderRadius: 1,
+                  boxShadow: isSelected
+                    ? (darkMode ? '0 0 0 2px rgba(25,118,210,0.45), 0 0 12px rgba(25,118,210,0.35)' : '0 0 0 2px rgba(25,118,210,0.30), 0 0 10px rgba(25,118,210,0.25)')
+                    : 'none',
                   opacity: isDragging ? 0.6 : 1,
                   '&:hover': {
-                    backgroundColor: isSelected ? 'primary.dark' : 'action.hover'
+                    backgroundColor: isSelected
+                      ? (darkMode ? 'rgba(25, 118, 210, 0.55)' : 'rgba(25, 118, 210, 0.30)')
+                      : 'action.hover'
                   },
                   '&:active': onReorderForms ? { cursor: 'grabbing' } : undefined,
-                  transition: 'background-color 0.15s ease'
+                  transition: 'background-color 0.15s ease, box-shadow 0.15s ease, border-color 0.15s ease'
                 }}
               >
                 <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, flex: 1, minWidth: 0 }}>
@@ -499,7 +557,12 @@ export const FormsToolbar: React.FC<FormsToolbarProps> = ({
                   )}
                 </Box>
                 <Typography variant="caption" sx={{ fontSize: '0.65rem', opacity: isSelected ? 0.9 : 0.7 }}>
-                  z: {typeof obj.z_level === 'number' && Number.isFinite(obj.z_level) ? obj.z_level : '—'}
+                  z: {typeof obj.z_level === 'number' && Number.isFinite(obj.z_level) ? obj.z_level : '—'}{obj.z_level_fixed ? ' pinned' : ''}
+                  {obj.z_level_fixed && (
+                    <PushPinIcon
+                      sx={{ ml: 0.4, fontSize: '0.75rem', verticalAlign: 'text-bottom' }}
+                    />
+                  )}
                 </Typography>
               </Box>
             )

@@ -1,4 +1,4 @@
-import React, { useRef, useCallback, useEffect, useLayoutEffect, useMemo } from 'react'
+import React, { useRef, useCallback, useEffect, useLayoutEffect, useMemo, useState } from 'react'
 import { Box } from '@mui/material'
 import {
   TOOLS,
@@ -26,6 +26,8 @@ import {
   MERGE_THRESHOLD,
   TOOLBAR_CONFIGS,
   ToolbarPosition,
+  type ToolbarDimensions,
+  clampToolbarPosition,
   JointData,
   LinkData,
   FormData,
@@ -124,7 +126,16 @@ import {
   useViewportState,
   buildSyncedDocAfterDrop
 } from './builder'
-import { getStoredGraphFilename, setStoredGraphFilename } from '../prefs'
+import {
+  validatePolygonFormAssociations,
+  getJointPositionFromLinkageDoc
+} from './builder/helpers/formMechanismHelpers'
+import {
+  getStoredGraphFilename,
+  getStoredToolbarHeights,
+  setStoredGraphFilename,
+  setStoredToolbarHeights
+} from '../prefs'
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // BUILDER TAB — Main builder view orchestrator
@@ -307,6 +318,24 @@ const BuilderTab: React.FC = () => {
     setCanvases
   } = useDrawnPathState()
 
+  const linkageDocRef = useRef(linkageDoc)
+  linkageDocRef.current = linkageDoc
+  const pylinkDocRef = useRef(pylinkDoc)
+  pylinkDocRef.current = pylinkDoc
+
+  const scheduleValidateFormAssociations = useCallback(() => {
+    setTimeout(() => {
+      setDrawnObjects(prev => ({
+        ...prev,
+        objects: validatePolygonFormAssociations(
+          prev.objects as DrawnObject[],
+          j => getJointPositionFromLinkageDoc(linkageDocRef.current, j),
+          pylinkDocRef.current.meta.links
+        ) as DrawnObject[]
+      }))
+    }, 0)
+  }, [setDrawnObjects])
+
   const [editingCanvasId, setEditingCanvasId] = React.useState<string | null>(null)
 
   // Forms toolbar and form edit modal
@@ -317,6 +346,10 @@ const BuilderTab: React.FC = () => {
   const [createLinkForms, setCreateLinkForms] = React.useState(true)
   const [computeZLevelsAfterCreate, setComputeZLevelsAfterCreate] = React.useState(true)
   const [zLevelConfig, setZLevelConfig] = React.useState<ZLevelHeuristicConfig>(() => ({ ...DEFAULT_Z_LEVEL_CONFIG }))
+  const zLevelConfigRef = useRef<ZLevelHeuristicConfig>(zLevelConfig)
+  useLayoutEffect(() => {
+    zLevelConfigRef.current = zLevelConfig
+  }, [zLevelConfig])
 
   // Explore node trajectories mode: state cleared when switching tools
   const [exploreTrajectoriesState, setExploreTrajectoriesState] = React.useState<ExploreTrajectoriesState>({
@@ -1016,12 +1049,27 @@ const BuilderTab: React.FC = () => {
         } else {
           triggerMechanismChange()
         }
+        scheduleValidateFormAssociations()
       }
       lastDragStartRef.current = null
       lastDragCurrentRef.current = null
       lastDraggedJointRef.current = null
     }
-  }, [anyDragging, dragState.isDragging, dragState.dragStartPosition, dragState.currentPosition, dragState.draggedJoint, triggerMechanismChange, exitEditMode, animation.trajectoryData, animation.runSimulation, linkageDoc, setLinkageDoc, setPendingDropPosition])
+  }, [
+    anyDragging,
+    dragState.isDragging,
+    dragState.dragStartPosition,
+    dragState.currentPosition,
+    dragState.draggedJoint,
+    triggerMechanismChange,
+    exitEditMode,
+    animation.trajectoryData,
+    animation.runSimulation,
+    linkageDoc,
+    setLinkageDoc,
+    setPendingDropPosition,
+    scheduleValidateFormAssociations
+  ])
 
   // Clear pending drop position when trajectory updates (e.g. after runSimulation(syncedDoc) completes).
   useEffect(() => {
@@ -1187,6 +1235,11 @@ const BuilderTab: React.FC = () => {
     jointNames: string[],
     drawnObjectIds: string[] = []
   ) => {
+    // Move-group edits operate at frame 0 using doc-driven positions.
+    // Clear trajectory up front so getJointPosition does not read stale sampled frames.
+    animation.clearTrajectory()
+    resetAnimationToFirstFrame()
+
     // Store original positions of all joints
     const startPositions: Record<string, [number, number]> = {}
     jointNames.forEach(jointName => {
@@ -1217,7 +1270,7 @@ const BuilderTab: React.FC = () => {
 
     const totalItems = jointNames.length + drawnObjectIds.length
     showStatus(`Move mode: ${totalItems} items selected — click and drag to move`, 'action')
-  }, [getJointPosition, drawnObjects.objects, showStatus])
+  }, [animation.clearTrajectory, resetAnimationToFirstFrame, getJointPosition, drawnObjects.objects, showStatus])
 
   // Exit move group mode
   const exitMoveGroupMode = useCallback(() => {
@@ -1569,7 +1622,8 @@ const BuilderTab: React.FC = () => {
     showStatus: showStatus as (message: string, type?: string, duration?: number) => void,
     triggerMechanismChange,
     resetAnimationToFirstFrame,
-    apiFindAssociatedPolygons
+    apiFindAssociatedPolygons,
+    onAfterMoveGroupDragEnd: scheduleValidateFormAssociations
   })
 
   // Merge two joints (nodes) together (source is absorbed into target)
@@ -1806,6 +1860,28 @@ const BuilderTab: React.FC = () => {
     getJointType: (name: string) => pylinkDoc.pylinkage.joints.find(j => j.name === name)?.type ?? null
   })
 
+  const openFormEdit = useCallback((formId: string) => {
+    const obj = drawnObjects.objects.find((o: { id: string }) => o.id === formId) as DrawnObject | undefined
+    if (!obj || obj.type !== 'polygon') return
+    setEditingFormData({
+      id: obj.id,
+      name: obj.name,
+      fillColor: obj.fillColor,
+      z_level: obj.z_level,
+      z_level_fixed: obj.z_level_fixed,
+      target_z_level: obj.target_z_level
+    })
+  }, [drawnObjects.objects])
+
+  const handleToolbarInteract = useCallback(() => {
+    if (animation.animationState.isAnimating) {
+      animation.pauseAnimation()
+    }
+    setDrawnObjects(prev => (
+      prev.selectedIds.length > 0 ? { ...prev, selectedIds: [] } : prev
+    ))
+  }, [animation.animationState.isAnimating, animation.pauseAnimation, setDrawnObjects])
+
   // Layer render functions (data prep + render wiring) — built by hook
   const layerRenders = useCanvasLayerRenders({
     pylinkDoc,
@@ -1864,6 +1940,7 @@ const BuilderTab: React.FC = () => {
     setSelectedPathId,
     openJointEditModal,
     openLinkEditModal,
+    openFormEdit,
     handleMergeLinkClick,
     handleMergePolygonClick,
     toolContext,
@@ -2096,51 +2173,101 @@ const BuilderTab: React.FC = () => {
   const handleToolbarPositionChange = useCallback((id: string, position: ToolbarPosition) => {
     setToolbarPositions(prev => ({ ...prev, [id]: position }))
   }, [])
+  const [toolbarHeights, setToolbarHeights] = useState<Record<string, number>>(() => getStoredToolbarHeights())
 
-  // Get toolbar position (use saved or default)
-  // Negative x/y values mean "offset from right/bottom edge of canvas"
-  const getToolbarPosition = (id: string): ToolbarPosition => {
-    if (toolbarPositions[id]) return toolbarPositions[id]
+  const getResolvedDefaultToolbarPosition = useCallback((id: string): ToolbarPosition => {
     const config = TOOLBAR_CONFIGS.find(c => c.id === id)
     const defaultPos = config?.defaultPosition || { x: 100, y: 100 }
-
     let x = defaultPos.x
     let y = defaultPos.y
 
-    // Convert negative x to position from right edge
     if (defaultPos.x < 0) {
       x = canvasDimensions.width + defaultPos.x
     }
-    // Convert negative y to position from bottom edge
     if (defaultPos.y < 0) {
       y = canvasDimensions.height + defaultPos.y
     }
 
     return { x, y }
+  }, [canvasDimensions.height, canvasDimensions.width])
+
+  // Get toolbar position (use saved or default)
+  // Negative x/y values mean "offset from right/bottom edge of canvas"
+  const getToolbarPosition = (id: string): ToolbarPosition => {
+    const basePosition = toolbarPositions[id] ?? getResolvedDefaultToolbarPosition(id)
+    return clampToolbarPosition(basePosition, canvasDimensions, getToolbarDimensions(id))
   }
 
   // Get toolbar dimensions based on type
-  const getToolbarDimensions = (id: string): { minWidth: number; maxHeight: number } => {
+  const getToolbarDimensions = (id: string): ToolbarDimensions => {
     switch (id) {
       case 'tools':
         // Tools should NEVER scroll - 20px narrower so it doesn't crowd the canvas
-        return { minWidth: 200, maxHeight: 600 }
+        return { minWidth: 200, minHeight: 260, defaultHeight: 516, maxHeight: 2400 }
       case 'more':
-        return { minWidth: 180, maxHeight: 500 }  // Tall enough to fit all tools without scrolling
+        return { minWidth: 180, minHeight: 200, defaultHeight: 336, maxHeight: 2400 }
       case 'optimize':
-        return { minWidth: 960, maxHeight: 650 }  // 3x wider (320*3), shorter height for horizontal layout
+        return { minWidth: 960, minHeight: 280, defaultHeight: 504, maxHeight: 2400 }
       case 'links':
-        return { minWidth: 200, maxHeight: 480 }  // 1.5x taller for links list
+        return { minWidth: 200, minHeight: 240, defaultHeight: 384, maxHeight: 2400 }
       case 'nodes':
-        return { minWidth: 200, maxHeight: 320 }  // Taller for nodes list
+        return { minWidth: 200, minHeight: 220, defaultHeight: 336, maxHeight: 2400 }
       case 'forms':
-        return { minWidth: 255, maxHeight: 580 }
+        return { minWidth: 255, minHeight: 280, defaultHeight: 432, maxHeight: 2400 }
       case 'settings':
-        return { minWidth: 280, maxHeight: 900 }  // 40px narrower; x=-280 keeps it on-screen
+        return { minWidth: 280, minHeight: 260, defaultHeight: 504, maxHeight: 2400 }
       default:
-        return { minWidth: 200, maxHeight: 400 }
+        return { minWidth: 200, minHeight: 220, defaultHeight: 384, maxHeight: 2400 }
     }
   }
+
+  const getToolbarHeight = useCallback((id: string): number | undefined => {
+    const value = toolbarHeights[id]
+    if (typeof value !== 'number' || !Number.isFinite(value)) return undefined
+    const dims = getToolbarDimensions(id)
+    return Math.max(dims.minHeight ?? 120, Math.min(value, dims.maxHeight))
+  }, [toolbarHeights])
+
+  const handleToolbarHeightChange = useCallback((id: string, height: number) => {
+    const dims = getToolbarDimensions(id)
+    const clamped = Math.max(dims.minHeight ?? 120, Math.min(height, dims.maxHeight))
+    setToolbarHeights(prev => ({ ...prev, [id]: clamped }))
+  }, [])
+
+  useEffect(() => {
+    setStoredToolbarHeights(toolbarHeights)
+  }, [toolbarHeights])
+
+  const handleRestoreToolbar = useCallback((id: string) => {
+    setOpenToolbars(prev => {
+      if (prev.has(id)) return prev
+      const next = new Set(prev)
+      next.add(id)
+      return next
+    })
+    setToolbarPositions(prev => {
+      const basePosition = prev[id] ?? getResolvedDefaultToolbarPosition(id)
+      const clamped = clampToolbarPosition(basePosition, canvasDimensions, getToolbarDimensions(id))
+      return { ...prev, [id]: clamped }
+    })
+  }, [canvasDimensions, getResolvedDefaultToolbarPosition, setOpenToolbars, setToolbarPositions])
+
+  useEffect(() => {
+    if (openToolbars.size === 0) return
+    setToolbarPositions(prev => {
+      let changed = false
+      const next = { ...prev }
+      openToolbars.forEach(id => {
+        const basePosition = prev[id] ?? getResolvedDefaultToolbarPosition(id)
+        const clamped = clampToolbarPosition(basePosition, canvasDimensions, getToolbarDimensions(id))
+        if (!prev[id] || prev[id].x !== clamped.x || prev[id].y !== clamped.y) {
+          next[id] = clamped
+          changed = true
+        }
+      })
+      return changed ? next : prev
+    })
+  }, [canvasDimensions, openToolbars, setToolbarPositions, getResolvedDefaultToolbarPosition])
 
   // Update link (edge) property - using hypergraph operations
   const updateLinkProperty = useCallback((linkName: string, property: string, value: string | string[] | boolean) => {
@@ -2326,8 +2453,7 @@ const BuilderTab: React.FC = () => {
           const o = obj as DrawnObject
           if (o.type !== 'polygon' || !data.polygon_z_levels || !(o.id in data.polygon_z_levels)) return o
           const z = data.polygon_z_levels[o.id]
-          // Preserve custom fill when z-level unchanged so form color edits are not reverted
-          const color = z === o.z_level ? o.fillColor : (zToColor.get(z) ?? o.fillColor)
+          const color = zToColor.get(z) ?? o.fillColor
           return {
             ...o,
             z_level: z,
@@ -2357,6 +2483,7 @@ const BuilderTab: React.FC = () => {
 
   const handleComputeLinkZLevels = useCallback(async () => {
     try {
+      const cfg = zLevelConfigRef.current
       const drawn_objects = drawnObjects.objects
         .filter((o: { type?: string; id?: string; contained_links?: string[] }) =>
           o.type === 'polygon' && o.id && (o.contained_links?.length ?? 0) > 0
@@ -2388,15 +2515,24 @@ const BuilderTab: React.FC = () => {
         ...(drawn_objects.length > 0 && { margin_units: formPaddingUnits }),
         ...(Object.keys(fixed_entity_z_levels).length > 0 && { fixed_entity_z_levels }),
         z_level_config: {
-          ...zLevelConfig,
-          crank_z: zLevelConfig.crank_z ?? null,
-          soft_pins: { ...(zLevelConfig.soft_pins ?? {}), ...formSoftPins }
+          ...cfg,
+          crank_z: cfg.crank_z ?? null,
+          soft_pins: { ...(cfg.soft_pins ?? {}), ...formSoftPins }
         }
       }
       if (animation.trajectoryData?.trajectories && animation.trajectoryData.nSteps > 0) {
         body.trajectories = animation.trajectoryData.trajectories
         body.n_steps = animation.trajectoryData.nSteps
       }
+      console.log('[Compute Z-levels] z_level_config sent:', JSON.stringify(body.z_level_config, null, 2))
+      console.log(
+        '[Compute Z-levels] n_steps:',
+        body.n_steps,
+        'trajectories:',
+        !!body.trajectories,
+        'drawn_objects:',
+        Array.isArray(body.drawn_objects) ? body.drawn_objects.length : 0
+      )
       const res = await fetch('/api/compute-link-z-levels', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -2443,8 +2579,7 @@ const BuilderTab: React.FC = () => {
             const o = obj as DrawnObject
             if (data.polygon_z_levels && o.id in data.polygon_z_levels) {
               const z = data.polygon_z_levels[o.id]
-              // Preserve custom fill when z-level unchanged so form color edits are not reverted
-              const color = z === o.z_level ? o.fillColor : (zToColor.get(z) ?? o.fillColor)
+              const color = zToColor.get(z) ?? o.fillColor
               return {
                 ...o,
                 z_level: z,
@@ -2494,7 +2629,20 @@ const BuilderTab: React.FC = () => {
       let assignments: Record<string, number> = {}
       let polygon_z_levels: Record<string, number> = {}
 
-      const buildBody = (): Record<string, unknown> => {
+      type ExistingPolyPayload = { id: string; type: 'polygon'; contained_links: string[] }
+
+      const buildBody = (rigidOverlay?: ExistingPolyPayload[]): Record<string, unknown> => {
+        const fromCanvas: ExistingPolyPayload[] = drawnObjects.objects
+          .filter((o: { type?: string; id?: string; contained_links?: string[] }) =>
+            o.type === 'polygon' && o.id && (o.contained_links?.length ?? 0) > 0
+          )
+          .map((o: { id: string; type?: string; contained_links?: string[] }) => ({
+            id: o.id,
+            type: 'polygon' as const,
+            contained_links: o.contained_links ?? []
+          }))
+        const existing_drawn_objects =
+          rigidOverlay && rigidOverlay.length > 0 ? [...fromCanvas, ...rigidOverlay] : fromCanvas
         const body: Record<string, unknown> = {
           linkage: linkageDoc.linkage,
           meta: linkageDoc.meta,
@@ -2502,15 +2650,7 @@ const BuilderTab: React.FC = () => {
           margin_units: formPaddingUnits,
           z_level_config: { ...zLevelConfig, crank_z: zLevelConfig.crank_z ?? null },
           skip_existing_forms: true,
-          existing_drawn_objects: drawnObjects.objects
-            .filter((o: { type?: string; id?: string; contained_links?: string[] }) =>
-              o.type === 'polygon' && o.id && (o.contained_links?.length ?? 0) > 0
-            )
-            .map((o: { id: string; type?: string; contained_links?: string[] }) => ({
-              id: o.id,
-              type: 'polygon',
-              contained_links: o.contained_links ?? []
-            }))
+          existing_drawn_objects
         }
         if (animation.trajectoryData?.trajectories && animation.trajectoryData.nSteps > 0) {
           body.trajectories = animation.trajectoryData.trajectories
@@ -2519,11 +2659,11 @@ const BuilderTab: React.FC = () => {
         return body
       }
 
-      const fetchAndParse = async (mode: 'rigid_groups' | 'per_link') => {
+      const fetchAndParse = async (mode: 'rigid_groups' | 'per_link', rigidOverlay?: ExistingPolyPayload[]) => {
         const res = await fetch('/api/create-polygons-from-rigid-groups', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ ...buildBody(), mode })
+          body: JSON.stringify({ ...buildBody(rigidOverlay), mode })
         })
         if (!res.ok) throw new Error(`HTTP ${res.status}`)
         return (await res.json()) as {
@@ -2535,6 +2675,7 @@ const BuilderTab: React.FC = () => {
         }
       }
 
+      let rigidForPerLinkOverlay: ExistingPolyPayload[] | undefined
       if (createRigidForms) {
         const data = await fetchAndParse('rigid_groups')
         if (data.status !== 'success') {
@@ -2545,10 +2686,15 @@ const BuilderTab: React.FC = () => {
         suggested = rigidSuggested
         assignments = data.assignments ?? {}
         polygon_z_levels = data.polygon_z_levels ?? {}
+        rigidForPerLinkOverlay = rigidSuggested.map(sp => ({
+          id: sp.polygon_id,
+          type: 'polygon' as const,
+          contained_links: sp.contained_links ?? []
+        }))
       }
 
       if (createLinkForms) {
-        const data = await fetchAndParse('per_link')
+        const data = await fetchAndParse('per_link', rigidForPerLinkOverlay)
         if (data.status !== 'success') {
           showStatus(data.message ?? 'Failed to create link forms', 'error', 3000)
           return
@@ -2733,12 +2879,19 @@ const BuilderTab: React.FC = () => {
               formSoftPinsCreate['polygon:' + o.id] = [o.target_z_level, 1]
             }
           }
+          const fixed_entity_z_levels: Record<string, number> = {}
+          for (const o of mergedObjects as DrawnObject[]) {
+            if (o.type === 'polygon' && !!o.z_level_fixed && o.z_level != null && Number.isFinite(o.z_level)) {
+              fixed_entity_z_levels['polygon:' + o.id] = o.z_level
+            }
+          }
           const zBody: Record<string, unknown> = {
             linkage: linkageAfterMerge.linkage,
             meta: linkageAfterMerge.meta,
             n_steps: simulationSteps || 32,
             ...(drawn_objects.length > 0 && { drawn_objects }),
             ...(drawn_objects.length > 0 && { margin_units: formPaddingUnits }),
+            ...(Object.keys(fixed_entity_z_levels).length > 0 && { fixed_entity_z_levels }),
             z_level_config: {
               ...zLevelConfig,
               crank_z: zLevelConfig.crank_z ?? null,
@@ -2827,19 +2980,6 @@ const BuilderTab: React.FC = () => {
     computeZLevelsAfterCreate,
     animation
   ])
-
-  const openFormEdit = useCallback((formId: string) => {
-    const obj = drawnObjects.objects.find((o: { id: string }) => o.id === formId) as DrawnObject | undefined
-    if (!obj || obj.type !== 'polygon') return
-    setEditingFormData({
-      id: obj.id,
-      name: obj.name,
-      fillColor: obj.fillColor,
-      z_level: obj.z_level,
-      z_level_fixed: obj.z_level_fixed,
-      target_z_level: obj.target_z_level
-    })
-  }, [drawnObjects.objects])
 
   const onSaveForm = useCallback((id: string, updates: { name: string; fillColor: string; strokeColor: string; z_level?: number; z_level_fixed?: boolean; target_z_level?: number }) => {
     setDrawnObjects(prev => ({
@@ -3330,7 +3470,21 @@ const BuilderTab: React.FC = () => {
         onComputeLinkZLevels: handleComputeLinkZLevels,
         objects: drawnObjects.objects as import('./builder/rendering/types').DrawnObject[],
         selectedIds: drawnObjects.selectedIds,
-        onSelectForms: (ids: string[]) => setDrawnObjects(prev => ({ ...prev, selectedIds: ids })),
+        onSelectForms: (ids: string[], event?: React.MouseEvent) => {
+          const id = ids[0]
+          if (!id) {
+            setDrawnObjects(prev => ({ ...prev, selectedIds: [] }))
+            return
+          }
+          const additive = !!event && (event.shiftKey || event.ctrlKey || event.metaKey)
+          setDrawnObjects(prev => {
+            if (!additive) return { ...prev, selectedIds: [id] }
+            const nextSelected = prev.selectedIds.includes(id)
+              ? prev.selectedIds.filter(selectedId => selectedId !== id)
+              : [...prev.selectedIds, id]
+            return { ...prev, selectedIds: nextSelected }
+          })
+        },
         openFormEdit,
         showStatus,
         darkMode,
@@ -3682,6 +3836,7 @@ const BuilderTab: React.FC = () => {
         renderGrid={layerRenders.renderGrid}
         renderCanvases={layerRenders.renderCanvases}
         renderDrawnObjects={layerRenders.renderDrawnObjects}
+        renderDrawnObjectLabels={layerRenders.renderDrawnObjectLabels}
         renderLinks={layerRenders.renderLinks}
         renderPreviewLine={layerRenders.renderPreviewLine}
         renderPolygonPreview={layerRenders.renderPolygonPreview}
@@ -3713,18 +3868,22 @@ const BuilderTab: React.FC = () => {
         onCancelAction={cancelAction}
         openToolbars={openToolbars}
         onToggleToolbar={handleToggleToolbar}
-        onToolbarInteract={animation.animationState.isAnimating ? animation.pauseAnimation : undefined}
+        onRestoreToolbar={handleRestoreToolbar}
+        onToolbarInteract={handleToolbarInteract}
         darkMode={darkMode}
       >
         <BuilderToolbars
           openToolbars={openToolbars}
           toolbarConfigs={TOOLBAR_CONFIGS}
           getToolbarPosition={getToolbarPosition}
+          getToolbarHeight={getToolbarHeight}
           getToolbarDimensions={getToolbarDimensions}
           onToggleToolbar={handleToggleToolbar}
           onPositionChange={handleToolbarPositionChange}
+          onHeightChange={handleToolbarHeightChange}
           renderToolbarContent={renderToolbarContent}
-          onInteract={animation.animationState.isAnimating ? animation.pauseAnimation : undefined}
+          viewportBounds={canvasDimensions}
+          onInteract={handleToolbarInteract}
         />
       </BuilderCanvasArea>
 

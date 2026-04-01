@@ -1,7 +1,7 @@
 /**
  * useCanvasLayerRenders
  *
- * Builds the 12 canvas layer render functions from document state, selection,
+ * Builds the canvas layer render functions from document state, selection,
  * tool state, and callbacks. BuilderTab composes this hook and passes the
  * return to BuilderCanvasArea. Keeps layer data-prep and render wiring out
  * of the main orchestrator.
@@ -21,6 +21,7 @@ import {
   renderTrajectories as doRenderTrajectories,
   renderTargetPaths as doRenderTargetPaths,
   renderDrawnObjects as doRenderDrawnObjects,
+  renderDrawnObjectLabels as doRenderDrawnObjectLabels,
   renderLinks as doRenderLinks,
   renderExplorationDots as doRenderExplorationDots,
   renderExplorationTrajectories as doRenderExplorationTrajectories,
@@ -30,7 +31,7 @@ import type { PylinkDocument } from '../types'
 import type { ToolContext } from '../toolHandlers/types'
 import type { HandleMergePolygonClickParams } from '../toolHandlers/mergeToolHandler'
 import type { CanvasLayerRender } from '../rendering'
-import type { TrajectoryStyle, ColorCycleType } from '../rendering/types'
+import type { TrajectoryStyle, ColorCycleType, DrawnObjectsRendererProps } from '../rendering/types'
 import type { DrawnObjectsState, ExploreTrajectoriesState } from '../../BuilderTools'
 import type { CanvasImageData } from '../types'
 
@@ -79,6 +80,7 @@ interface MeasureState {
 }
 
 interface DragState {
+  isDragging?: boolean
   draggedJoint: string | null
   mergeTarget: string | null
 }
@@ -159,6 +161,7 @@ export interface UseCanvasLayerRendersParams {
   setSelectedPathId: (id: string | null) => void
   openJointEditModal: (jointName: string) => void
   openLinkEditModal: (linkName: string) => void
+  openFormEdit: (formId: string) => void
   handleMergeLinkClick: (context: ToolContext, linkName: string, p0: [number, number], p1: [number, number], color: string) => void
   handleMergePolygonClick: (context: ToolContext, params: HandleMergePolygonClickParams) => void | boolean
   toolContext: ToolContext
@@ -173,6 +176,7 @@ export interface UseCanvasLayerRendersReturn {
   renderGrid: CanvasLayerRender
   renderCanvases: CanvasLayerRender
   renderDrawnObjects: CanvasLayerRender
+  renderDrawnObjectLabels: CanvasLayerRender
   renderLinks: CanvasLayerRender
   renderPreviewLine: CanvasLayerRender
   renderPolygonPreview: CanvasLayerRender
@@ -245,6 +249,7 @@ export function useCanvasLayerRenders(params: UseCanvasLayerRendersParams): UseC
     setSelectedPathId,
     openJointEditModal,
     openLinkEditModal,
+    openFormEdit,
     handleMergeLinkClick,
   handleMergePolygonClick,
   toolContext,
@@ -289,6 +294,10 @@ export function useCanvasLayerRenders(params: UseCanvasLayerRendersParams): UseC
       points: polygonDrawState.points,
       isDrawing: polygonDrawState.isDrawing,
       mergeThreshold,
+      mode: polygonDrawState.mode,
+      circleCenter: polygonDrawState.circleCenter,
+      circleRadius: polygonDrawState.circleRadius,
+      circleRadiusPoint: polygonDrawState.circleRadiusPoint,
       unitsToPixels
     })
 
@@ -515,14 +524,32 @@ export function useCanvasLayerRenders(params: UseCanvasLayerRendersParams): UseC
     )
   }
 
-  const renderDrawnObjects = (): React.ReactNode => {
+  const buildDrawnObjectsRendererProps = (): DrawnObjectsRendererProps | null => {
     if (drawnObjects.objects.length === 0) return null
+
+    const polygonFrozenDuringJointDrag = (obj: (typeof drawnObjects.objects)[number]): boolean => {
+      if (!dragState.isDragging || !dragState.draggedJoint) return false
+      const j = dragState.draggedJoint
+      if (obj.mergedLinkName) {
+        const meta = pylinkDoc.meta.links[obj.mergedLinkName]
+        if (meta?.connects?.includes(j)) return true
+      }
+      for (const lid of obj.contained_links ?? []) {
+        const meta = pylinkDoc.meta.links[lid]
+        if (meta?.connects?.includes(j)) return true
+      }
+      return false
+    }
 
     const objectsWithDisplayPoints = drawnObjects.objects
       .filter((obj): obj is typeof obj & { type: 'polygon' } => obj.type === 'polygon' && obj.points.length >= 3)
       .map(obj => {
         let displayPoints = obj.points
-        if (obj.mergedLinkName && (obj.mergedLinkOriginalStart != null || obj.mergedLinkOriginalEnd != null)) {
+        if (
+          obj.mergedLinkName &&
+          (obj.mergedLinkOriginalStart != null || obj.mergedLinkOriginalEnd != null) &&
+          !polygonFrozenDuringJointDrag(obj)
+        ) {
           const linkMeta = pylinkDoc.meta.links[obj.mergedLinkName]
           if (linkMeta) {
             const currentStart = getJointPosition(linkMeta.connects[0])
@@ -556,49 +583,62 @@ export function useCanvasLayerRenders(params: UseCanvasLayerRendersParams): UseC
           strokeWidth: obj.strokeWidth,
           fillOpacity: obj.fillOpacity,
           mergedLinkName: obj.mergedLinkName,
-          contained_links_valid: obj.contained_links_valid
+          contained_links_valid: (obj as { contained_links_valid?: boolean }).contained_links_valid
         }
       })
 
-    return (
-      <>
-        {doRenderDrawnObjects({
-          objects: objectsWithDisplayPoints,
-          selectedIds: drawnObjects.selectedIds,
-          moveGroupIsActive: moveGroupState.isActive,
-          moveGroupDrObjectIds: moveGroupState.drawnObjectIds,
-          toolMode,
-          getHighlightStyle,
-          unitsToPixels,
-          pointerEventsNoneForDrawPolygon: toolMode === 'draw_polygon',
-          onObjectClick: (id, _isSelected) => {
-            setDrawnObjects(prev => ({
-              ...prev,
-              selectedIds: prev.selectedIds.includes(id)
-                ? prev.selectedIds.filter(rid => rid !== id)
-                : [...prev.selectedIds, id]
-            }))
-          },
-          mergeMode: toolMode === 'merge',
-          hoveredPolygonId,
-          onMergePolygonHover: setHoveredPolygonId,
-          onMergePolygonClick: (objId, isUnmerge) => {
-            const obj = drawnObjects.objects.find(o => o.id === objId)
-            if (obj) {
-              handleMergePolygonClick(toolContext, {
-                polygonId: obj.id,
-                polygonName: obj.name ?? obj.id,
-                isUnmerge,
-                mergedLinkName: obj.mergedLinkName ?? undefined,
-                mergedLinkOriginalStart: obj.mergedLinkOriginalStart ?? undefined,
-                mergedLinkOriginalEnd: obj.mergedLinkOriginalEnd ?? undefined,
-                polygonPoints: obj.points
-              })
-            }
+    return {
+      objects: objectsWithDisplayPoints,
+      selectedIds: drawnObjects.selectedIds,
+      moveGroupIsActive: moveGroupState.isActive,
+      moveGroupDrObjectIds: moveGroupState.drawnObjectIds,
+      toolMode,
+      getHighlightStyle,
+      unitsToPixels,
+      pointerEventsNoneForDrawPolygon: toolMode === 'draw_polygon',
+      onObjectClick: (id: string, _isSelected: boolean, event: React.MouseEvent) => {
+        const additive = event.shiftKey || event.ctrlKey || event.metaKey
+        setDrawnObjects(prev => {
+          if (additive) {
+            const nextSelected = prev.selectedIds.includes(id)
+              ? prev.selectedIds.filter(rid => rid !== id)
+              : [...prev.selectedIds, id]
+            return { ...prev, selectedIds: nextSelected }
           }
-        })}
-      </>
-    )
+          return { ...prev, selectedIds: [id] }
+        })
+      },
+      mergeMode: toolMode === 'merge',
+      onObjectDoubleClick: openFormEdit,
+      hoveredPolygonId,
+      onMergePolygonHover: setHoveredPolygonId,
+      onMergePolygonClick: (objId: string, isUnmerge: boolean) => {
+        const obj = drawnObjects.objects.find(o => o.id === objId)
+        if (obj) {
+          handleMergePolygonClick(toolContext, {
+            polygonId: obj.id,
+            polygonName: obj.name ?? obj.id,
+            isUnmerge,
+            mergedLinkName: obj.mergedLinkName ?? undefined,
+            mergedLinkOriginalStart: obj.mergedLinkOriginalStart ?? undefined,
+            mergedLinkOriginalEnd: obj.mergedLinkOriginalEnd ?? undefined,
+            polygonPoints: obj.points
+          })
+        }
+      }
+    }
+  }
+
+  const renderDrawnObjects = (): React.ReactNode => {
+    const p = buildDrawnObjectsRendererProps()
+    if (!p) return null
+    return <>{doRenderDrawnObjects(p)}</>
+  }
+
+  const renderDrawnObjectLabels = (): React.ReactNode => {
+    const p = buildDrawnObjectsRendererProps()
+    if (!p) return null
+    return <>{doRenderDrawnObjectLabels(p)}</>
   }
 
   const renderTargetPaths = (): React.ReactNode => (
@@ -619,6 +659,7 @@ export function useCanvasLayerRenders(params: UseCanvasLayerRendersParams): UseC
     renderGrid,
     renderCanvases,
     renderDrawnObjects,
+    renderDrawnObjectLabels,
     renderLinks,
     renderPreviewLine,
     renderPolygonPreview,

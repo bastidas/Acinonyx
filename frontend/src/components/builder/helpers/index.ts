@@ -119,6 +119,23 @@ export {
 // Drag-end sync: build synced document after single-node drop (trajectory hop fix)
 export { buildSyncedDocAfterDrop } from './dragEndSync'
 
+// Forms vs mechanisms: group-select containment, mechanism equivalence, dissociation
+export {
+  boxFromCorners,
+  isPointInAxisAlignedBox,
+  isAxisAlignedRectContainingPolygonVertices,
+  areLinkEndpointsInBox,
+  isFormFullyInsideGroupSelectBox,
+  selectionIsExactlyOneMechanism,
+  polygonIdsTouchingMechanismLinks,
+  dissociateFormFields,
+  validatePolygonFormAssociations,
+  getJointPositionFromLinkageDoc,
+  DISSOCIATED_FORM_FILL,
+  DISSOCIATED_FORM_STROKE
+} from './formMechanismHelpers'
+export type { AxisAlignedBox, FormForGroupSelect, PolygonFormForDissociate } from './formMechanismHelpers'
+
 // Exploration colormap (angle/radius color for explore node trajectories)
 export {
   getExplorationColormapColor,

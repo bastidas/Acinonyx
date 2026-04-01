@@ -229,6 +229,47 @@ class TestComputeLinkZLevels:
         assert span >= 0
         assert span <= 4  # heuristic should keep span small
 
+    def test_sandwich_weight_prefers_between_neighbors(self, fourbar_pylink_data):
+        """High sandwich weight pulls coupler z between pinned crank_link and rocker despite weak opposite soft pin."""
+        data = dict(fourbar_pylink_data)
+        data['n_steps'] = 24
+        # Pin neighbors so coupler may use z=0 and z=3 (avoid ground@0 conflicting via trajectory).
+        fixed = {'ground': 5, 'crank_link': 2, 'rocker': 4}
+        no_sandwich = ZLevelHeuristicConfig(
+            min_z=0,
+            weight_reduce_deltas=0.0,
+            weight_reduce_height=0.0,
+            weight_prefer_sandwich=0.0,
+            crank_z=None,
+            weight_crank=0.0,
+            soft_pins={'coupler': (0, 1_000.0)},
+        )
+        with_sandwich = ZLevelHeuristicConfig(
+            min_z=0,
+            weight_reduce_deltas=0.0,
+            weight_reduce_height=0.0,
+            weight_prefer_sandwich=500.0,
+            crank_z=None,
+            weight_crank=0.0,
+            soft_pins={'coupler': (0, 1.0)},
+        )
+        a0 = compute_link_z_levels(
+            pylink_data=data,
+            n_steps=24,
+            fixed_entity_z_levels=fixed,
+            z_level_config=no_sandwich,
+            max_assignments=1,
+        )[0]
+        a1 = compute_link_z_levels(
+            pylink_data=data,
+            n_steps=24,
+            fixed_entity_z_levels=fixed,
+            z_level_config=with_sandwich,
+            max_assignments=1,
+        )[0]
+        assert a0['coupler'] == 0
+        assert a1['coupler'] == 3
+
 
 # -----------------------------------------------------------------------------
 # Polygon utils: contained_links
@@ -468,3 +509,71 @@ class TestBuildPolygonEntityConflictPairs:
         # No overlap at step 0: e1 is (0,0)-(1,0), e2 is (1,0)-(1,1); hulls may touch at B
         # So we may or may not get a pair depending on margin; just ensure no error
         assert isinstance(pairs, list)
+
+    def test_connector_joint_inside_other_body_adds_conflict(self):
+        """Connector endpoint inside another form body creates a hard conflict pair."""
+        linkage = {
+            'edges': {
+                'e_body': {'source': 'A', 'target': 'B'},
+                'e_conn': {'source': 'B', 'target': 'C'},
+            },
+        }
+        trajectories = {
+            'A': [[0, 0]],
+            'B': [[1, 0]],
+            'C': [[2, 0]],
+        }
+        polygons_for_z = [
+            {
+                'id': 'body',
+                'contained_links': ['e_body'],
+                'points': [(-0.2, -0.2), (1.2, -0.2), (1.2, 0.2), (-0.2, 0.2)],
+            },
+            {
+                'id': 'connector',
+                'contained_links': ['e_conn'],
+                'points': [(0.9, -0.1), (2.1, -0.1), (2.1, 0.1), (0.9, 0.1)],
+            },
+        ]
+        pairs = build_polygon_entity_conflict_pairs(
+            polygons_for_z, linkage, trajectories, margin_fraction=0.0,
+        )
+        expected = tuple(sorted(('polygon:body', 'polygon:connector')))
+        assert any(tuple(sorted((a, b))) == expected for a, b in pairs)
+
+    def test_connector_joint_swept_path_intersects_other_swept_body_adds_conflict(self):
+        """Hard guard uses swept areas: asynchronous overlap still creates conflict pair."""
+        linkage = {
+            'edges': {
+                'e_left': {'source': 'A', 'target': 'B'},
+                'e_conn': {'source': 'B', 'target': 'C'},
+                'e_right': {'source': 'C', 'target': 'D'},
+            },
+        }
+        # Connector joint B moves from x=0 -> x=2 while body polygon only occupies
+        # x≈0 at step 0 and x≈2 at step 1 (never same-step overlap with B if sampled sparsely),
+        # but the swept-area rule should still force a hard conflict.
+        trajectories = {
+            'A': [[-1.0, 0.0], [1.0, 0.0]],
+            'B': [[0.0, 0.0], [2.0, 0.0]],
+            'C': [[1.0, 0.0], [3.0, 0.0]],
+            'D': [[2.0, 0.0], [4.0, 0.0]],
+        }
+        polygons_for_z = [
+            {
+                'id': 'connector',
+                'contained_links': ['e_conn'],
+                'points': [(-0.1, -0.1), (1.1, -0.1), (1.1, 0.1), (-0.1, 0.1)],
+            },
+            {
+                'id': 'body',
+                'contained_links': ['e_left', 'e_right'],
+                # Sweeps from x≈0 to x≈2 across the two timesteps.
+                'points': [(-0.2, -0.2), (0.2, -0.2), (0.2, 0.2), (-0.2, 0.2)],
+            },
+        ]
+        pairs = build_polygon_entity_conflict_pairs(
+            polygons_for_z, linkage, trajectories, margin_fraction=0.0,
+        )
+        expected = tuple(sorted(('polygon:body', 'polygon:connector')))
+        assert any(tuple(sorted((a, b))) == expected for a, b in pairs)

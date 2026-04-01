@@ -10,6 +10,7 @@ import Cookies from 'js-cookie'
 const THEME_KEY = 'acinonyx-theme'
 const GRAPH_KEY = 'acinonyx-graph'
 const SETTINGS_KEY = 'acinonyx-settings'
+const TOOLBAR_HEIGHTS_KEY = 'acinonyx-toolbar-heights'
 const COOKIE_EXPIRES_DAYS = 365
 
 // ─── Stored settings (builder preferences) ───────────────────────────────────
@@ -151,6 +152,28 @@ export function setStoredSettings(settings: StoredSettings): void {
   Cookies.set(SETTINGS_KEY, JSON.stringify(settings), { expires: COOKIE_EXPIRES_DAYS })
 }
 
+export type StoredToolbarHeights = Record<string, number>
+
+export function getStoredToolbarHeights(): StoredToolbarHeights {
+  try {
+    const raw = Cookies.get(TOOLBAR_HEIGHTS_KEY)
+    if (!raw) return {}
+    const parsed = JSON.parse(raw) as Record<string, unknown>
+    const result: StoredToolbarHeights = {}
+    for (const [key, value] of Object.entries(parsed)) {
+      if (typeof value !== 'number' || Number.isNaN(value) || !Number.isFinite(value)) continue
+      result[key] = Math.max(80, Math.min(5000, value))
+    }
+    return result
+  } catch {
+    return {}
+  }
+}
+
+export function setStoredToolbarHeights(heights: StoredToolbarHeights): void {
+  Cookies.set(TOOLBAR_HEIGHTS_KEY, JSON.stringify(heights), { expires: COOKIE_EXPIRES_DAYS })
+}
+
 export type ThemePreference = 'light' | 'dark'
 
 /**
@@ -191,4 +214,5 @@ export function clearStoredPrefs(): void {
   Cookies.remove(THEME_KEY)
   Cookies.remove(GRAPH_KEY)
   Cookies.remove(SETTINGS_KEY)
+  Cookies.remove(TOOLBAR_HEIGHTS_KEY)
 }

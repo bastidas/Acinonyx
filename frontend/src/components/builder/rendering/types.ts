@@ -195,6 +195,10 @@ export interface PolygonPreviewRendererProps {
   points: Position[]
   isDrawing: boolean
   mergeThreshold: number
+  mode?: 'polygon' | 'circle'
+  circleCenter?: Position | null
+  circleRadius?: number | null
+  circleRadiusPoint?: Position | null
   unitsToPixels: (units: number) => number
 }
 
@@ -246,7 +250,9 @@ export interface DrawnObjectsRendererProps {
     baseStrokeWidth: number
   ) => { stroke: string; strokeWidth: number; filter?: string }
   unitsToPixels: (units: number) => number
-  onObjectClick: (id: string, isSelected: boolean) => void
+  onObjectClick: (id: string, isSelected: boolean, event: React.MouseEvent) => void
+  /** In select mode, double-click opens the form edit modal (same as Forms toolbar). */
+  onObjectDoubleClick?: (id: string) => void
   /** When true, apply merge-mode styling and use onMergePolygonClick for polygon clicks. */
   mergeMode?: boolean
   /** Polygon id under pointer (for merge hover styling). */

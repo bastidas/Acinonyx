@@ -6,14 +6,31 @@
  */
 
 import type { ToolHandler, ToolContext, CanvasPoint } from './types'
-import { initialDragState } from '../../BuilderTools'
+import { initialDragState, isPointInPolygon } from '../../BuilderTools'
 
 export const selectToolHandler: ToolHandler = {
   onMouseDown(event, point, context) {
     if (context.toolMode !== 'select') return false
     const jointsWithPositions = context.getJointsWithPositions()
     const nearestJoint = context.findNearestJoint(point, jointsWithPositions, context.snapThreshold)
-    if (!nearestJoint) return false
+    if (!nearestJoint) {
+      const objects = context.drawnObjects.objects
+      for (let i = objects.length - 1; i >= 0; i--) {
+        const obj = objects[i]!
+        if (obj.type != null && obj.type !== 'polygon') continue
+        if (!obj.points || obj.points.length < 3) continue
+        if (!isPointInPolygon(point, obj.points)) continue
+        context.setSelectedJoints([])
+        context.setSelectedLinks([])
+        context.setDrawnObjects(prev => ({ ...prev, selectedIds: [obj.id] }))
+        context.resetAnimationToFirstFrame()
+        context.pauseAnimation()
+        context.enterMoveGroupMode([], [obj.id])
+        context.showStatus('Moving form — drag to reposition', 'action')
+        return true
+      }
+      return false
+    }
 
     context.setDragState({
       isDragging: true,

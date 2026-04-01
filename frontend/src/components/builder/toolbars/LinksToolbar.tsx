@@ -36,7 +36,7 @@ export const LinksToolbar: React.FC<LinksToolbarProps> = ({
   const linkClickTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   return (
-    <Box sx={{ overflow: 'auto', maxHeight: 350 }}>
+    <Box>
       {Object.entries(links).length === 0 ? (
         <Box sx={{ p: 2, textAlign: 'center' }}>
           <Typography variant="caption" color="text.secondary">No links yet</Typography>

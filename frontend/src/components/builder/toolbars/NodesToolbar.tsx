@@ -33,7 +33,7 @@ export const NodesToolbar: React.FC<NodesToolbarProps> = ({
   const jointClickTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   return (
-    <Box sx={{ overflow: 'auto', maxHeight: 350 }}>
+    <Box>
       {joints.length === 0 ? (
         <Box sx={{ p: 2, textAlign: 'center' }}>
           <Typography variant="caption" color="text.secondary">No joints yet</Typography>

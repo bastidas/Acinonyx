@@ -101,9 +101,116 @@ export function renderPolygonPreview({
   points,
   isDrawing,
   mergeThreshold,
+  mode = 'polygon',
+  circleCenter,
+  circleRadius,
+  circleRadiusPoint,
   unitsToPixels
 }: PolygonPreviewRendererProps): JSX.Element | null {
-  if (!isDrawing || points.length === 0) return null
+  if (!isDrawing) return null
+
+  // ────────────────────────────────────────────────────────────────────────────
+  // Circle preview (Shift+click center, move mouse for radius, click to commit)
+  // Render an inscribed regular polygon so the preview matches what we send
+  // to the backend for containment logic.
+  // ────────────────────────────────────────────────────────────────────────────
+  if (mode === 'circle' && circleCenter && circleRadius != null && circleRadiusPoint) {
+    const CIRCLE_SIDES = 32
+    const radius = circleRadius
+    if (radius < 0) return null
+
+    const startAngle = Math.atan2(
+      circleRadiusPoint[1] - circleCenter[1],
+      circleRadiusPoint[0] - circleCenter[0]
+    )
+
+    const circlePoints = Array.from({ length: CIRCLE_SIDES }, (_, i) => {
+      const theta = startAngle + (2 * Math.PI * i) / CIRCLE_SIDES
+      return [
+        circleCenter[0] + radius * Math.cos(theta),
+        circleCenter[1] + radius * Math.sin(theta)
+      ] as [number, number]
+    })
+
+    const edges = []
+    for (let i = 0; i < circlePoints.length; i++) {
+      const p1 = circlePoints[i]
+      const p2 = circlePoints[(i + 1) % circlePoints.length]
+      edges.push(
+        <line
+          key={`circle-edge-${i}`}
+          x1={unitsToPixels(p1[0])}
+          y1={unitsToPixels(p1[1])}
+          x2={unitsToPixels(p2[0])}
+          y2={unitsToPixels(p2[1])}
+          stroke="#9c27b0"
+          strokeWidth={2.5}
+          strokeDasharray="6,3"
+          opacity={0.85}
+          pointerEvents="none"
+        />
+      )
+    }
+
+    const pathData = circlePoints.map((p, i) =>
+      `${i === 0 ? 'M' : 'L'} ${unitsToPixels(p[0])} ${unitsToPixels(p[1])}`
+    ).join(' ') + ' Z'
+
+    const polygonFill = radius > 0 ? (
+      <path
+        d={pathData}
+        fill="rgba(156, 39, 176, 0.15)"
+        stroke="none"
+        pointerEvents="none"
+      />
+    ) : null
+
+    return (
+      <g>
+        {polygonFill}
+        {edges}
+
+        {/* Radius hint circle */}
+        <circle
+          cx={unitsToPixels(circleCenter[0])}
+          cy={unitsToPixels(circleCenter[1])}
+          r={unitsToPixels(radius)}
+          fill="none"
+          stroke="#9c27b0"
+          strokeWidth={1}
+          strokeDasharray="4,4"
+          opacity={0.55}
+          pointerEvents="none"
+        />
+
+        {/* Center marker */}
+        <circle
+          cx={unitsToPixels(circleCenter[0])}
+          cy={unitsToPixels(circleCenter[1])}
+          r={10}
+          fill="#9c27b0"
+          stroke="#fff"
+          strokeWidth={2}
+          opacity={0.95}
+          pointerEvents="none"
+        />
+
+        {/* Radius point marker */}
+        <circle
+          cx={unitsToPixels(circleRadiusPoint[0])}
+          cy={unitsToPixels(circleRadiusPoint[1])}
+          r={6}
+          fill="#ce93d8"
+          stroke="#fff"
+          strokeWidth={2}
+          opacity={0.95}
+          pointerEvents="none"
+        />
+      </g>
+    )
+  }
+
+  if (points.length === 0) return null
 
   // Draw lines between points
   const lines = []

@@ -43,6 +43,8 @@ export interface CanvasRendererProps {
   renderGrid?: CanvasLayerRender
   renderCanvases?: CanvasLayerRender
   renderDrawnObjects?: CanvasLayerRender
+  /** Polygon name labels only; render late so labels stack above links/joints/trajectories */
+  renderDrawnObjectLabels?: CanvasLayerRender
   renderLinks?: CanvasLayerRender
   renderPreviewLine?: CanvasLayerRender
   renderPolygonPreview?: CanvasLayerRender
@@ -65,8 +67,9 @@ export interface CanvasRendererProps {
 
 /**
  * Renders the SVG canvas and invokes each layer render function in order.
- * Layer order (back to front): grid → drawn objects → links → previews →
- * target paths → trajectories → joints → selection box → measurements.
+ * Layer order (back to front): grid → drawn object paths → links → previews →
+ * target paths → trajectories → joints → selection box → measurements →
+ * drawn object name labels (always on top of mechanism graphics).
  */
 const DEFAULT_VIEWPORT: ViewportTransform = { zoom: 1, panX: 0, panY: 0 }
 
@@ -85,6 +88,7 @@ export const CanvasRenderer: React.FC<CanvasRendererProps> = ({
   renderGrid,
   renderCanvases,
   renderDrawnObjects,
+  renderDrawnObjectLabels,
   renderLinks,
   renderPreviewLine,
   renderPolygonPreview,
@@ -166,6 +170,9 @@ export const CanvasRenderer: React.FC<CanvasRendererProps> = ({
       {/* Measurement markers and line */}
       {renderMeasurementMarkers?.()}
       {renderMeasurementLine?.()}
+
+      {/* Form name labels — after links/joints/trajectories so they are always readable */}
+      {renderDrawnObjectLabels?.()}
       </g>
     </svg>
   )

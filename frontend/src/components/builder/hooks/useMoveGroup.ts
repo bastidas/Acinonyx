@@ -8,6 +8,7 @@
 
 import { useCallback } from 'react'
 import type { MoveGroupState } from '../../BuilderTools'
+import { isPointInPolygon } from '../../BuilderTools'
 
 export type CanvasPoint = [number, number]
 
@@ -29,7 +30,15 @@ export interface UseMoveGroupParams {
   ) => { name: string; distance: number } | null
   /** Returns [connects0, connects1] for a link, or null. Used to check if link endpoints are in move group. */
   getLinkConnects: (linkName: string) => [string, string] | null
-  drawnObjects: { objects: Array<{ id: string; points: CanvasPoint[]; mergedLinkName?: string }> }
+  drawnObjects: {
+    objects: Array<{
+      id: string
+      points: CanvasPoint[]
+      mergedLinkName?: string
+      mergedLinkOriginalStart?: CanvasPoint
+      mergedLinkOriginalEnd?: CanvasPoint
+    }>
+  }
   setDrawnObjects: React.Dispatch<React.SetStateAction<{ objects: unknown[]; selectedIds: string[] }>>
   translateGroupRigid: (
     jointNames: string[],
@@ -44,6 +53,8 @@ export interface UseMoveGroupParams {
   resetAnimationToFirstFrame?: () => void
   /** After drag end, call to refresh polygon contained_links_valid (find-associated-polygons). */
   apiFindAssociatedPolygons?: () => Promise<unknown>
+  /** After group drag ends: e.g. validate form–link associations from document positions. */
+  onAfterMoveGroupDragEnd?: () => void
 }
 
 export interface UseMoveGroupReturn {
@@ -77,7 +88,8 @@ export function useMoveGroup(params: UseMoveGroupParams): UseMoveGroupReturn {
     showStatus,
     triggerMechanismChange,
     resetAnimationToFirstFrame,
-    apiFindAssociatedPolygons
+    apiFindAssociatedPolygons,
+    onAfterMoveGroupDragEnd
   } = params
 
   const handleMouseDown = useCallback(
@@ -138,6 +150,9 @@ export function useMoveGroup(params: UseMoveGroupParams): UseMoveGroupReturn {
           | { id: string; points: CanvasPoint[] }
           | undefined
         if (!obj) return false
+        if (obj.points.length >= 3) {
+          return isPointInPolygon(clickPoint, obj.points)
+        }
         const minX = Math.min(...obj.points.map(p => p[0]))
         const maxX = Math.max(...obj.points.map(p => p[0]))
         const minY = Math.min(...obj.points.map(p => p[1]))
@@ -202,9 +217,20 @@ export function useMoveGroup(params: UseMoveGroupParams): UseMoveGroupReturn {
       if (moveGroupState.drawnObjectIds.length > 0) {
         setDrawnObjects(prev => ({
           ...prev,
-          objects: (prev.objects as Array<{ id: string; points: CanvasPoint[]; mergedLinkName?: string }>).map(obj => {
+          objects: (prev.objects as Array<{
+            id: string
+            points: CanvasPoint[]
+            mergedLinkName?: string
+            mergedLinkOriginalStart?: CanvasPoint
+            mergedLinkOriginalEnd?: CanvasPoint
+          }>).map(obj => {
             if (!moveGroupState.drawnObjectIds.includes(obj.id)) return obj
-            if (obj.mergedLinkName) return obj
+            const canUseLinkTransform =
+              obj.mergedLinkName != null &&
+              obj.mergedLinkOriginalStart != null &&
+              obj.mergedLinkOriginalEnd != null &&
+              getLinkConnects(obj.mergedLinkName) != null
+            if (canUseLinkTransform) return obj
             const originalPoints = moveGroupState.drawnObjectStartPositions[obj.id]
             if (originalPoints) {
               return {
@@ -229,6 +255,7 @@ export function useMoveGroup(params: UseMoveGroupParams): UseMoveGroupReturn {
       moveGroupState.drawnObjectIds,
       moveGroupState.drawnObjectStartPositions,
       translateGroupRigid,
+      getLinkConnects,
       setDrawnObjects,
       showStatus
     ]
@@ -262,7 +289,10 @@ export function useMoveGroup(params: UseMoveGroupParams): UseMoveGroupReturn {
         )
       }))
       triggerMechanismChange()
-      setTimeout(() => apiFindAssociatedPolygons?.(), 0)
+      setTimeout(() => {
+        onAfterMoveGroupDragEnd?.()
+        void apiFindAssociatedPolygons?.()
+      }, 0)
       return true
     },
     [
@@ -274,7 +304,8 @@ export function useMoveGroup(params: UseMoveGroupParams): UseMoveGroupReturn {
       drawnObjects.objects,
       showStatus,
       triggerMechanismChange,
-      apiFindAssociatedPolygons
+      apiFindAssociatedPolygons,
+      onAfterMoveGroupDragEnd
     ]
   )
 

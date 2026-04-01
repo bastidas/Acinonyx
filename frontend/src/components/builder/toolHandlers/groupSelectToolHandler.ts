@@ -6,8 +6,15 @@
  * BuilderTab handleCanvasMouseDown / MouseMove / MouseUp.
  */
 
-import type { ToolHandler, ToolContext, CanvasPoint } from './types'
+import type { ToolHandler } from './types'
+import type { LinkMetaData } from '../../BuilderTools'
 import { initialGroupSelectionState } from '../../BuilderTools'
+import {
+  boxFromCorners,
+  isFormFullyInsideGroupSelectBox,
+  selectionIsExactlyOneMechanism,
+  polygonIdsTouchingMechanismLinks
+} from '../helpers/formMechanismHelpers'
 
 export const groupSelectToolHandler: ToolHandler = {
   onMouseDown(_event, point, context) {
@@ -61,27 +68,46 @@ export const groupSelectToolHandler: ToolHandler = {
     }
     const selected = context.findElementsInBox(box, jointsWithPositions, linksWithPositions)
 
-    const minX = Math.min(box.x1, box.x2)
-    const maxX = Math.max(box.x1, box.x2)
-    const minY = Math.min(box.y1, box.y2)
-    const maxY = Math.max(box.y1, box.y2)
-    const drawnObjectsInBox = context.drawnObjects.objects
-      .filter(obj => obj.points.some(p => p[0] >= minX && p[0] <= maxX && p[1] >= minY && p[1] <= maxY))
+    const aabb = boxFromCorners(box.x1, box.y1, box.x2, box.y2)
+    const strictDrawnObjectIds = context.drawnObjects.objects
+      .filter(obj => obj.type === 'polygon' || obj.type == null)
+      .filter(obj =>
+        isFormFullyInsideGroupSelectBox(
+          {
+            points: obj.points as [number, number][],
+            contained_links: obj.contained_links,
+            mergedLinkName: obj.mergedLinkName
+          },
+          aabb,
+          j => context.getJointPosition(j),
+          context.linksMeta
+        )
+      )
       .map(obj => obj.id)
 
-    const mergedDrawnObjects = context.drawnObjects.objects
-      .filter(obj => obj.mergedLinkName && selected.links.includes(obj.mergedLinkName))
-      .map(obj => obj.id)
+    const linksForMechanismCheck = context.linksMeta as Record<string, LinkMetaData>
+    const isFullMechanism = selectionIsExactlyOneMechanism(
+      selected.joints,
+      selected.links,
+      linksForMechanismCheck
+    )
 
-    const allSelectedDrawnObjects = [...new Set([...drawnObjectsInBox, ...mergedDrawnObjects])]
+    const drawnObjectIds = isFullMechanism
+      ? polygonIdsTouchingMechanismLinks(context.drawnObjects.objects, selected.links)
+      : strictDrawnObjectIds
 
     context.setSelectedJoints(selected.joints)
     context.setSelectedLinks(selected.links)
-    context.setDrawnObjects(prev => ({ ...prev, selectedIds: allSelectedDrawnObjects }))
+    context.setDrawnObjects(prev => ({ ...prev, selectedIds: drawnObjectIds }))
     context.setGroupSelectionState(initialGroupSelectionState)
 
-    if (selected.joints.length > 0 || selected.links.length > 0 || allSelectedDrawnObjects.length > 0) {
-      context.enterMoveGroupMode(selected.joints, allSelectedDrawnObjects)
+    if (selected.joints.length > 0 || selected.links.length > 0 || drawnObjectIds.length > 0) {
+      if (isFullMechanism) {
+        context.showStatus('Full mechanism — all linked forms included', 'info', 2500)
+      } else if (drawnObjectIds.length > 0) {
+        context.showStatus('Strict form inclusion (vertices / link endpoints in box)', 'info', 2500)
+      }
+      context.enterMoveGroupMode(selected.joints, drawnObjectIds)
     } else {
       context.showStatus('No elements selected', 'info', 1500)
     }

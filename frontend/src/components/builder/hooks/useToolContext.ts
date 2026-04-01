@@ -21,6 +21,7 @@ type BuildToolContextParams = Omit<
   | 'mergeThreshold'
   | 'getLinkMeta'
   | 'mergeLinkThreshold'
+  | 'linksMeta'
   | 'setDrawnObjects'
   | 'setTargetPaths'
   | 'createDrawnObject'
@@ -54,6 +55,7 @@ function buildToolContext(params: BuildToolContextParams): ToolContext {
   } = params
   return {
     ...rest,
+    linksMeta: linkMeta,
     canvasRef: cr as RefObject<SVGSVGElement | HTMLDivElement | null>,
     pixelsToUnits: pu,
     getPointFromEvent: (event: React.MouseEvent<SVGSVGElement>) => {

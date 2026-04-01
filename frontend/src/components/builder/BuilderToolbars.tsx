@@ -6,16 +6,25 @@
  */
 
 import React from 'react'
-import { DraggableToolbar, type ToolbarPosition, type ToolbarConfig } from '../BuilderTools'
+import {
+  DraggableToolbar,
+  type ToolbarPosition,
+  type ToolbarConfig,
+  type ToolbarDimensions,
+  type ToolbarViewportBounds
+} from '../BuilderTools'
 
 export interface BuilderToolbarsProps {
   openToolbars: Set<string>
   toolbarConfigs: ToolbarConfig[]
   getToolbarPosition: (id: string) => ToolbarPosition
-  getToolbarDimensions: (id: string) => { minWidth: number; maxHeight: number }
+  getToolbarHeight: (id: string) => number | undefined
+  getToolbarDimensions: (id: string) => ToolbarDimensions
   onToggleToolbar: (id: string) => void
   onPositionChange: (id: string, position: ToolbarPosition) => void
+  onHeightChange: (id: string, height: number) => void
   renderToolbarContent: (id: string) => React.ReactNode
+  viewportBounds: ToolbarViewportBounds
   onInteract?: () => void
 }
 
@@ -23,10 +32,13 @@ export function BuilderToolbars({
   openToolbars,
   toolbarConfigs,
   getToolbarPosition,
+  getToolbarHeight,
   getToolbarDimensions,
   onToggleToolbar,
   onPositionChange,
+  onHeightChange,
   renderToolbarContent,
+  viewportBounds,
   onInteract
 }: BuilderToolbarsProps): JSX.Element {
   return (
@@ -42,11 +54,16 @@ export function BuilderToolbars({
             title={config.title}
             icon={config.icon}
             initialPosition={getToolbarPosition(toolbarId)}
+            initialHeight={getToolbarHeight(toolbarId)}
             onClose={() => onToggleToolbar(toolbarId)}
             onPositionChange={onPositionChange}
+            onHeightChange={onHeightChange}
             onInteract={onInteract}
             minWidth={dimensions.minWidth}
+            minHeight={dimensions.minHeight}
+            defaultHeight={dimensions.defaultHeight}
             maxHeight={dimensions.maxHeight}
+            viewportBounds={viewportBounds}
           >
             {renderToolbarContent(toolbarId)}
           </DraggableToolbar>

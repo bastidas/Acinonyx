@@ -113,6 +113,7 @@ export {
   renderTrajectories,
   DrawnObjectsRenderer,
   renderDrawnObjects,
+  renderDrawnObjectLabels,
   TargetPathsRenderer,
   renderTargetPaths,
   // Previews

@@ -50,7 +50,11 @@ export {
   renderPathPreview
 } from './PreviewsRenderer'
 
-export { DrawnObjectsRenderer, renderDrawnObjects } from './DrawnObjectsRenderer'
+export {
+  DrawnObjectsRenderer,
+  renderDrawnObjects,
+  renderDrawnObjectLabels
+} from './DrawnObjectsRenderer'
 export { CanvasImagesRenderer, renderCanvasImages } from './CanvasImagesRenderer'
 export { TargetPathsRenderer, renderTargetPaths } from './TargetPathsRenderer'
 

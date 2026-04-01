@@ -260,7 +260,14 @@ export const MoreToolbar: React.FC<MoreToolbarProps> = ({
             label="Filename"
             value={saveAsName}
             onChange={e => setSaveAsName(e.target.value)}
-            onKeyDown={e => e.key === 'Enter' && handleSaveAsConfirm()}
+            inputProps={{
+              onKeyDown: (e: React.KeyboardEvent<HTMLInputElement>) => {
+                if (e.key !== 'Enter') return
+                e.preventDefault()
+                e.stopPropagation()
+                handleSaveAsConfirm()
+              }
+            }}
             size="small"
             sx={{ mt: 1 }}
             helperText=".json will be added if omitted"

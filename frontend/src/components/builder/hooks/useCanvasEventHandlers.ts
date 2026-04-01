@@ -12,6 +12,7 @@ import type { ToolContext } from '../toolHandlers/types'
 import type { ToolMode, DrawnObjectsState, StatusType } from '../../BuilderTools'
 import type { LinkMetaData } from '../../BuilderTools'
 import { findConnectedMechanism, JOINT_SNAP_THRESHOLD } from '../../BuilderTools'
+import { polygonIdsTouchingMechanismLinks } from '../helpers/formMechanismHelpers'
 import type { RefObject } from 'react'
 
 export interface UseCanvasEventHandlersParams {
@@ -58,7 +59,7 @@ export interface UseCanvasEventHandlersParams {
     }>,
     threshold?: number
   ) => { name: string; distance: number } | null
-  drawnObjects: { objects: Array<{ id: string; mergedLinkName?: string }> }
+  drawnObjects: { objects: Array<{ id: string; mergedLinkName?: string; contained_links?: string[] }> }
   setDrawnObjects: React.Dispatch<React.SetStateAction<DrawnObjectsState>>
   setSelectedJoints: (value: string[] | ((prev: string[]) => string[])) => void
   setSelectedLinks: (value: string[] | ((prev: string[]) => string[])) => void
@@ -193,30 +194,26 @@ export function useCanvasEventHandlers(
       const nearestJoint = findNearestJoint(clickPoint, jointsWithPositions)
       const linkThreshold = toolMode === 'merge' ? 8.0 : JOINT_SNAP_THRESHOLD
       const nearestLink = findNearestLink(clickPoint, linksWithPositions, linkThreshold)
+      setDrawnObjects(prev => ({ ...prev, selectedIds: [] }))
       const handler = getToolHandler(toolMode)
       if (handler.onClick?.(event, clickPoint, toolContext)) return
       if (toolMode === 'mechanism_select') {
-        const findMergedDrawnObjects = (linkNames: string[]): string[] => {
-          return drawnObjects.objects
-            .filter(obj => obj.mergedLinkName && linkNames.includes(obj.mergedLinkName))
-            .map(obj => obj.id)
-        }
         if (nearestJoint) {
           const mechanism = findConnectedMechanism(nearestJoint.name, pylinkDoc.meta.links as Record<string, LinkMetaData>)
           setSelectedJoints(mechanism.joints)
           setSelectedLinks(mechanism.links)
-          const mergedDrawnObjects = findMergedDrawnObjects(mechanism.links)
-          setDrawnObjects(prev => ({ ...prev, selectedIds: mergedDrawnObjects }))
-          enterMoveGroupMode(mechanism.joints, mergedDrawnObjects)
+          const linkedPolygons = polygonIdsTouchingMechanismLinks(drawnObjects.objects, mechanism.links)
+          setDrawnObjects(prev => ({ ...prev, selectedIds: linkedPolygons }))
+          enterMoveGroupMode(mechanism.joints, linkedPolygons)
         } else if (nearestLink) {
           const linkMeta = pylinkDoc.meta.links[nearestLink.name]
           if (linkMeta && linkMeta.connects.length > 0) {
             const mechanism = findConnectedMechanism(linkMeta.connects[0], pylinkDoc.meta.links as Record<string, LinkMetaData>)
             setSelectedJoints(mechanism.joints)
             setSelectedLinks(mechanism.links)
-            const mergedDrawnObjects = findMergedDrawnObjects(mechanism.links)
-            setDrawnObjects(prev => ({ ...prev, selectedIds: mergedDrawnObjects }))
-            enterMoveGroupMode(mechanism.joints, mergedDrawnObjects)
+            const linkedPolygons = polygonIdsTouchingMechanismLinks(drawnObjects.objects, mechanism.links)
+            setDrawnObjects(prev => ({ ...prev, selectedIds: linkedPolygons }))
+            enterMoveGroupMode(mechanism.joints, linkedPolygons)
           }
         } else {
           setSelectedJoints([])

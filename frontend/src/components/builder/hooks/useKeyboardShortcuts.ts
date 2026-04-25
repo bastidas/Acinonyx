@@ -6,7 +6,7 @@
  */
 
 import { useEffect, useCallback } from 'react'
-import { ToolMode, ToolInfo as Tool } from '../../BuilderTools'
+import { ToolMode, ToolInfo as Tool, VIABLE_MECHANISM_SEARCH_TOOL_ID } from '../../BuilderTools'
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // TYPES
@@ -41,6 +41,8 @@ export interface KeyboardShortcutsConfig {
     handleDeleteSelected: () => void
     setToolMode: (mode: ToolMode) => void
     showStatus: (message: string, type: 'info' | 'success' | 'error' | 'action', duration?: number) => void
+    /** One-shot actions (e.g. Find Viable Move) */
+    runViableMechanismSearch?: () => void | Promise<void>
   }
 
   /** State setters for resetting modes when switching tools */
@@ -67,7 +69,7 @@ export interface KeyboardShortcutsConfig {
  * - Enter: Complete path drawing (when in path draw mode)
  * - Space: Play/pause animation, or run simulation if no trajectory
  * - Delete/Backspace/X: Delete selected items
- * - Tool shortcuts: S (select), L (link), G (group), P (polygon), M (measure), etc.
+ * - Tool shortcuts: S (select), C (link), G (group), P (polygon), V (find viable move), etc.
  */
 export function useKeyboardShortcuts(config: KeyboardShortcutsConfig) {
   const { tools, state, actions, resetters } = config
@@ -148,7 +150,16 @@ export function useKeyboardShortcuts(config: KeyboardShortcutsConfig) {
     const key = event.key.toUpperCase()
     const tool = tools.find(t => t.shortcut === key)
 
-    if (tool) {
+    if (tool?.isAction && tool.id === VIABLE_MECHANISM_SEARCH_TOOL_ID) {
+      if (state.isAnimating) {
+        actions.pauseAnimation()
+      }
+      void actions.runViableMechanismSearch?.()
+      event.preventDefault()
+      return
+    }
+
+    if (tool && !tool.isAction) {
       // Auto-pause animation when switching tools
       if (state.isAnimating) {
         actions.pauseAnimation()
@@ -177,7 +188,7 @@ export function useKeyboardShortcuts(config: KeyboardShortcutsConfig) {
         resetters.resetExploreTrajectories()
       }
 
-      actions.setToolMode(tool.id)
+      actions.setToolMode(tool.id as import('../../BuilderTools').ToolMode)
 
       // Show appropriate message for special modes
       if (tool.id === 'merge') {

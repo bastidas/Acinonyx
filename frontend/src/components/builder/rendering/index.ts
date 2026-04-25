@@ -22,7 +22,8 @@ export {
   hasMovement,
   isValidPosition,
   generatePathData,
-  filterTrajectoriesForRendering
+  filterTrajectoriesForRendering,
+  getJointNamesForTrajectoryPathDisplay
 } from './utils'
 export type { HighlightStyle, TrajectoryDataForFilter, JointMetaForTrajectory } from './utils'
 

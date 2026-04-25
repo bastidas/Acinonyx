@@ -2,7 +2,7 @@ import React, { useState, useRef, useCallback, useEffect } from 'react'
 import {
   Box, Typography, Paper, IconButton, Modal, TextField,
   FormControl, InputLabel, Select, MenuItem, Button, Chip, Divider,
-  FormControlLabel, Switch, Tooltip, Popover
+  FormControlLabel, Switch, Tooltip, Popover, Snackbar, Alert
 } from '@mui/material'
 import CloseIcon from '@mui/icons-material/Close'
 import TokenIcon from '@mui/icons-material/Token'
@@ -17,6 +17,7 @@ import HighlightOffIcon from '@mui/icons-material/HighlightOff'
 import ControlCameraIcon from '@mui/icons-material/ControlCamera'
 import AddIcon from '@mui/icons-material/Add'
 import RouteIcon from '@mui/icons-material/Route'
+import SavedSearchIcon from '@mui/icons-material/SavedSearch'
 import { graphColors, statusColors, colors, jointColors } from '../theme'
 
 /** MUI / glyph size in the floating-toolbar toggle row */
@@ -490,12 +491,16 @@ export type ToolMode =
   | 'draw_path'
   | 'explore_node_trajectories'
 
+export const VIABLE_MECHANISM_SEARCH_TOOL_ID = 'viable_mechanism_search'
+export type ToolActionId = typeof VIABLE_MECHANISM_SEARCH_TOOL_ID
+
 export interface ToolInfo {
-  id: ToolMode
+  id: ToolMode | ToolActionId
   label: string
   icon: React.ReactNode
   description: string
   shortcut?: string
+  isAction?: boolean
 }
 
 const toolsGridGlyph = (glyph: string) => (
@@ -587,6 +592,14 @@ export const TOOLS: ToolInfo[] = [
     icon: <WifiTetheringIcon sx={{ fontSize: TOOLS_GRID_ICON_PX }} />,
     description: 'Click a non-fixed joint to preview valid trajectories in a circle around it. Green = valid, red = invalid.',
     shortcut: 'Y'
+  },
+  {
+    id: VIABLE_MECHANISM_SEARCH_TOOL_ID,
+    label: 'Find Viable Move',
+    icon: <SavedSearchIcon sx={{ fontSize: TOOLS_GRID_ICON_PX }} />,
+    description: 'Try candidate node moves from inner to outer radius and apply the first valid mechanism.',
+    shortcut: 'V',
+    isAction: true
   }
   // TODO: Re-enable Add Joint feature later
   // {
@@ -897,6 +910,8 @@ export const initialDrawnObjectsState: DrawnObjectsState = {
 // MOVE MODE STATE - For moving groups of selected elements
 // ═══════════════════════════════════════════════════════════════════════════════
 
+export type MoveGroupDragMode = 'translate' | 'rotate'
+
 export interface MoveGroupState {
   isActive: boolean
   isDragging: boolean
@@ -904,7 +919,12 @@ export interface MoveGroupState {
   drawnObjectIds: string[]                      // DrawnObject IDs being moved
   startPositions: Record<string, [number, number]>  // Original positions of joints
   drawnObjectStartPositions: Record<string, [number, number][]>  // Original positions of drawn object points
-  dragStartPoint: [number, number] | null       // Where the drag started
+  dragStartPoint: [number, number] | null       // Where the drag started (translate) or rotate anchor (same point)
+  dragMode: MoveGroupDragMode
+  /** Centroid (or combined joint+polygon centroid) when dragMode is rotate */
+  rotatePivot: [number, number] | null
+  /** atan2(mouse - pivot) at mousedown for rotate drags */
+  rotateRefAngle: number | null
 }
 
 export const initialMoveGroupState: MoveGroupState = {
@@ -914,7 +934,10 @@ export const initialMoveGroupState: MoveGroupState = {
   drawnObjectIds: [],
   startPositions: {},
   drawnObjectStartPositions: {},
-  dragStartPoint: null
+  dragStartPoint: null,
+  dragMode: 'translate',
+  rotatePivot: null,
+  rotateRefAngle: null
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -1417,6 +1440,8 @@ interface FooterToolbarProps {
   pathDrawState?: PathDrawState
   canvasWidth?: number
   onCancelAction?: () => void
+  /** Clears the current status (e.g. Snackbar dismiss / clickaway) */
+  onDismissStatus?: () => void
   darkMode?: boolean
 }
 
@@ -1486,7 +1511,7 @@ const getToolHint = (
       }
       return 'Click and drag to select multiple elements'
     case 'mechanism_select':
-      return 'Click any element to select its connected mechanism'
+      return 'Click any element to select its connected mechanism • Drag to move • Alt+drag to rotate'
     case 'draw_link':
       if (linkCreationState.isDrawing) {
         return 'Click second point to complete link'
@@ -1534,6 +1559,8 @@ const getToolHint = (
         return `${pointCount} point(s) • Click to add • Double-click/Enter to finish`
       }
       return 'Click to start drawing target path'
+    case 'explore_node_trajectories':
+      return 'Click a joint to sample positions in a circle • Click a sample to apply, or another joint for combinations'
     default:
       return null
   }
@@ -1558,6 +1585,7 @@ export const FooterToolbar: React.FC<FooterToolbarProps> = ({
   pathDrawState,
   canvasWidth,
   onCancelAction,
+  onDismissStatus,
   darkMode = false
 }) => {
   const [historyOpen, setHistoryOpen] = React.useState(false)
@@ -1571,6 +1599,8 @@ export const FooterToolbar: React.FC<FooterToolbarProps> = ({
     polygonDrawState.circleRadius != null
       ? ` • r=${polygonDrawState.circleRadius.toFixed(2)}`
       : ''
+  const statusIsElevated =
+    statusMessage?.type === 'warning' || statusMessage?.type === 'error'
   const hasIssues = statusHistory.length > 0
   const lastIssueType = hasIssues ? statusHistory[0].type : null
   const issueColor = lastIssueType === 'error'
@@ -1656,8 +1686,8 @@ export const FooterToolbar: React.FC<FooterToolbarProps> = ({
         )}
       </Box>
 
-      {/* CENTER: Status message or tool hint */}
-      {statusMessage ? (
+      {/* CENTER: Status message or tool hint (warnings/errors use Snackbar above footer) */}
+      {statusMessage && !statusIsElevated ? (
         <Box
           sx={{
             display: 'flex',
@@ -1890,6 +1920,42 @@ export const FooterToolbar: React.FC<FooterToolbarProps> = ({
           </IconButton>
         </Tooltip>
       </Box>
+
+      {/* Warnings / errors: floating strip above the footer (polygon conflicts, API errors, etc.) */}
+      <Snackbar
+        open={Boolean(statusMessage && statusIsElevated)}
+        anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
+        onClose={(_, reason) => {
+          if (reason === 'clickaway' || reason === 'escapeKeyDown') {
+            onDismissStatus?.()
+          }
+        }}
+        sx={{
+          position: 'fixed',
+          left: '50%',
+          transform: 'translateX(-50%)',
+          bottom: 56,
+          maxWidth: 'min(640px, calc(100vw - 32px))',
+          width: '100%',
+          zIndex: 9999,
+          pointerEvents: 'auto'
+        }}
+      >
+        <Alert
+          severity={statusMessage?.type === 'error' ? 'error' : 'warning'}
+          variant="filled"
+          onClose={onDismissStatus ? () => onDismissStatus() : undefined}
+          sx={{
+            width: '100%',
+            fontSize: '0.85rem',
+            whiteSpace: 'pre-wrap',
+            wordBreak: 'break-word',
+            boxShadow: 3
+          }}
+        >
+          {statusMessage?.text ?? ''}
+        </Alert>
+      </Snackbar>
     </Box>
   )
 }
@@ -2146,6 +2212,7 @@ export interface JointData {
   distance?: number         // For Crank/Revolute
   distance2?: number        // For Revolute (second distance)
   angle?: number            // For Crank
+  reverseDirection?: boolean
   // Computed/display data
   mechanismGroup?: string
   connectedLinks?: string[]
@@ -2162,6 +2229,7 @@ export interface JointEditModalProps {
   onTypeChange: (jointName: string, newType: string) => void
   onMetaValueChange?: (jointName: string, metaValue: string) => void
   onShowPathChange?: (jointName: string, showPath: boolean) => void
+  onReverseDirectionChange?: (jointName: string, reverseDirection: boolean) => void
   darkMode?: boolean
 }
 
@@ -2174,6 +2242,7 @@ export const JointEditModal: React.FC<JointEditModalProps> = ({
   onTypeChange,
   onMetaValueChange,
   onShowPathChange,
+  onReverseDirectionChange,
   darkMode = false
 }) => {
   const [editedName, setEditedName] = useState('')
@@ -2382,6 +2451,53 @@ export const JointEditModal: React.FC<JointEditModalProps> = ({
                   fontStyle: 'italic'
                 }}>
                   Note: The path visibility button (◉/○) in the Animate bar at the bottom controls global visibility for all paths
+                </Typography>
+              </Box>
+            )}
+
+            {/* Per-crank rotation direction toggle */}
+            {jointData.type === 'Crank' && onReverseDirectionChange && (
+              <Box sx={{
+                p: 1.5,
+                mt: 2,
+                bgcolor: darkMode ? '#3a3a3a' : '#f5f5f5',
+                borderRadius: 1
+              }}>
+                <Box sx={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between'
+                }}>
+                  <Typography variant="body2" sx={{ fontSize: '0.8rem' }}>
+                    Reverse Direction
+                  </Typography>
+                  <Button
+                    size="small"
+                    variant={jointData.reverseDirection ? 'contained' : 'outlined'}
+                    onClick={() => onReverseDirectionChange(jointData.name, !jointData.reverseDirection)}
+                    sx={{
+                      minWidth: 68,
+                      fontSize: '0.7rem',
+                      textTransform: 'none',
+                      bgcolor: jointData.reverseDirection ? colors.primary : 'transparent',
+                      borderColor: jointData.reverseDirection ? colors.primary : '#999',
+                      color: jointData.reverseDirection ? '#fff' : (darkMode ? '#ccc' : '#666'),
+                      '&:hover': {
+                        bgcolor: jointData.reverseDirection ? '#e67300' : (darkMode ? '#444' : '#eee')
+                      }
+                    }}
+                  >
+                    {jointData.reverseDirection ? 'Reversed' : 'Normal'}
+                  </Button>
+                </Box>
+                <Typography variant="caption" sx={{
+                  display: 'block',
+                  mt: 0.75,
+                  fontSize: '0.65rem',
+                  color: darkMode ? '#777' : '#888',
+                  fontStyle: 'italic'
+                }}>
+                  Changes only this crank&apos;s rotation direction during simulation.
                 </Typography>
               </Box>
             )}

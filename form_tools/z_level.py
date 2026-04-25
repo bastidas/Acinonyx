@@ -20,11 +20,19 @@ are preferences only, expressed as weighted cost terms:
 - **Role-based:** Prefer crank-incident (root) entity at a given z (default 1).
 - **Sandwich bodies:** Prefer minimum |Δz| between two bodies sharing a connector; when a body
   has several connectors, nudge toward co-endpoints already assigned on other connectors.
+
+When **weight_prefer_sandwich** exceeds **weight_reduce_height** by ``_SANDWICH_DOMINATES_HEIGHT_RATIO``
+(default 25×), sandwich layering is allowed to override tight vertical stacking: co-flank
+bodies pay the span < 2 penalty again (except when two bodies are hard-pinned to the same z),
+and bridge-adjacent connector entities that share a common sandwich body are discouraged from
+choosing the same z. Integer z-levels still cannot satisfy every strict “open interval between”
+layout (e.g. a body z strictly between two connector z values needs ``max(z_conn) - min(z_conn) ≥ 2``).
 """
 from __future__ import annotations
 
 import heapq
 import json
+from collections import defaultdict
 from dataclasses import dataclass
 from dataclasses import field
 from pathlib import Path
@@ -80,6 +88,10 @@ DEFAULT_Z_LEVEL_CONFIG = ZLevelHeuristicConfig()
 # Penalty scale for sandwich body pairs with |Δz| > 2 (room for connector is already satisfied).
 # Full weight_prefer_sandwich would overpower reduce_deltas and push bodies to extreme z (e.g. z=5 vs z=0).
 _SANDWICH_EXCESS_BODY_SPAN_FRAC = 0.35
+
+# If sandwich weight exceeds height weight by this factor, sandwich layering heuristics
+# (separating co-flank bodies) should win over stacking / span minimization.
+_SANDWICH_DOMINATES_HEIGHT_RATIO = 25.0
 
 # When a sandwich partner is not yet assigned, nudge z toward that partner's *other* assigned
 # sandwich endpoint (same partner on a different connector) so multi-connector bodies can pick
@@ -658,17 +670,19 @@ def _candidate_z_levels(
         candidates.append(z)
         return len(candidates) >= max_candidates
 
-    # First: z adjacent to structural neighbors (prefer N±1 next to assigned)
+    # First: z adjacent to each assigned structural neighbor (both zn−1 and zn+1).
     for n in structural_neighbors.get(eid, set()):
         if n not in assignment:
             continue
         zn = assignment[n]
-        if add(zn - 1) or add(zn + 1):
+        add(zn - 1)
+        add(zn + 1)
+        if len(candidates) >= max_candidates:
             return candidates
 
     # Then: fill from palette
     for z in _z_level_palette(min_z=min_z_for_palette):
-        if add(z):
+        if add(z) and len(candidates) >= max_candidates:
             break
 
     return candidates
@@ -741,6 +755,69 @@ def _assign_z_levels_generic(
             sandwich_body_neighbors.setdefault(a, set()).add(b)
             sandwich_body_neighbors.setdefault(b, set()).add(a)
 
+    def _sandwich_dominates_height() -> bool:
+        h = max(float(cfg.weight_reduce_height), 1e-12)
+        return float(cfg.weight_prefer_sandwich) > h * _SANDWICH_DOMINATES_HEIGHT_RATIO
+
+    _max_cand = 14 if _sandwich_dominates_height() else 5
+
+    # Connectors that share a common sandwich body (e.g. link_form_6 and link_form_28 both
+    # touch rigid_group_0): when sandwich >> height, discourage giving them the same z so a
+    # middle draw layer can exist between them.
+    _body_connectors: dict[str, list[str]] = defaultdict(list)
+    for conn_eid, pairs in connector_pairs.items():
+        ends: set[str] = set()
+        for a, b in pairs:
+            ends.add(a)
+            ends.add(b)
+        for body in ends:
+            _body_connectors[body].append(conn_eid)
+    _bridge_connector_peers: dict[str, set[str]] = defaultdict(set)
+    for _body, _cs in _body_connectors.items():
+        _uniq = list(dict.fromkeys(_cs))
+        if len(_uniq) < 2:
+            continue
+        for _c in _uniq:
+            for _d in _uniq:
+                if _c != _d:
+                    _bridge_connector_peers[_c].add(_d)
+
+    # --- Breadcrumb: degenerate sandwich + hard connector (2026-04) -----------------
+    # **What broke:** Single-link polygon entities (connectors) use
+    # `hard_connector_between_pairs` so their z must lie strictly between the two
+    # flanking body entities' z values (see `_violates_hard_connector_between`). When
+    # both flanks were hard-pinned to the *same* z, lo == hi: no integer exists
+    # strictly between them, yet `z < lo or z > hi` rejected every z. Symptom: UI
+    # "Z-level assignment impossible..." from `_assign_z_levels_generic` returning [].
+    # Example graph: user/graphs/spine_bugged.json — pin rigid_group_0 and
+    # link_form_12 both @ z=3; connector link_form_6 could not be placed.
+    #
+    # **What we fixed:** If lo == hi, skip the strict-between check; conflict edges
+    # still forbid illegal same-z on adjacent links. Heuristic sandwich *cost* may
+    # still prefer separation; this only removes an impossible hard constraint.
+    #
+    # **Debug hypotheses (same incident; verdicts):**
+    # - (A) Trajectory intersection forced link_12 vs triangle links → **rejected**
+    #   (no such pairs in link conflict graph for that case + backend sim).
+    # - (B) Wrong entity_conflict between the two pinned polygons → **rejected**.
+    # - (C) `_validate_fixed_entity_z_levels` same-z clash → **not triggered** (failure
+    #   was empty assignments, not validate).
+    # - (D) Frontend `trajectories` vs backend sim mismatch → **possible in UI** for
+    #   other reports; **not** root cause for spine_bugged offline repro.
+    # - (E) **Root cause:** degenerate hard-connector interval (lo == hi) above.
+    # **Related (stack height):** `total_cost` sandwich-body term penalized |z−z_other|<2
+    # between entities that flank the same connector. When both flanks are already the
+    # same z (e.g. pins), trying z=z_other for a third entity got a huge penalty and
+    # beat `weight_reduce_height` (see sandwich bodies: `span == 0` skip).
+    # **Sandwich vs height dominance:** when `weight_prefer_sandwich` exceeds
+    # `weight_reduce_height` by `_SANDWICH_DOMINATES_HEIGHT_RATIO`, that span==0 skip is
+    # skipped unless both bodies are hard-pinned to the same z; bridge-connector peers
+    # pay extra cost if they pick the same z. Integer z still cannot realize every strict
+    # open-interval layout (e.g. rigid z strictly between two connector z values needs
+    # max(z_conn) - min(z_conn) >= 2 on integers).
+    # Regression test: `test_polygon_pins_same_z_degenerate_connector_sandwich`.
+    # -------------------------------------------------------------------------------
+
     def _violates_hard_connector_between(
         z: int,
         eid: str,
@@ -751,6 +828,9 @@ def _assign_z_levels_generic(
                 continue
             lo = min(assignment[n1], assignment[n2])
             hi = max(assignment[n1], assignment[n2])
+            # lo == hi: see breadcrumb block above (degenerate sandwich).
+            if lo == hi:
+                continue
             if z < lo or z > hi:
                 return True
         return False
@@ -794,6 +874,19 @@ def _assign_z_levels_generic(
                 if other in assignment:
                     zo = assignment[other]
                     span = abs(z - zo)
+                    # span==0: co-layered sandwich flanks. Skip sandwich-body penalty when
+                    # height should win (sandwich not >> height) so we can co-stack for low span;
+                    # or when both bodies are hard-pinned to the same z (explicit co-layer intent).
+                    # When sandwich >> height, *do* penalize span==0 so connector forms can sit
+                    # strictly between separated flanks (see _SANDWICH_DOMINATES_HEIGHT_RATIO).
+                    if span == 0:
+                        ze = fixed.get(eid)
+                        zo = fixed.get(other)
+                        co_pinned_same = (
+                            ze is not None and zo is not None and int(ze) == int(zo)
+                        )
+                        if co_pinned_same or not _sandwich_dominates_height():
+                            continue
                     if span < 2:
                         cost += cfg.weight_prefer_sandwich * float(2 - span)
                     elif span > 2:
@@ -840,6 +933,10 @@ def _assign_z_levels_generic(
             cost += cfg.weight_reduce_height * span
         elif cfg.weight_reduce_height != 0:
             cost += 0.0  # single value, no span
+        if _sandwich_dominates_height():
+            for peer in _bridge_connector_peers.get(eid, ()):
+                if peer in assignment and int(assignment[peer]) == int(z):
+                    cost += cfg.weight_prefer_sandwich * 2.0
         return cost
 
     def backtrack(idx: int, assignment: dict[str, int], used_vals: set[int]) -> None:
@@ -860,7 +957,7 @@ def _assign_z_levels_generic(
             used_by_neighbors,
             structural_neighbors,
             min_z_for_palette,
-            max_candidates=5,
+            max_candidates=_max_cand,
         )
         choices.sort(key=lambda z: total_cost(z, eid, assignment))
         for z in choices:
@@ -889,7 +986,7 @@ def _assign_z_levels_generic(
                 used,
                 structural_neighbors,
                 min_z_for_palette,
-                max_candidates=10,
+                max_candidates=max(10, _max_cand),
             )
             candidates.sort(key=lambda z: total_cost(z, eid, assignment))
             candidates = [z for z in candidates if not _violates_hard_connector_between(z, eid, assignment)]

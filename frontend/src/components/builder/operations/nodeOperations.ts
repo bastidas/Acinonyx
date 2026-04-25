@@ -268,6 +268,46 @@ export function moveNodesFromOriginal(
   }
 }
 
+/**
+ * Rotate nodes from original positions about a pivot (for rigid-body rotate drag).
+ * Each frame: p' = R(angle) * (p_orig - pivot) + pivot; does not change edge distance fields.
+ */
+export function rotateNodesFromOriginal(
+  doc: LinkageDocument,
+  originalPositions: Record<NodeId, Position>,
+  pivot: Position,
+  angleRad: number
+): GroupMoveResult {
+  const nodeIds = Object.keys(originalPositions)
+  if (nodeIds.length === 0 || angleRad === 0) {
+    return { doc, movedNodes: nodeIds }
+  }
+
+  const cos = Math.cos(angleRad)
+  const sin = Math.sin(angleRad)
+  const px = pivot[0]
+  const py = pivot[1]
+
+  let result = doc
+  for (const nodeId of nodeIds) {
+    const originalPos = originalPositions[nodeId]
+    if (!originalPos) continue
+
+    const dx = originalPos[0] - px
+    const dy = originalPos[1] - py
+    const newPos: Position = [
+      px + dx * cos - dy * sin,
+      py + dx * sin + dy * cos
+    ]
+    result = moveNode(result, nodeId, newPos)
+  }
+
+  return {
+    doc: result,
+    movedNodes: nodeIds
+  }
+}
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // MERGE NODES
 // ═══════════════════════════════════════════════════════════════════════════════

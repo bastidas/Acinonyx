@@ -3,7 +3,11 @@
  */
 
 import type { LinkMetaData } from '../../BuilderTools'
-import { areLinkEndpointsInPolygon, findConnectedMechanism } from '../../BuilderTools'
+import {
+  areLinkEndpointsInPolygon,
+  findConnectedMechanism,
+  transformPolygonPoints
+} from '../../BuilderTools'
 
 export type AxisAlignedBox = { minX: number; maxX: number; minY: number; maxY: number }
 
@@ -172,8 +176,46 @@ function linkIdsForForm(obj: { contained_links?: string[]; mergedLinkName?: stri
   return [...s]
 }
 
+export type WorldPolygonFormInput = {
+  points: [number, number][]
+  mergedLinkName?: string
+  mergedLinkOriginalStart?: [number, number]
+  mergedLinkOriginalEnd?: [number, number]
+}
+
 /**
- * If any associated link's endpoints are not both inside the polygon (world `points`), dissociate the form.
+ * World-space polygon vertices for association checks and API payloads.
+ * Merged-link forms store `points` in merge-time coordinates; this applies the same
+ * rigid transform as the canvas (`transformPolygonPoints`) when originals + link meta exist.
+ */
+export function worldPolygonVerticesForForm(
+  obj: WorldPolygonFormInput,
+  getJointPosition: (jointName: string) => [number, number] | null,
+  linksMeta: Record<string, { connects: string[] }>
+): [number, number][] {
+  const { points, mergedLinkName, mergedLinkOriginalStart, mergedLinkOriginalEnd } = obj
+  if (mergedLinkName && mergedLinkOriginalStart && mergedLinkOriginalEnd) {
+    const meta = linksMeta[mergedLinkName]
+    if (meta?.connects && meta.connects.length >= 2) {
+      const p0 = getJointPosition(meta.connects[0]!)
+      const p1 = getJointPosition(meta.connects[1]!)
+      if (p0 && p1) {
+        return transformPolygonPoints(
+          points,
+          mergedLinkOriginalStart,
+          mergedLinkOriginalEnd,
+          p0,
+          p1
+        )
+      }
+    }
+  }
+  return points
+}
+
+/**
+ * If any associated link's endpoints are not both inside the polygon (world vertices), dissociate the form.
+ * For merged-link forms, world vertices match the renderer (transform from merge-time `points`).
  */
 export function validatePolygonFormAssociations<T extends PolygonFormForDissociate & { points: [number, number][]; type?: string }>(
   objects: T[],
@@ -184,8 +226,8 @@ export function validatePolygonFormAssociations<T extends PolygonFormForDissocia
     if (obj.type != null && obj.type !== 'polygon') return obj
     const lids = linkIdsForForm(obj)
     if (lids.length === 0) return obj
-    const poly = obj.points
-    if (poly.length < 3) return obj
+    const polyWorld = worldPolygonVerticesForForm(obj, getJointPosition, linksMeta)
+    if (polyWorld.length < 3) return obj
 
     for (const lid of lids) {
       const meta = linksMeta[lid]
@@ -194,7 +236,7 @@ export function validatePolygonFormAssociations<T extends PolygonFormForDissocia
       }
       const p0 = getJointPosition(meta.connects[0]!)
       const p1 = getJointPosition(meta.connects[1]!)
-      if (!p0 || !p1 || !areLinkEndpointsInPolygon(p0, p1, poly)) {
+      if (!p0 || !p1 || !areLinkEndpointsInPolygon(p0, p1, polyWorld)) {
         return dissociateFormFields(obj)
       }
     }

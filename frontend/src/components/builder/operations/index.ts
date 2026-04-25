@@ -39,6 +39,7 @@ export {
   moveNodeTo,
   moveNodesBy,
   moveNodesFromOriginal,
+  rotateNodesFromOriginal,
 
   // Merge
   mergeNodesOperation,

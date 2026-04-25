@@ -131,10 +131,16 @@ export {
   dissociateFormFields,
   validatePolygonFormAssociations,
   getJointPositionFromLinkageDoc,
+  worldPolygonVerticesForForm,
   DISSOCIATED_FORM_FILL,
   DISSOCIATED_FORM_STROKE
 } from './formMechanismHelpers'
-export type { AxisAlignedBox, FormForGroupSelect, PolygonFormForDissociate } from './formMechanismHelpers'
+export type {
+  AxisAlignedBox,
+  FormForGroupSelect,
+  PolygonFormForDissociate,
+  WorldPolygonFormInput
+} from './formMechanismHelpers'
 
 // Exploration colormap (angle/radius color for explore node trajectories)
 export {

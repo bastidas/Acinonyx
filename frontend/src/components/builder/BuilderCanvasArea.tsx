@@ -79,6 +79,8 @@ export interface BuilderCanvasAreaProps {
   pathDrawState?: PathDrawState
   canvasWidth?: number
   onCancelAction?: () => void
+  /** Dismisses the current status toast (footer / Snackbar) */
+  onDismissStatus?: () => void
   openToolbars: Set<string>
   onToggleToolbar: (id: string) => void
   onRestoreToolbar?: (id: string) => void
@@ -134,6 +136,7 @@ export function BuilderCanvasArea({
   pathDrawState,
   canvasWidth,
   onCancelAction,
+  onDismissStatus,
   openToolbars,
   onToggleToolbar,
   onRestoreToolbar,
@@ -257,6 +260,7 @@ export function BuilderCanvasArea({
         pathDrawState={pathDrawState}
         canvasWidth={canvasWidth}
         onCancelAction={onCancelAction}
+        onDismissStatus={onDismissStatus}
         darkMode={darkMode}
       />
 

@@ -3,7 +3,7 @@
  */
 import React from 'react'
 import { Box, Typography, IconButton, Tooltip, Divider } from '@mui/material'
-import { TOOLS, ToolMode, LinkCreationState, initialLinkCreationState } from '../../BuilderTools'
+import { TOOLS, ToolMode, ToolActionId, LinkCreationState, initialLinkCreationState } from '../../BuilderTools'
 
 // Layout constants
 const TOOL_BUTTON_SIZE = 48
@@ -21,6 +21,7 @@ export interface ToolsToolbarProps {
   setLinkCreationState: (state: LinkCreationState) => void
   setPreviewLine: (line: { start: [number, number]; end: [number, number] } | null) => void
   onPauseAnimation?: () => void  // Called when a tool is clicked to pause animation
+  onToolAction?: (toolId: ToolActionId) => void
 }
 
 export const ToolsToolbar: React.FC<ToolsToolbarProps> = ({
@@ -31,7 +32,8 @@ export const ToolsToolbar: React.FC<ToolsToolbarProps> = ({
   linkCreationState,
   setLinkCreationState,
   setPreviewLine,
-  onPauseAnimation
+  onPauseAnimation,
+  onToolAction
 }) => {
   return (
     <Box sx={{ p: `${TOOLS_PADDING}px`, width: TOOLS_BOX_WIDTH, boxSizing: 'border-box' }}>
@@ -69,13 +71,19 @@ export const ToolsToolbar: React.FC<ToolsToolbarProps> = ({
                 onClick={() => {
                   // Pause animation when switching tools
                   onPauseAnimation?.()
+                  if (tool.isAction) {
+                    onToolAction?.(tool.id as ToolActionId)
+                    return
+                  }
                   if (linkCreationState.isDrawing && tool.id !== 'draw_link') {
                     setLinkCreationState(initialLinkCreationState)
                     setPreviewLine(null)
                   }
-                  setToolMode(tool.id)
+                  setToolMode(tool.id as ToolMode)
                 }}
-                onMouseEnter={() => setHoveredTool(tool.id)}
+                onMouseEnter={() => {
+                  if (!tool.isAction) setHoveredTool(tool.id as ToolMode)
+                }}
                 onMouseLeave={() => setHoveredTool(null)}
                 sx={{
                   width: TOOL_BUTTON_SIZE,

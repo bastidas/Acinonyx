@@ -76,7 +76,8 @@ export function renderExplorationTrajectories(props: ExplorationTrajectoriesRend
     if (jointNamesToShow != null && jointNamesToShow.length > 0) {
       return jointNamesToShow.includes(jointName)
     }
-    return true
+    // No joints with show_path (empty/omitted list): do not draw paths for every node
+    return false
   }
 
   const elements: React.ReactNode[] = []

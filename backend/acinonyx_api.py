@@ -907,6 +907,7 @@ def compute_link_z_levels_endpoint(request: dict):
             logger.debug('compute-link-z-levels: could not log z_level_config: %s', log_exc)
 
         extra_entity_conflict_pairs = []
+        polygon_conflict_diagnostics: list[dict] = []
         linkage_for_z = request.get('linkage')
         if not linkage_for_z and isinstance(request.get('pylink_data'), dict):
             linkage_for_z = request.get('pylink_data', {}).get('linkage')
@@ -935,11 +936,22 @@ def compute_link_z_levels_endpoint(request: dict):
                 margin_units = request.get('margin_units')
                 if margin_units is not None:
                     margin_units = float(margin_units)
-                extra_entity_conflict_pairs = _polygon_utils.build_polygon_entity_conflict_pairs(
+                # NOTE:
+                # Polygon-aware conflicts are not merely "nice to have" for layering.
+                # Some user-built form sets are intrinsically incompatible over motion
+                # (e.g., a connector form passes through a rigid body at one or more steps).
+                # We return first-witness diagnostics so the UI can explain *which* forms
+                # conflict and *where/when* it first appears.
+                conflicts_result = _polygon_utils.build_polygon_entity_conflict_pairs(
                     polygons_for_z, linkage_for_z, trajectories,
                     margin_fraction=0.05,
                     margin_units=margin_units,
+                    include_diagnostics=True,
                 )
+                if isinstance(conflicts_result, tuple):
+                    extra_entity_conflict_pairs, polygon_conflict_diagnostics = conflicts_result
+                else:
+                    extra_entity_conflict_pairs = conflicts_result
                 if extra_entity_conflict_pairs:
                     logger.info(
                         'compute-link-z-levels: added %d polygon-aware conflict pair(s)',
@@ -968,11 +980,13 @@ def compute_link_z_levels_endpoint(request: dict):
                 'assignments': assignments,
                 'n_steps': n_steps,
                 'polygon_z_levels': polygon_z_levels,
+                'polygon_conflicts': polygon_conflict_diagnostics,
             })
         return sanitize_for_json({
             'status': 'success',
             'assignments': result,
             'n_steps': n_steps,
+            'polygon_conflicts': polygon_conflict_diagnostics,
         })
     except Exception as e:
         logger.error(f'Error in compute-link-z-levels: {e}')

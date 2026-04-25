@@ -25,7 +25,8 @@ import {
   renderLinks as doRenderLinks,
   renderExplorationDots as doRenderExplorationDots,
   renderExplorationTrajectories as doRenderExplorationTrajectories,
-  filterTrajectoriesForRendering
+  filterTrajectoriesForRendering,
+  getJointNamesForTrajectoryPathDisplay
 } from '../rendering'
 import type { PylinkDocument } from '../types'
 import type { ToolContext } from '../toolHandlers/types'
@@ -311,9 +312,7 @@ export function useCanvasLayerRenders(params: UseCanvasLayerRendersParams): UseC
 
   const renderExplorationTrajectories = (): React.ReactNode => {
     if (toolMode !== 'explore_node_trajectories' || !exploreTrajectoriesState.exploreSamples.length) return null
-    const jointNamesToShow = Object.entries(pylinkDoc.meta.joints)
-      .filter(([, m]) => m?.show_path === true)
-      .map(([name]) => name)
+    const jointNamesToShow = getJointNamesForTrajectoryPathDisplay(pylinkDoc.meta.joints)
     const exploreCenter =
       exploreTrajectoriesState.exploreMode === 'combinatorial'
         ? exploreTrajectoriesState.exploreSecondCenter
@@ -329,7 +328,7 @@ export function useCanvasLayerRenders(params: UseCanvasLayerRendersParams): UseC
       hoveredFromTrajectoryPath: exploreTrajectoriesState.exploreMode === 'combinatorial' ? exploreTrajectoriesState.exploreHoveredFromTrajectoryPath : undefined,
       exploreNodeId: exploreTrajectoriesState.exploreMode === 'combinatorial' ? exploreTrajectoriesState.exploreNodeId : undefined,
       unitsToPixels,
-      jointNamesToShow: jointNamesToShow.length > 0 ? jointNamesToShow : undefined,
+      jointNamesToShow,
       exploreColormapEnabled,
       exploreColormapType,
       exploreCenter,

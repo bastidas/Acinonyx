@@ -32,7 +32,8 @@ import {
   LinkData,
   FormData,
   type ExploreTrajectoriesState,
-  type ExploreTrajectorySample
+  type ExploreTrajectorySample,
+  VIABLE_MECHANISM_SEARCH_TOOL_ID
 } from './BuilderTools'
 import {
   jointColors,
@@ -91,6 +92,7 @@ import {
   deleteNodes as deleteNodesOp,
   deleteEdges as deleteEdgesOp,
   moveNodesFromOriginal,
+  rotateNodesFromOriginal,
   mergeNodesOperation,
   renameEdgeOperation,
   renameNodeOperation,
@@ -128,7 +130,8 @@ import {
 } from './builder'
 import {
   validatePolygonFormAssociations,
-  getJointPositionFromLinkageDoc
+  getJointPositionFromLinkageDoc,
+  worldPolygonVerticesForForm
 } from './builder/helpers/formMechanismHelpers'
 import {
   getStoredGraphFilename,
@@ -136,6 +139,102 @@ import {
   setStoredGraphFilename,
   setStoredToolbarHeights
 } from '../prefs'
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Undo / redo: full frame (linkage + forms + selection) so delete-link undo restores polygons;
+// validation + clone guards avoid corrupt snapshots and stale optimizer/animation state.
+// ═══════════════════════════════════════════════════════════════════════════════
+
+interface LinkageUndoFrame {
+  linkageDoc: LinkageDocument
+  drawnObjects: DrawnObjectsState
+  selectedJoints: string[]
+  selectedLinks: string[]
+}
+
+interface PolygonConflictReport {
+  entity_a: string
+  entity_b: string
+  reason: string
+  first_step?: number | null
+  witness_point?: [number, number]
+  joint_name?: string
+}
+
+function formatPolygonConflictWarningMessage(
+  conflicts: PolygonConflictReport[] | undefined,
+  objects: DrawnObject[],
+): string | null {
+  if (!Array.isArray(conflicts) || conflicts.length === 0) return null
+  const byId = new Map<string, DrawnObject>()
+  for (const o of objects) byId.set(o.id, o)
+  const describeEntity = (eid: string): string => {
+    const raw = eid.startsWith('polygon:') ? eid.slice('polygon:'.length) : eid
+    const obj = byId.get(raw)
+    const label = obj?.name?.trim() || raw
+    return `'${label}'`
+  }
+  const describeWitness = (c: PolygonConflictReport): string => {
+    const stepPart = typeof c.first_step === 'number' ? `step ${c.first_step}` : 'swept path'
+    if (Array.isArray(c.witness_point) && c.witness_point.length >= 2) {
+      const [x, y] = c.witness_point
+      return `${stepPart} near (${x.toFixed(2)}, ${y.toFixed(2)})`
+    }
+    return stepPart
+  }
+  const preview = conflicts.slice(0, 3).map(
+    c => `${describeEntity(c.entity_a)} vs ${describeEntity(c.entity_b)} (${describeWitness(c)})`
+  )
+  const suffix = conflicts.length > 3 ? ` (+${conflicts.length - 3} more)` : ''
+  return `Form collision risk detected: ${preview.join('; ')}${suffix}. Some form sets may be intrinsically unsatisfiable over motion.`
+}
+
+function isValidLinkageDocumentForUndo(doc: unknown): doc is LinkageDocument {
+  if (typeof doc !== 'object' || doc === null) return false
+  const d = doc as LinkageDocument
+  const lg = d.linkage
+  if (typeof lg !== 'object' || lg === null) return false
+  if (typeof lg.nodes !== 'object' || lg.nodes === null) return false
+  if (typeof lg.edges !== 'object' || lg.edges === null) return false
+  return true
+}
+
+function isValidUndoFrame(frame: unknown): frame is LinkageUndoFrame {
+  if (typeof frame !== 'object' || frame === null) return false
+  const f = frame as LinkageUndoFrame
+  return (
+    isValidLinkageDocumentForUndo(f.linkageDoc) &&
+    f.drawnObjects != null &&
+    typeof f.drawnObjects === 'object' &&
+    Array.isArray(f.drawnObjects.objects) &&
+    Array.isArray(f.drawnObjects.selectedIds) &&
+    Array.isArray(f.selectedJoints) &&
+    Array.isArray(f.selectedLinks)
+  )
+}
+
+function sanitizeSelectionForLinkageDoc(
+  joints: unknown,
+  links: unknown,
+  doc: LinkageDocument
+): { joints: string[]; links: string[] } {
+  const jointList = Array.isArray(joints) ? joints : []
+  const linkList = Array.isArray(links) ? links : []
+  const nodeIds = new Set(Object.keys(doc.linkage.nodes))
+  const edgeIds = new Set(Object.keys(doc.linkage.edges))
+  return {
+    joints: jointList.filter((j): j is string => typeof j === 'string' && nodeIds.has(j)),
+    links: linkList.filter((id): id is string => typeof id === 'string' && edgeIds.has(id))
+  }
+}
+
+function sanitizeDrawnObjectSelection(drawn: DrawnObjectsState): DrawnObjectsState {
+  const ids = new Set(drawn.objects.map(o => o.id))
+  return {
+    ...drawn,
+    selectedIds: drawn.selectedIds.filter(id => ids.has(id))
+  }
+}
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // BUILDER TAB — Main builder view orchestrator
@@ -323,6 +422,13 @@ const BuilderTab: React.FC = () => {
   const pylinkDocRef = useRef(pylinkDoc)
   pylinkDocRef.current = pylinkDoc
 
+  const undoFrameDrawnObjectsRef = useRef(drawnObjects)
+  const undoFrameSelectedJointsRef = useRef(selectedJoints)
+  const undoFrameSelectedLinksRef = useRef(selectedLinks)
+  undoFrameDrawnObjectsRef.current = drawnObjects
+  undoFrameSelectedJointsRef.current = selectedJoints
+  undoFrameSelectedLinksRef.current = selectedLinks
+
   const scheduleValidateFormAssociations = useCallback(() => {
     setTimeout(() => {
       setDrawnObjects(prev => ({
@@ -337,11 +443,16 @@ const BuilderTab: React.FC = () => {
   }, [setDrawnObjects])
 
   const [editingCanvasId, setEditingCanvasId] = React.useState<string | null>(null)
+  /** File Operations → Load / Load Last: when true (default), replace forms and canvas images from the file; when false, keep the current drawing and reference images. */
+  const [clearDrawingOnLoad, setClearDrawingOnLoad] = React.useState(true)
+  /** Read after `await` / FileReader so load paths always see the current toggle (avoids stale closures). */
+  const clearDrawingOnLoadRef = useRef(clearDrawingOnLoad)
+  clearDrawingOnLoadRef.current = clearDrawingOnLoad
 
   // Forms toolbar and form edit modal
   const [editingFormData, setEditingFormData] = React.useState<FormData | null>(null)
   const runComputeAfterFormSaveRef = useRef(false)
-  const [formPaddingUnits, setFormPaddingUnits] = React.useState(5)
+  const [formPaddingUnits, setFormPaddingUnits] = React.useState(2)
   const [createRigidForms, setCreateRigidForms] = React.useState(true)
   const [createLinkForms, setCreateLinkForms] = React.useState(true)
   const [computeZLevelsAfterCreate, setComputeZLevelsAfterCreate] = React.useState(true)
@@ -670,6 +781,7 @@ const BuilderTab: React.FC = () => {
     },
     [linkageDoc, simulationSteps, showStatus, exploreRadius, exploreRadialSamples]
   )
+  const viableSearchRunningRef = useRef(false)
 
   // Derived selection color
   const selectionColorMap = { blue: '#1976d2', orange: '#FA8112', green: '#2e7d32', purple: '#9c27b0' }
@@ -824,6 +936,8 @@ const BuilderTab: React.FC = () => {
 
   /** Ref kept in sync with user-set frame (slider) for setAnimationFrameWithDisplay. */
   const displayFrameRef = useRef<number | null>(null)
+  /** Tracks prior tool mode so we only pause/seek when entering explore (not every render). */
+  const wasExploreTrajectoriesToolRef = useRef(false)
 
   // Dimension fetching is now handled by OptimizationController
 
@@ -840,6 +954,177 @@ const BuilderTab: React.FC = () => {
     onFrameChange: handleAnimationFrameChange
   })
 
+  const linkageUndoPastRef = useRef<LinkageUndoFrame[]>([])
+  const linkageUndoFutureRef = useRef<LinkageUndoFrame[]>([])
+  /** Max undo steps. Each step stores a structuredClone of linkage + drawnObjects + selection (~100KB–several MB depending on doc). */
+  const LINK_UNDO_MAX = 10
+
+  const clearLinkageUndoStacks = useCallback(() => {
+    linkageUndoPastRef.current = []
+    linkageUndoFutureRef.current = []
+  }, [])
+
+  /** Push full slice (linkage + forms + selection) before a structural mutation. */
+  const pushLinkageUndoSnapshot = useCallback(() => {
+    try {
+      const frame: LinkageUndoFrame = {
+        linkageDoc: structuredClone(linkageDocRef.current),
+        drawnObjects: structuredClone(undoFrameDrawnObjectsRef.current),
+        selectedJoints: [...undoFrameSelectedJointsRef.current],
+        selectedLinks: [...undoFrameSelectedLinksRef.current]
+      }
+      linkageUndoPastRef.current = [
+        ...linkageUndoPastRef.current.slice(-(LINK_UNDO_MAX - 1)),
+        frame
+      ]
+      linkageUndoFutureRef.current = []
+    } catch (e) {
+      console.warn('[undo] Failed to capture snapshot', e)
+      showStatus('Could not save undo step', 'warning', 2500)
+    }
+  }, [showStatus])
+
+  const undoLinkageSnapshot = useCallback((): boolean => {
+    const past = linkageUndoPastRef.current
+    if (past.length === 0) return false
+    const raw = past[past.length - 1]
+    if (!isValidUndoFrame(raw)) {
+      linkageUndoPastRef.current = past.slice(0, -1)
+      showStatus('Undo skipped: invalid history', 'warning', 2500)
+      return false
+    }
+    try {
+      const doc = structuredClone(raw.linkageDoc)
+      if (!isValidLinkageDocumentForUndo(doc)) {
+        linkageUndoPastRef.current = past.slice(0, -1)
+        showStatus('Undo failed: invalid document', 'error', 2500)
+        return false
+      }
+      let drawn = structuredClone(raw.drawnObjects)
+      drawn = sanitizeDrawnObjectSelection(drawn)
+      const sel = sanitizeSelectionForLinkageDoc(raw.selectedJoints, raw.selectedLinks, doc)
+
+      const current: LinkageUndoFrame = {
+        linkageDoc: structuredClone(linkageDocRef.current),
+        drawnObjects: structuredClone(undoFrameDrawnObjectsRef.current),
+        selectedJoints: [...undoFrameSelectedJointsRef.current],
+        selectedLinks: [...undoFrameSelectedLinksRef.current]
+      }
+      linkageUndoPastRef.current = past.slice(0, -1)
+      linkageUndoFutureRef.current = [current, ...linkageUndoFutureRef.current].slice(0, LINK_UNDO_MAX)
+
+      setLinkageDoc(doc)
+      setDrawnObjects(drawn)
+      setSelectedJoints(sel.joints)
+      setSelectedLinks(sel.links)
+      setLinkCreationState(initialLinkCreationState)
+      setPreviewLine(null)
+      setMoveGroupState(initialMoveGroupState)
+      setDeleteConfirmDialog({ open: false, joints: [], links: [] })
+      setEditingJointData(prev => (prev && doc.linkage.nodes[prev.name] ? prev : null))
+      setEditingLinkData(prev => (prev && doc.linkage.edges[prev.name] ? prev : null))
+      animation.setAnimatedPositions(null)
+      animation.clearTrajectory()
+      optimization.setIsOptimizedMechanism(false)
+      optimization.setIsSyncedToOptimizer(false)
+      optimization.lastOptimizerResultRef.current = null
+      triggerMechanismChange()
+      showStatus('Undid change', 'info', 2000)
+      return true
+    } catch (e) {
+      console.warn('[undo] Apply failed', e)
+      showStatus('Undo failed', 'error', 2500)
+      return false
+    }
+  }, [
+    setLinkageDoc,
+    setDrawnObjects,
+    setSelectedJoints,
+    setSelectedLinks,
+    setLinkCreationState,
+    setPreviewLine,
+    setMoveGroupState,
+    setDeleteConfirmDialog,
+    setEditingJointData,
+    setEditingLinkData,
+    animation,
+    optimization,
+    triggerMechanismChange,
+    showStatus
+  ])
+
+  const redoLinkageSnapshot = useCallback((): boolean => {
+    const future = linkageUndoFutureRef.current
+    if (future.length === 0) return false
+    const raw = future[0]
+    if (!isValidUndoFrame(raw)) {
+      linkageUndoFutureRef.current = future.slice(1)
+      showStatus('Redo skipped: invalid history', 'warning', 2500)
+      return false
+    }
+    try {
+      const doc = structuredClone(raw.linkageDoc)
+      if (!isValidLinkageDocumentForUndo(doc)) {
+        linkageUndoFutureRef.current = future.slice(1)
+        showStatus('Redo failed: invalid document', 'error', 2500)
+        return false
+      }
+      let drawn = structuredClone(raw.drawnObjects)
+      drawn = sanitizeDrawnObjectSelection(drawn)
+      const sel = sanitizeSelectionForLinkageDoc(raw.selectedJoints, raw.selectedLinks, doc)
+
+      const current: LinkageUndoFrame = {
+        linkageDoc: structuredClone(linkageDocRef.current),
+        drawnObjects: structuredClone(undoFrameDrawnObjectsRef.current),
+        selectedJoints: [...undoFrameSelectedJointsRef.current],
+        selectedLinks: [...undoFrameSelectedLinksRef.current]
+      }
+      linkageUndoFutureRef.current = future.slice(1)
+      linkageUndoPastRef.current = [
+        ...linkageUndoPastRef.current.slice(-(LINK_UNDO_MAX - 1)),
+        current
+      ]
+
+      setLinkageDoc(doc)
+      setDrawnObjects(drawn)
+      setSelectedJoints(sel.joints)
+      setSelectedLinks(sel.links)
+      setLinkCreationState(initialLinkCreationState)
+      setPreviewLine(null)
+      setMoveGroupState(initialMoveGroupState)
+      setDeleteConfirmDialog({ open: false, joints: [], links: [] })
+      setEditingJointData(prev => (prev && doc.linkage.nodes[prev.name] ? prev : null))
+      setEditingLinkData(prev => (prev && doc.linkage.edges[prev.name] ? prev : null))
+      animation.setAnimatedPositions(null)
+      animation.clearTrajectory()
+      optimization.setIsOptimizedMechanism(false)
+      optimization.setIsSyncedToOptimizer(false)
+      optimization.lastOptimizerResultRef.current = null
+      triggerMechanismChange()
+      showStatus('Redid change', 'info', 2000)
+      return true
+    } catch (e) {
+      console.warn('[redo] Apply failed', e)
+      showStatus('Redo failed', 'error', 2500)
+      return false
+    }
+  }, [
+    setLinkageDoc,
+    setDrawnObjects,
+    setSelectedJoints,
+    setSelectedLinks,
+    setLinkCreationState,
+    setPreviewLine,
+    setMoveGroupState,
+    setDeleteConfirmDialog,
+    setEditingJointData,
+    setEditingLinkData,
+    animation,
+    optimization,
+    triggerMechanismChange,
+    showStatus
+  ])
+
   /** Set frame and update displayFrameRef so drag start captures the frame the user is viewing (not N-1 from loop). */
   const setAnimationFrameWithDisplay = useCallback(
     (frame: number) => {
@@ -848,6 +1133,18 @@ const BuilderTab: React.FC = () => {
     },
     [animation.setAnimationFrame]
   )
+
+  // Explore trajectories batch-sims from linkageDoc at frame 0; pause playback and seek to step 1/N on entry.
+  useEffect(() => {
+    const isExplore = toolMode === 'explore_node_trajectories'
+    const enteringExplore = isExplore && !wasExploreTrajectoriesToolRef.current
+    wasExploreTrajectoriesToolRef.current = isExplore
+    if (!enteringExplore) return
+    if (animation.animationState?.isAnimating) {
+      animation.pauseAnimation()
+    }
+    setAnimationFrameWithDisplay(0)
+  }, [toolMode, animation.pauseAnimation, setAnimationFrameWithDisplay])
 
   // Sync display ref when trajectory first appears so we have an initial frame (e.g. 0) before user scrubs.
   useEffect(() => {
@@ -880,7 +1177,6 @@ const BuilderTab: React.FC = () => {
     dragState,
     pendingDropPosition
   })
-
   // Restore graph from cookie on mount (persisted current graph filename)
   const hasRestoredGraphRef = useRef(false)
   useEffect(() => {
@@ -901,7 +1197,8 @@ const BuilderTab: React.FC = () => {
             setSelectedJoints,
             setSelectedLinks,
             clearTrajectory: animation.clearTrajectory,
-            triggerMechanismChange
+            triggerMechanismChange,
+            clearLinkageUndoStacks
           })
           showStatus(`Restored ${result.filename}`, 'success', 2000)
         } else {
@@ -909,7 +1206,7 @@ const BuilderTab: React.FC = () => {
         }
       })
       .catch(() => setStoredGraphFilename(null))
-  }, [optimization.clearOptimizerState, animation.clearTrajectory, triggerMechanismChange, isHypergraphFormat])
+  }, [optimization.clearOptimizerState, animation.clearTrajectory, triggerMechanismChange, isHypergraphFormat, clearLinkageUndoStacks])
 
   // Validate links after simulation completes - detect links that would stretch
   useEffect(() => {
@@ -1003,6 +1300,8 @@ const BuilderTab: React.FC = () => {
   const prevSingleNodeDraggingRef = useRef(false)
   /** Bake dragged joint position once per drag so document position = trajectory[X] (stops dragged node jumping to N/N). */
   const dragBakedRef = useRef(false)
+  /** One undo snapshot per select-tool joint drag (first moveJoint after mousedown); reset when drag ends. */
+  const jointDragUndoCapturedRef = useRef(false)
   /** Capture last drag positions so we can tell at drag-end if user actually moved (H1). */
   const lastDragStartRef = useRef<[number, number] | null>(null)
   const lastDragCurrentRef = useRef<[number, number] | null>(null)
@@ -1017,6 +1316,9 @@ const BuilderTab: React.FC = () => {
     }
     const wasSingleNodeDragging = prevSingleNodeDraggingRef.current
     prevSingleNodeDraggingRef.current = dragState.isDragging
+    if (!dragState.isDragging) {
+      jointDragUndoCapturedRef.current = false
+    }
     if (!anyDragging) {
       dragBakedRef.current = false
       exitEditMode()
@@ -1142,7 +1444,8 @@ const BuilderTab: React.FC = () => {
       position,
       connectedLinks,
       showPath: meta?.show_path ?? false,
-      metaValue: linkageDoc.meta.nodes[jointName]?.metaValue
+      metaValue: linkageDoc.meta.nodes[jointName]?.metaValue,
+      reverseDirection: linkageDoc.linkage.nodes[jointName]?.reverseDirection ?? false
     }
 
     // Add type-specific data
@@ -1164,7 +1467,7 @@ const BuilderTab: React.FC = () => {
     }
 
     return baseData
-  }, [pylinkDoc.pylinkage.joints, pylinkDoc.meta.joints, pylinkDoc.meta.links, linkageDoc.meta.nodes, getJointPosition])
+  }, [pylinkDoc.pylinkage.joints, pylinkDoc.meta.joints, pylinkDoc.meta.links, linkageDoc.meta.nodes, linkageDoc.linkage.nodes, getJointPosition])
 
   /**
    * Build LinkData for the link edit modal
@@ -1265,7 +1568,10 @@ const BuilderTab: React.FC = () => {
       drawnObjectIds,
       startPositions,
       drawnObjectStartPositions,
-      dragStartPoint: null
+      dragStartPoint: null,
+      dragMode: 'translate',
+      rotatePivot: null,
+      rotateRefAngle: null
     })
 
     const totalItems = jointNames.length + drawnObjectIds.length
@@ -1289,6 +1595,7 @@ const BuilderTab: React.FC = () => {
 
   // Delete a link (edge) and any orphan nodes
   const deleteLink = useCallback((linkName: string) => {
+    pushLinkageUndoSnapshot()
     // Use new hypergraph operation
     const result = deleteEdgeOp(linkageDoc, linkName)
 
@@ -1320,10 +1627,11 @@ const BuilderTab: React.FC = () => {
     setSelectedJoints([])
 
     showStatus(result.message, 'success', 2500)
-  }, [linkageDoc, showStatus, clearOptimizedMechanismFlag, setDrawnObjects])
+  }, [linkageDoc, showStatus, clearOptimizedMechanismFlag, setDrawnObjects, pushLinkageUndoSnapshot])
 
   // Delete a joint (node) and all connected edges, plus any resulting orphans
   const deleteJoint = useCallback((jointName: string) => {
+    pushLinkageUndoSnapshot()
     // Use new hypergraph operation
     const result = deleteNodeOp(linkageDoc, jointName)
 
@@ -1355,7 +1663,7 @@ const BuilderTab: React.FC = () => {
     setSelectedJoints([])
 
     showStatus(result.message, 'success', 2500)
-  }, [linkageDoc, showStatus, clearOptimizedMechanismFlag, setDrawnObjects])
+  }, [linkageDoc, showStatus, clearOptimizedMechanismFlag, setDrawnObjects, pushLinkageUndoSnapshot])
 
   // Move a joint (node) to a new position
   // In hypergraph format, we just update the node position and sync edge distances
@@ -1375,6 +1683,16 @@ const BuilderTab: React.FC = () => {
 
     const node = getNode(linkageDoc, jointName)
     if (!node) return
+
+    // One undo step per joint-drag gesture, or per discrete move (e.g. explore-trajectory apply).
+    if (dragState.isDragging) {
+      if (!jointDragUndoCapturedRef.current) {
+        pushLinkageUndoSnapshot()
+        jointDragUndoCapturedRef.current = true
+      }
+    } else {
+      pushLinkageUndoSnapshot()
+    }
 
     // Move the node to new position
     let newDoc = moveNodeMutation(linkageDoc, jointName, newPosition)
@@ -1400,7 +1718,15 @@ const BuilderTab: React.FC = () => {
 
     // Mark as unsynced if manually modified (but keep isOptimizedMechanism true)
     // setIsSyncedToOptimizer will be updated by the useEffect
-  }, [linkageDoc, showStatus, optimization.isOptimizedMechanism, dragState.isDragging, animation.clearTrajectory, triggerMechanismChange])
+  }, [
+    linkageDoc,
+    showStatus,
+    optimization.isOptimizedMechanism,
+    dragState.isDragging,
+    animation.clearTrajectory,
+    triggerMechanismChange,
+    pushLinkageUndoSnapshot
+  ])
 
   /** Move two joints in one document update (used when applying combinatorial explore result). */
   const moveTwoJoints = useCallback(
@@ -1428,9 +1754,97 @@ const BuilderTab: React.FC = () => {
       animation.clearTrajectory()
       triggerMechanismChange()
       setLinkageDoc(newDoc)
+      clearLinkageUndoStacks()
     },
-    [linkageDoc, showStatus, optimization.isOptimizedMechanism]
+    [linkageDoc, showStatus, optimization.isOptimizedMechanism, clearLinkageUndoStacks]
   )
+
+  const runViableMechanismSearch = useCallback(async () => {
+    if (viableSearchRunningRef.current) {
+      showStatus('Viable mechanism search is already running.', 'info', 2000)
+      return
+    }
+    if (!canSimulate(pylinkDoc.pylinkage.joints)) {
+      showStatus('Cannot search viable moves: no Crank joint defined.', 'warning', 2500)
+      return
+    }
+
+    // Candidate joints = every joint in the current mechanism (same list as the builder UI).
+    // This intentionally includes fixed / ground nodes: we try moving them too (repositioning
+    // a fixed joint can unlock a valid assembly), unlike Explore Trajectories which only
+    // allows non-fixed joints (plus moving statics by special case there).
+    const orderedNodes = pylinkDoc.pylinkage.joints
+      .map(j => ({ name: j.name, center: getJointPosition(j.name) }))
+      .filter((j): j is { name: string; center: [number, number] } => j.center != null)
+    if (orderedNodes.length === 0) {
+      showStatus('No joints available for viable search.', 'warning', 2500)
+      return
+    }
+
+    const offsets = exploreRegion([0, 0], {
+      deltaDegrees: 360 / exploreAzimuthalSamples,
+      R: exploreRadius,
+      nRadialSamples: exploreRadialSamples
+    })
+      .map(p => ({ dx: p.position[0], dy: p.position[1], radius: p.radius, angleDeg: p.angleDeg }))
+      .sort((a, b) => (a.radius - b.radius) || (a.angleDeg - b.angleDeg))
+
+    const radiusValues = Array.from(new Set(offsets.map(o => o.radius))).sort((a, b) => a - b)
+    if (radiusValues.length === 0) {
+      showStatus('No search samples generated for viable search.', 'warning', 2500)
+      return
+    }
+
+    viableSearchRunningRef.current = true
+    showStatus('Searching viable mechanism...', 'action')
+    try {
+      for (const radius of radiusValues) {
+        const ringOffsets = offsets.filter(o => o.radius === radius)
+        for (const node of orderedNodes) {
+          for (const offset of ringOffsets) {
+            const candidate: [number, number] = [node.center[0] + offset.dx, node.center[1] + offset.dy]
+            let doc = moveNodeMutation(linkageDoc, node.name, candidate)
+            doc = syncAllEdgeDistances(doc)
+            const response = await fetch('/api/compute-pylink-trajectory', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                ...doc,
+                n_steps: simulationSteps
+              })
+            })
+            if (!response.ok) continue
+            const result = await response.json() as { status?: string }
+            if (result.status === 'success') {
+              moveJoint(node.name, candidate)
+              showStatus(
+                `Viable move found: ${node.name} -> (${candidate[0].toFixed(2)}, ${candidate[1].toFixed(2)})`,
+                'success',
+                3500
+              )
+              return
+            }
+          }
+        }
+      }
+      showStatus('No viable mechanism found within explore radius.', 'warning', 3500)
+    } catch (e) {
+      const message = e instanceof Error ? e.message : 'Viable mechanism search failed'
+      showStatus(message, 'error', 3000)
+    } finally {
+      viableSearchRunningRef.current = false
+    }
+  }, [
+    showStatus,
+    pylinkDoc.pylinkage.joints,
+    getJointPosition,
+    exploreAzimuthalSamples,
+    exploreRadius,
+    exploreRadialSamples,
+    linkageDoc,
+    simulationSteps,
+    moveJoint
+  ])
 
   // ═══════════════════════════════════════════════════════════════════════════════
   // RIGID BODY TRANSLATION
@@ -1453,6 +1867,17 @@ const BuilderTab: React.FC = () => {
     // Mark as unsynced if manually modified (but keep isOptimizedMechanism true)
     // setIsSyncedToOptimizer will be updated by the useEffect
   }, [linkageDoc, showStatus])
+
+  const rotateGroupFromOriginal = useCallback((
+    jointNames: string[],
+    originalPositions: Record<string, [number, number]>,
+    pivot: [number, number],
+    angleRad: number
+  ) => {
+    if (jointNames.length === 0 || angleRad === 0) return
+    const result = rotateNodesFromOriginal(linkageDoc, originalPositions, pivot, angleRad)
+    setLinkageDoc(result.doc)
+  }, [linkageDoc])
 
   const getLinkConnects = useCallback((linkName: string): [string, string] | null => {
     const m = pylinkDoc.meta.links[linkName]
@@ -1522,29 +1947,20 @@ const BuilderTab: React.FC = () => {
       (o: { type?: string; points?: unknown[] }) => o.type === 'polygon' && o.points && o.points.length >= 3
     )
     const edges = linkageDoc.meta?.edges ?? {}
-    const drawn_objects = polygons.map(obj => {
-      let points: [number, number][] = obj.points as [number, number][]
-      const mergedLinkName = (obj as { mergedLinkName?: string }).mergedLinkName
-      const mergedLinkOriginalStart = (obj as { mergedLinkOriginalStart?: [number, number] }).mergedLinkOriginalStart
-      const mergedLinkOriginalEnd = (obj as { mergedLinkOriginalEnd?: [number, number] }).mergedLinkOriginalEnd
-      if (mergedLinkName && mergedLinkOriginalStart && mergedLinkOriginalEnd) {
-        const linkMeta = edges[mergedLinkName] as { connects?: [string, string] } | undefined
-        if (linkMeta?.connects) {
-          const currentStart = getJointPosition(linkMeta.connects[0])
-          const currentEnd = getJointPosition(linkMeta.connects[1])
-          if (currentStart && currentEnd) {
-            points = transformPolygonPoints(
-              obj.points as [number, number][],
-              mergedLinkOriginalStart,
-              mergedLinkOriginalEnd,
-              currentStart,
-              currentEnd
-            )
-          }
-        }
-      }
-      return { ...obj, points }
-    })
+    const drawn_objects = polygons.map(obj => ({
+      ...obj,
+      points: worldPolygonVerticesForForm(
+        {
+          points: obj.points as [number, number][],
+          mergedLinkName: (obj as { mergedLinkName?: string }).mergedLinkName,
+          mergedLinkOriginalStart: (obj as { mergedLinkOriginalStart?: [number, number] })
+            .mergedLinkOriginalStart,
+          mergedLinkOriginalEnd: (obj as { mergedLinkOriginalEnd?: [number, number] }).mergedLinkOriginalEnd
+        },
+        getJointPosition,
+        edges as Record<string, { connects: string[] }>
+      )
+    }))
     const linkageForRequest = buildLinkageWithCurrentPositions(linkageDoc.linkage, getJointPosition)
     const body = {
       pylink_data: { linkage: linkageForRequest, meta: linkageDoc.meta },
@@ -1591,7 +2007,7 @@ const BuilderTab: React.FC = () => {
       }))
     }
     return data
-  }, [linkageDoc.linkage, linkageDoc.meta, linkageDoc.meta?.edges, drawnObjects.objects, setDrawnObjects, getJointPosition, transformPolygonPoints, animation.trajectoryData, buildLinkageWithCurrentPositions])
+  }, [linkageDoc.linkage, linkageDoc.meta, linkageDoc.meta?.edges, drawnObjects.objects, setDrawnObjects, getJointPosition, animation.trajectoryData, buildLinkageWithCurrentPositions])
 
   // After simulation, validate polygon rigidity once (only if polygons with contained_links exist).
   // Ref and stable callback avoid depending on drawnObjects.objects so updating it doesn't retrigger and loop.
@@ -1609,6 +2025,7 @@ const BuilderTab: React.FC = () => {
   const moveGroup = useMoveGroup({
     moveGroupState,
     setMoveGroupState,
+    toolMode,
     getJointsWithPositions,
     getLinksWithPositions,
     getJointPosition,
@@ -1618,16 +2035,19 @@ const BuilderTab: React.FC = () => {
     drawnObjects,
     setDrawnObjects: setDrawnObjects as React.Dispatch<React.SetStateAction<{ objects: unknown[]; selectedIds: string[] }>>,
     translateGroupRigid,
+    rotateGroupFromOriginal,
     exitMoveGroupMode,
     showStatus: showStatus as (message: string, type?: string, duration?: number) => void,
     triggerMechanismChange,
     resetAnimationToFirstFrame,
     apiFindAssociatedPolygons,
-    onAfterMoveGroupDragEnd: scheduleValidateFormAssociations
+    onAfterMoveGroupDragEnd: scheduleValidateFormAssociations,
+    onGroupDragStart: pushLinkageUndoSnapshot
   })
 
   // Merge two joints (nodes) together (source is absorbed into target)
   const mergeJoints = useCallback((sourceJoint: string, targetJoint: string) => {
+    pushLinkageUndoSnapshot()
     // Use new hypergraph operation
     const result = mergeNodesOperation(linkageDoc, sourceJoint, targetJoint)
 
@@ -1657,7 +2077,7 @@ const BuilderTab: React.FC = () => {
     clearOptimizedMechanismFlag()
 
     showStatus(result.message, 'success', 2500)
-  }, [linkageDoc, showStatus, triggerMechanismChange, clearOptimizedMechanismFlag, setDrawnObjects])
+  }, [linkageDoc, showStatus, triggerMechanismChange, clearOptimizedMechanismFlag, setDrawnObjects, pushLinkageUndoSnapshot])
   // Create a new link between two points/joints using hypergraph operations
   // If user clicked on an existing joint, use it. Otherwise create a new joint.
   // New joints become 'follower' if connected to a kinematic node, 'fixed' otherwise.
@@ -1667,6 +2087,8 @@ const BuilderTab: React.FC = () => {
     startJointName: string | null,  // Only set if user clicked on an existing joint
     endJointName: string | null      // Only set if user clicked on an existing joint
   ) => {
+    pushLinkageUndoSnapshot()
+
     // Helper to get connected node IDs for a given node
     const getConnectedNodeIds = (nodeId: string): string[] => {
       return getConnectedNodes(linkageDoc, nodeId)
@@ -1692,10 +2114,14 @@ const BuilderTab: React.FC = () => {
     showStatus(result.message, 'success', 2500)
 
     return result.edgeId
-  }, [linkageDoc, showStatus, triggerMechanismChange])
+  }, [linkageDoc, showStatus, triggerMechanismChange, pushLinkageUndoSnapshot])
 
   // Batch delete multiple items at once using hypergraph operations
   const batchDelete = useCallback((jointsToDelete: string[], linksToDelete: string[], drawnObjectsToDelete: string[] = []) => {
+    const mutatesLinkage = jointsToDelete.length > 0 || linksToDelete.length > 0
+    if (mutatesLinkage) {
+      pushLinkageUndoSnapshot()
+    }
     let doc = linkageDoc
     let totalDeletedEdges = linksToDelete.length
     let totalDeletedNodes = jointsToDelete.length
@@ -1762,7 +2188,7 @@ const BuilderTab: React.FC = () => {
       deletedLinks: totalDeletedEdges,
       deletedDrawnObjects
     }
-  }, [linkageDoc, moveGroupState.isActive, triggerMechanismChange, setDrawnObjects])
+  }, [linkageDoc, moveGroupState.isActive, triggerMechanismChange, setDrawnObjects, pushLinkageUndoSnapshot])
 
   // Handle delete with confirmation for multiple items
   const handleDeleteSelected = useCallback(() => {
@@ -2079,12 +2505,40 @@ const BuilderTab: React.FC = () => {
         }
       }
 
+      // Undo / redo last linkage edit from create/delete link, delete joint, merge, or batch (snapshots)
+      if (event.metaKey || event.ctrlKey) {
+        if (!event.altKey) {
+          const zk = event.key.toLowerCase()
+          if (zk === 'z') {
+            const handled = event.shiftKey ? redoLinkageSnapshot() : undoLinkageSnapshot()
+            if (handled) {
+              event.preventDefault()
+              return
+            }
+          }
+          if (zk === 'y' && event.ctrlKey) {
+            if (redoLinkageSnapshot()) {
+              event.preventDefault()
+              return
+            }
+          }
+        }
+      }
+
       // Skip tool shortcuts when modifier held so Cmd+C / Ctrl+V etc. work in logs and about
       if (event.metaKey || event.ctrlKey) return
 
       const key = event.key.toUpperCase()
       const tool = TOOLS.find(t => t.shortcut === key)
-      if (tool) {
+      if (tool?.isAction && tool.id === VIABLE_MECHANISM_SEARCH_TOOL_ID) {
+        if (animation.animationState.isAnimating) {
+          animation.pauseAnimation()
+        }
+        void runViableMechanismSearch()
+        event.preventDefault()
+        return
+      }
+      if (tool && !tool.isAction) {
         // If switching away from draw_link while drawing, cancel
         if (linkCreationState.isDrawing && tool.id !== 'draw_link') {
           setLinkCreationState(initialLinkCreationState)
@@ -2135,7 +2589,7 @@ const BuilderTab: React.FC = () => {
 
     document.addEventListener('keydown', handleKeyDown)
     return () => document.removeEventListener('keydown', handleKeyDown)
-  }, [toolMode, moveGroupState.isActive, exitMoveGroupMode, linkCreationState.isDrawing, groupSelectionState.isSelecting, polygonDrawState.isDrawing, measureState.isMeasuring, pathDrawState.isDrawing, cancelAction, showStatus, selectedJoints, selectedLinks, handleDeleteSelected, animation.animationState.isAnimating, animation.playAnimation, animation.pauseAnimation, animation.trajectoryData, animation.runSimulation, pylinkDoc.pylinkage.joints, completePathDrawing, resetExploreTrajectories])
+  }, [toolMode, moveGroupState.isActive, exitMoveGroupMode, linkCreationState.isDrawing, groupSelectionState.isSelecting, polygonDrawState.isDrawing, measureState.isMeasuring, mergePolygonState.step, pathDrawState.isDrawing, cancelAction, showStatus, selectedJoints, selectedLinks, handleDeleteSelected, animation.animationState.isAnimating, animation.playAnimation, animation.pauseAnimation, animation.trajectoryData, animation.runSimulation, pylinkDoc.pylinkage.joints, completePathDrawing, resetExploreTrajectories, undoLinkageSnapshot, redoLinkageSnapshot, runViableMechanismSearch, setToolMode, setLinkCreationState, setPreviewLine, setGroupSelectionState, setPolygonDrawState, setMeasureState, setMergePolygonState, setDrawnObjects, setPathDrawState])
 
   // Get cursor style based on tool mode
   const getCursorStyle = () => {
@@ -2271,10 +2725,11 @@ const BuilderTab: React.FC = () => {
 
   // Update link (edge) property - using hypergraph operations
   const updateLinkProperty = useCallback((linkName: string, property: string, value: string | string[] | boolean) => {
+    pushLinkageUndoSnapshot()
     // Map legacy property names to edge meta
     const metaUpdate: Record<string, unknown> = { [property]: value }
     setLinkageDoc(prev => updateEdgeMeta(prev, linkName, metaUpdate))
-  }, [])
+  }, [pushLinkageUndoSnapshot])
 
   // Rename a link (edge) - using hypergraph operations
   const renameLink = useCallback((oldName: string, newName: string) => {
@@ -2419,6 +2874,7 @@ const BuilderTab: React.FC = () => {
         status: string
         assignments?: Array<Record<string, number>>
         polygon_z_levels?: Record<string, number>
+        polygon_conflicts?: PolygonConflictReport[]
         message?: string
       }
       if (data.status === 'error' || !res.ok) {
@@ -2466,6 +2922,10 @@ const BuilderTab: React.FC = () => {
       setLinkColorMode('z-level')
       animation.setAnimationFrame(0)
       showStatus('Z-levels updated', 'success', 3000)
+      const conflictMsg = formatPolygonConflictWarningMessage(data.polygon_conflicts, drawnObjects.objects as DrawnObject[])
+      if (conflictMsg) {
+        showStatus(conflictMsg, 'warning', 8000)
+      }
     } catch (e) {
       const msg = e instanceof Error ? e.message : 'Z-level recompute failed'
       showStatus(msg, 'error', 5000)
@@ -2543,6 +3003,7 @@ const BuilderTab: React.FC = () => {
         status: string
         assignments?: Array<Record<string, number>>
         polygon_z_levels?: Record<string, number>
+        polygon_conflicts?: PolygonConflictReport[]
         message?: string
       }
       if (data.status === 'error') {
@@ -2595,6 +3056,10 @@ const BuilderTab: React.FC = () => {
       setLinkColorMode('z-level')
       animation.setAnimationFrame(0)
       showStatus('Z-levels computed; links colored by layer', 'success', 3000)
+      const conflictMsg = formatPolygonConflictWarningMessage(data.polygon_conflicts, drawnObjects.objects as DrawnObject[])
+      if (conflictMsg) {
+        showStatus(conflictMsg, 'warning', 8000)
+      }
     } catch (e) {
       const msg = e instanceof Error ? e.message : 'Z-level computation failed'
       showStatus(msg, 'error', 3000)
@@ -2856,6 +3321,7 @@ const BuilderTab: React.FC = () => {
         }
       })
 
+      clearLinkageUndoStacks()
       setLinkageDoc(linkageAfterMerge)
       setDrawnObjects(prev => ({ ...prev, objects: mergedObjects, selectedIds: [] }))
 
@@ -2912,6 +3378,7 @@ const BuilderTab: React.FC = () => {
             status: string
             assignments?: Array<Record<string, number>>
             polygon_z_levels?: Record<string, number>
+            polygon_conflicts?: PolygonConflictReport[]
             message?: string
           }
           if (zData.status === 'success' && Array.isArray(zData.assignments) && zData.assignments.length > 0) {
@@ -2955,6 +3422,13 @@ const BuilderTab: React.FC = () => {
             }
             setLinkColorMode('z-level')
             showStatus('Z-levels computed; links and forms colored by layer', 'success', 3000)
+            const conflictMsg = formatPolygonConflictWarningMessage(
+              zData.polygon_conflicts,
+              mergedObjects as DrawnObject[],
+            )
+            if (conflictMsg) {
+              showStatus(conflictMsg, 'warning', 8000)
+            }
           }
         } catch (zErr) {
           const zMsg = zErr instanceof Error ? zErr.message : 'Compute z-levels failed'
@@ -2978,7 +3452,8 @@ const BuilderTab: React.FC = () => {
     createRigidForms,
     createLinkForms,
     computeZLevelsAfterCreate,
-    animation
+    animation,
+    clearLinkageUndoStacks
   ])
 
   const onSaveForm = useCallback((id: string, updates: { name: string; fillColor: string; strokeColor: string; z_level?: number; z_level_fixed?: boolean; target_z_level?: number }) => {
@@ -3021,10 +3496,41 @@ const BuilderTab: React.FC = () => {
   // Update joint property - using hypergraph operations
   // IMPORTANT: For non-fixed roles, position is stored in the node
   const updateJointProperty = useCallback((jointName: string, property: string, value: string) => {
-    if (property !== 'type') {
-      // Only handle type changes for now
+    if (property === 'reverseDirection') {
+      const nextReverse = value === 'true'
+      pushLinkageUndoSnapshot()
+      setLinkageDoc(prev => {
+        const node = prev.linkage.nodes[jointName]
+        if (!node) return prev
+        return {
+          ...prev,
+          linkage: {
+            ...prev.linkage,
+            nodes: {
+              ...prev.linkage.nodes,
+              [jointName]: {
+                ...node,
+                reverseDirection: nextReverse
+              }
+            }
+          }
+        }
+      })
+      animation.clearTrajectory()
+      triggerMechanismChange()
+      showStatus(
+        `${jointName} crank direction: ${nextReverse ? 'reversed' : 'normal'}`,
+        'success',
+        1800
+      )
       return
     }
+
+    if (property !== 'type') {
+      return
+    }
+
+    pushLinkageUndoSnapshot()
 
     // Map legacy type names to hypergraph roles
     const typeToRole: Record<string, 'fixed' | 'crank' | 'follower'> = {
@@ -3070,7 +3576,7 @@ const BuilderTab: React.FC = () => {
 
     // Trigger auto-simulation after state update
     triggerMechanismChange()
-  }, [linkageDoc, getJointPosition, showStatus, triggerMechanismChange])
+  }, [linkageDoc, getJointPosition, showStatus, triggerMechanismChange, pushLinkageUndoSnapshot, animation.clearTrajectory, setLinkageDoc])
 
   // Keyboard shortcuts for changing node type (Q=Revolute, W=Static, A=Crank)
   useEffect(() => {
@@ -3108,6 +3614,7 @@ const BuilderTab: React.FC = () => {
   const renameJoint = useCallback((oldName: string, newName: string) => {
     if (oldName === newName || !newName.trim()) return
 
+    clearLinkageUndoStacks()
     const result = renameNodeOperation(linkageDoc, oldName, newName)
     if (!result.success) {
       showStatus(result.error || `Joint "${newName}" already exists`, 'error', 2000)
@@ -3142,7 +3649,7 @@ const BuilderTab: React.FC = () => {
       setEditingJointData(prev => prev ? { ...prev, name: newName } : null)
     }
     showStatus(`Renamed to ${newName}`, 'success', 1500)
-  }, [linkageDoc, showStatus, editingJointData, hoveredJoint])
+  }, [linkageDoc, showStatus, editingJointData, hoveredJoint, clearLinkageUndoStacks])
 
   // ═══════════════════════════════════════════════════════════════════════════════
   // CRITICAL: Check if mechanism is synced to optimizer result - FAIL HARD ON MISMATCH
@@ -3163,6 +3670,7 @@ const BuilderTab: React.FC = () => {
       console.error(errorMsg, { structuralMismatches: result.structuralMismatches })
       showStatus(errorMsg, 'error', 15000)
       console.error('[CRITICAL] Forcing re-application of optimizer result due to structural mismatch')
+      clearLinkageUndoStacks()
       setLinkageDoc(result.optimizerDoc)
       triggerMechanismChange()
       optimization.setIsSyncedToOptimizer(true)
@@ -3173,7 +3681,7 @@ const BuilderTab: React.FC = () => {
       return
     }
     optimization.setIsSyncedToOptimizer(true)
-  }, [linkageDoc, optimization.isOptimizedMechanism, showStatus, triggerMechanismChange])
+  }, [linkageDoc, optimization.isOptimizedMechanism, showStatus, triggerMechanismChange, clearLinkageUndoStacks])
 
   // Load demo from backend
   const loadDemoFromBackend = async (demoName: string) => {
@@ -3204,7 +3712,8 @@ const BuilderTab: React.FC = () => {
             setSelectedJoints,
             setSelectedLinks,
             clearTrajectory: animation.clearTrajectory,
-            triggerMechanismChange
+            triggerMechanismChange,
+            clearLinkageUndoStacks
           })
           showStatus(`Loaded ${demoName} demo`, 'success', 2000)
         } else {
@@ -3256,7 +3765,7 @@ const BuilderTab: React.FC = () => {
   }
 
   // Load pylink graph from server (most recent) - used by "Load Last" button
-  const loadPylinkGraphLast = async () => {
+  const loadPylinkGraphLast = useCallback(async () => {
     try {
       showStatus('Loading last saved...', 'action')
       const response = await fetch('/api/load-pylink-graph')
@@ -3267,6 +3776,7 @@ const BuilderTab: React.FC = () => {
       if (result.status === 'success' && result.data) {
         // Check if it's the new hypergraph format
         if (isHypergraphFormat(result.data)) {
+          const clearDrawing = clearDrawingOnLoadRef.current
           optimization.clearOptimizerState()
           applyLoadedDocument({
             doc: result.data,
@@ -3276,10 +3786,18 @@ const BuilderTab: React.FC = () => {
             setSelectedJoints,
             setSelectedLinks,
             clearTrajectory: animation.clearTrajectory,
-            triggerMechanismChange
+            triggerMechanismChange,
+            clearLinkageUndoStacks,
+            clearDrawingOnLoad: clearDrawing
           })
           setStoredGraphFilename(result.filename)
-          showStatus(`Loaded ${result.filename}`, 'success', 3000)
+          showStatus(
+            clearDrawing
+              ? `Loaded ${result.filename}`
+              : `Imported ${result.filename} into current mechanism`,
+            'success',
+            3000
+          )
         } else {
           // Legacy format - not supported anymore
           console.warn(`File ${result.filename} is in legacy format - cannot load directly`)
@@ -3292,7 +3810,20 @@ const BuilderTab: React.FC = () => {
       const msg = error instanceof Error ? error.message : String(error)
       showStatus(`Load failed: ${msg}`, 'error', 5000)
     }
-  }
+  }, [
+    isHypergraphFormat,
+    optimization.clearOptimizerState,
+    applyLoadedDocument,
+    setLinkageDoc,
+    setDrawnObjects,
+    setCanvases,
+    setSelectedJoints,
+    setSelectedLinks,
+    animation.clearTrajectory,
+    triggerMechanismChange,
+    clearLinkageUndoStacks,
+    showStatus
+  ])
 
   // Load pylink graph from a .json file (native file picker; read in browser)
   const handleLoadFileSelected = useCallback(
@@ -3306,6 +3837,7 @@ const BuilderTab: React.FC = () => {
             showStatus('Load failed: file is not a valid mechanism document (legacy format not supported)', 'error', 5000)
             return
           }
+          const clearDrawing = clearDrawingOnLoadRef.current
           optimization.clearOptimizerState()
           applyLoadedDocument({
             doc: data,
@@ -3315,10 +3847,16 @@ const BuilderTab: React.FC = () => {
             setSelectedJoints,
             setSelectedLinks,
             clearTrajectory: animation.clearTrajectory,
-            triggerMechanismChange
+            triggerMechanismChange,
+            clearLinkageUndoStacks,
+            clearDrawingOnLoad: clearDrawing
           })
           setStoredGraphFilename(file.name)
-          showStatus(`Loaded ${file.name}`, 'success', 3000)
+          showStatus(
+            clearDrawing ? `Loaded ${file.name}` : `Imported ${file.name} into current mechanism`,
+            'success',
+            3000
+          )
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err)
           showStatus(`Load failed: ${msg}`, 'error', 5000)
@@ -3338,7 +3876,8 @@ const BuilderTab: React.FC = () => {
       setSelectedLinks,
       animation.clearTrajectory,
       triggerMechanismChange,
-      showStatus
+      showStatus,
+      clearLinkageUndoStacks
     ]
   )
 
@@ -3384,6 +3923,7 @@ const BuilderTab: React.FC = () => {
   )
 
   const handleClearAll = useCallback(() => {
+    clearLinkageUndoStacks()
     optimization.clearOptimizerState()
     setLinkageDoc(createEmptyLinkageDocument('untitled'))
     setDrawnObjects({ objects: [], selectedIds: [] })
@@ -3401,7 +3941,8 @@ const BuilderTab: React.FC = () => {
     setSelectedJoints,
     setSelectedLinks,
     animation.clearTrajectory,
-    showStatus
+    showStatus,
+    clearLinkageUndoStacks
   ])
 
   // Toolbar content by id — built by useToolbarContent (after all load/save callbacks)
@@ -3415,7 +3956,12 @@ const BuilderTab: React.FC = () => {
         linkCreationState,
         setLinkCreationState,
         setPreviewLine,
-        onPauseAnimation: animation.animationState.isAnimating ? animation.pauseAnimation : undefined
+        onPauseAnimation: animation.animationState.isAnimating ? animation.pauseAnimation : undefined,
+        onToolAction: (toolId) => {
+          if (toolId === VIABLE_MECHANISM_SEARCH_TOOL_ID) {
+            void runViableMechanismSearch()
+          }
+        }
       },
       linksProps: {
         links: pylinkDoc.meta.links,
@@ -3451,6 +3997,8 @@ const BuilderTab: React.FC = () => {
         suggestedSaveAsName,
         onSaveAs: handleSaveAs,
         onClearAll: handleClearAll,
+        clearDrawingOnLoad,
+        setClearDrawingOnLoad,
         canvases,
         setCanvases,
         editingCanvasId,
@@ -3633,6 +4181,7 @@ const BuilderTab: React.FC = () => {
       setPreviewLine,
       animation.animationState.isAnimating,
       animation.pauseAnimation,
+      runViableMechanismSearch,
       pylinkDoc.meta.links,
       linkageDoc,
       selectedLinks,
@@ -3659,6 +4208,8 @@ const BuilderTab: React.FC = () => {
       suggestedSaveAsName,
       handleSaveAs,
       handleClearAll,
+      clearDrawingOnLoad,
+      setClearDrawingOnLoad,
       canvases,
       setCanvases,
       editingCanvasId,
@@ -3866,6 +4417,7 @@ const BuilderTab: React.FC = () => {
         pathDrawState={pathDrawState}
         canvasWidth={canvasDimensions.width}
         onCancelAction={cancelAction}
+        onDismissStatus={clearStatus}
         openToolbars={openToolbars}
         onToggleToolbar={handleToggleToolbar}
         onRestoreToolbar={handleRestoreToolbar}
@@ -3930,6 +4482,9 @@ const BuilderTab: React.FC = () => {
         }}
         onJointShowPathChange={(jointName, showPath) =>
           setLinkageDoc(prev => updateNodeMeta(prev, jointName, { showPath }))
+        }
+        onJointReverseDirectionChange={(jointName, reverseDirection) =>
+          updateJointProperty(jointName, 'reverseDirection', reverseDirection ? 'true' : 'false')
         }
         setEditingJointData={setEditingJointData}
         setEditingLinkData={setEditingLinkData}

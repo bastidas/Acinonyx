@@ -343,7 +343,7 @@ export interface ExplorationTrajectoriesRendererProps {
   /** First exploration node id (combinatorial); when drawing hovered trajectory, always show this node's path even if show_path was false. */
   exploreNodeId?: string | null
   unitsToPixels: (units: number) => number
-  /** If set, only draw trajectories for these joint names (e.g. joints with showPath). Else draw all Crank/Revolute. */
+  /** Non-empty: only these joint names (same opt-out as simulation: `show_path === false`). Empty or omitted: no paths except combinatorial forceShow on exploreNodeId. */
   jointNamesToShow?: string[]
   /** Opacity for non-hovered trajectories (default 0.05) */
   baseOpacity?: number

@@ -952,7 +952,8 @@ def build_polygon_entity_conflict_pairs(
     trajectories: dict[str, list[list[float] | tuple[float, float]]],
     margin_fraction: float = 0.05,
     margin_units: float | None = None,
-) -> list[tuple[str, str]]:
+    include_diagnostics: bool = False,
+) -> list[tuple[str, str]] | tuple[list[tuple[str, str]], list[dict[str, Any]]]:
     """
     Build extra entity conflict pairs for z-level assignment when forms/polygons
     overlap over time (segment-segment may not intersect but polygon bounds do).
@@ -969,7 +970,9 @@ def build_polygon_entity_conflict_pairs(
         margin_units: Optional constant padding for bounding polygon.
 
     Returns:
-        Deduplicated list of (eid1, eid2) with eid1 < eid2.
+        When include_diagnostics is False (default): deduplicated list of (eid1, eid2) with eid1 < eid2.
+        When include_diagnostics is True: (pairs, diagnostics), where diagnostics contains first witness metadata
+        per pair (reason, first_step, optional witness_point, optional joint_name).
     """
     n_steps_actual = min(len(v) for v in trajectories.values() if v) if trajectories else 0
     if not linkage or n_steps_actual <= 0 or len(polygons_for_z) < 2:
@@ -980,6 +983,39 @@ def build_polygon_entity_conflict_pairs(
         joint_to_links.setdefault(sa, []).append(lid)
         joint_to_links.setdefault(ta, []).append(lid)
     pairs: list[tuple[str, str]] = []
+    diagnostics: dict[tuple[str, str], dict[str, Any]] = {}
+
+    def _pair_key(eid1: str, eid2: str) -> tuple[str, str]:
+        return cast(tuple[str, str], tuple(sorted((eid1, eid2))))
+
+    def _record_pair(
+        eid1: str,
+        eid2: str,
+        *,
+        reason: str,
+        step: int | None = None,
+        witness_point: tuple[float, float] | None = None,
+        joint_name: str | None = None,
+    ) -> None:
+        if eid1 == eid2:
+            return
+        pairs.append((eid1, eid2))
+        if not include_diagnostics:
+            return
+        key = _pair_key(eid1, eid2)
+        if key in diagnostics:
+            return
+        row: dict[str, Any] = {
+            'entity_a': key[0],
+            'entity_b': key[1],
+            'reason': reason,
+            'first_step': step,
+        }
+        if witness_point is not None:
+            row['witness_point'] = [float(witness_point[0]), float(witness_point[1])]
+        if joint_name is not None:
+            row['joint_name'] = joint_name
+        diagnostics[key] = row
 
     def _joint_xy(joint_name: str, step_idx: int) -> tuple[float, float] | None:
         series = trajectories.get(joint_name)
@@ -1070,7 +1106,12 @@ def build_polygon_entity_conflict_pairs(
         for i, eid1 in enumerate(keys):
             for eid2 in keys[i + 1:]:
                 if polygons_intersect(polys_at_step[eid1], polys_at_step[eid2]):
-                    pairs.append((eid1, eid2))
+                    _record_pair(
+                        eid1,
+                        eid2,
+                        reason='polygon_overlap_at_step',
+                        step=step,
+                    )
 
         # Hard guard: connector link-form joints cannot overlap any other form body.
         for connector_eid, connector_link in connector_forms.items():
@@ -1085,7 +1126,14 @@ def build_polygon_entity_conflict_pairs(
                     if other_eid == connector_eid:
                         continue
                     if _point_touches_or_inside_polygon(joint_point, poly):
-                        pairs.append((connector_eid, other_eid))
+                        _record_pair(
+                            connector_eid,
+                            other_eid,
+                            reason='connector_joint_inside_or_touching_body',
+                            step=step,
+                            witness_point=joint_point,
+                            joint_name=joint_name,
+                        )
 
     # Hard guard (swept): connector joint trajectory cannot pass through another form's swept area.
     for connector_eid, connector_link in connector_forms.items():
@@ -1114,7 +1162,17 @@ def build_polygon_entity_conflict_pairs(
                     continue
                 try:
                     if any(g.intersects(joint_geom) for g in geoms):
-                        pairs.append((connector_eid, other_eid))
+                        _record_pair(
+                            connector_eid,
+                            other_eid,
+                            reason='connector_joint_swept_path_intersects_body',
+                            step=None,
+                            joint_name=joint_name,
+                        )
                 except Exception:
                     continue
-    return list({cast(tuple[str, str], tuple(sorted((a, b)))) for a, b in pairs})
+    dedup_pairs = list({_pair_key(a, b) for a, b in pairs})
+    if include_diagnostics:
+        rows = [diagnostics[k] for k in sorted(diagnostics.keys())]
+        return (dedup_pairs, rows)
+    return dedup_pairs

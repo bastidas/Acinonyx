@@ -98,6 +98,9 @@ export interface Node {
   /** Initial angle in radians (starting position for simulation) */
   initialAngle?: number
 
+  /** When true on crank/driver nodes, rotate in reverse (clockwise vs default). */
+  reverseDirection?: boolean
+
   /** Human-readable name for display */
   name?: string
 }

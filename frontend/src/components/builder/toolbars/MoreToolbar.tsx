@@ -8,6 +8,8 @@ import {
   Box,
   Typography,
   Button,
+  Switch,
+  Stack,
   Tooltip,
   Divider,
   Dialog,
@@ -26,6 +28,7 @@ import EditIcon from '@mui/icons-material/Edit'
 import DeleteIcon from '@mui/icons-material/Delete'
 import type { CanvasImageData } from '../../../types'
 import { useFileInput } from '../hooks/useFileInput'
+import { alpha } from '@mui/material/styles'
 
 export interface MoreToolbarProps {
   // Demo operations
@@ -45,6 +48,9 @@ export interface MoreToolbarProps {
   onSaveAs: (filename: string) => void | Promise<void>
   /** Called when user confirms Clear all (reset to empty document) */
   onClearAll: () => void
+  /** When true, Load / Load Last replace forms and canvas images from the file (default). When false, keep the current drawing. */
+  clearDrawingOnLoad: boolean
+  setClearDrawingOnLoad: React.Dispatch<React.SetStateAction<boolean>>
 
   // Canvas image overlays
   canvases: CanvasImageData[]
@@ -70,12 +76,15 @@ export const MoreToolbar: React.FC<MoreToolbarProps> = ({
   suggestedSaveAsName,
   onSaveAs,
   onClearAll,
+  clearDrawingOnLoad,
+  setClearDrawingOnLoad,
   canvases,
   setCanvases,
   editingCanvasId,
   setEditingCanvasId,
   showStatus
 }) => {
+  const clearDrawingSwitchId = React.useId()
   const [editDraft, setEditDraft] = React.useState<{ position: [number, number]; scale: number; alpha: number } | null>(null)
 
   const editingCanvas = editingCanvasId ? canvases.find(c => c.id === editingCanvasId) ?? null : null
@@ -281,18 +290,86 @@ export const MoreToolbar: React.FC<MoreToolbarProps> = ({
         </DialogActions>
       </Dialog>
 
-      <Tooltip title="Clear all links and joints; start with an empty mechanism" placement="top" leaveDelay={0}>
-        <Button
-          variant="outlined"
-          color="error"
-          fullWidth
-          size="small"
-          onClick={() => setClearConfirmOpen(true)}
-          sx={{ textTransform: 'none', fontSize: '0.7rem', mb: 1 }}
+      <Box sx={{ display: 'flex', gap: 0.5, alignItems: 'stretch', mb: 1 }}>
+        <Tooltip title="Clear all links and joints; start with an empty mechanism" placement="top" leaveDelay={0}>
+          <Button
+            variant="outlined"
+            color="error"
+            size="small"
+            onClick={() => setClearConfirmOpen(true)}
+            sx={{ flex: 1, minWidth: 0, textTransform: 'none', fontSize: '0.7rem' }}
+          >
+            Clear all
+          </Button>
+        </Tooltip>
+        <Tooltip
+          title={
+            clearDrawingOnLoad
+              ? 'Clear on load is ON: Load/Last replace the current mechanism and drawing with the file.'
+              : 'Clear on load is OFF: Load/Last import the file into the current mechanism without clearing existing joints, links, forms, or canvases.'
+          }
+          placement="top"
+          leaveDelay={0}
         >
-          Clear all
-        </Button>
-      </Tooltip>
+          <Box
+            component="label"
+            htmlFor={clearDrawingSwitchId}
+            sx={theme => ({
+              flexShrink: 0,
+              width: 100,
+              cursor: 'pointer',
+              border: 1,
+              borderColor: clearDrawingOnLoad ? 'warning.main' : 'success.main',
+              borderRadius: 1,
+              px: 0.75,
+              py: 0.5,
+              bgcolor: clearDrawingOnLoad
+                ? alpha(theme.palette.warning.main, theme.palette.mode === 'dark' ? 0.28 : 0.14)
+                : alpha(theme.palette.success.main, theme.palette.mode === 'dark' ? 0.28 : 0.14),
+              display: 'flex',
+              flexDirection: 'column',
+              alignItems: 'center',
+              gap: 0.25
+            })}
+          >
+            <Stack direction="row" alignItems="center" spacing={0.25} sx={{ width: '100%', justifyContent: 'center' }}>
+              <Switch
+                id={clearDrawingSwitchId}
+                size="small"
+                checked={clearDrawingOnLoad}
+                onChange={(_, checked) => setClearDrawingOnLoad(checked)}
+                color={clearDrawingOnLoad ? 'warning' : 'success'}
+                inputProps={{ 'aria-label': 'Replace forms and canvases when loading a file' }}
+                sx={{ ml: -0.5, '& .MuiSwitch-switchBase': { p: 0.5 } }}
+              />
+              <Typography
+                component="span"
+                variant="caption"
+                sx={{
+                  fontWeight: 700,
+                  fontSize: '0.68rem',
+                  lineHeight: 1.1,
+                  color: clearDrawingOnLoad ? 'warning.dark' : 'success.dark'
+                }}
+              >
+                {clearDrawingOnLoad ? 'ON' : 'OFF'}
+              </Typography>
+            </Stack>
+            <Typography
+              variant="caption"
+              sx={{
+                fontSize: '0.62rem',
+                lineHeight: 1.15,
+                textAlign: 'center',
+                color: 'text.secondary',
+                fontWeight: 600
+              }}
+            >
+              Clear on load
+            </Typography>
+          </Box>
+        </Tooltip>
+      </Box>
 
       {/* Clear all confirmation - Enter confirms */}
       <Dialog

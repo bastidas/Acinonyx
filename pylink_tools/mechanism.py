@@ -202,6 +202,8 @@ def _linkage_document_from_pylinkage_dict(
         }
         if our_role == 'crank' and angle is not None:
             nodes[node_id]['angle'] = float(angle)
+            if bool(original_node.get('reverseDirection', False)):
+                nodes[node_id]['reverseDirection'] = True
         elif 'angle' in node_data:
             nodes[node_id]['angle'] = node_data['angle']
 
@@ -781,6 +783,8 @@ class Mechanism:
                 angle = original_node.get('angle') or joint_data.get('angle', 0.0)
                 node_dict['angle'] = float(angle)
                 node_dict['initial_angle'] = float(angle)
+                if bool(original_node.get('reverseDirection', False)):
+                    node_dict['reverseDirection'] = True
 
             pylinkage_nodes.append(node_dict)
 
@@ -963,11 +967,17 @@ class Mechanism:
         # Recreate linkage from hypergraph format
         new_linkage = to_simulatable_linkage(pylink_data)
 
-        # Set crank angle (angular velocity per step)
+        # Set crank angle (angular velocity per step), honoring per-node reverseDirection.
+        node_flags = (
+            self._metadata.get('_original_nodes', {})
+            if isinstance(self._metadata, dict)
+            else {}
+        )
         angle_per_step = 2 * math.pi / self._n_steps
         for joint in new_linkage.joints:
             if isinstance(joint, Crank):
-                joint.angle = angle_per_step
+                reverse = bool(node_flags.get(joint.name, {}).get('reverseDirection', False))
+                joint.angle = -angle_per_step if reverse else angle_per_step
 
         # Rebuild and compile
         new_linkage.rebuild()
@@ -1301,10 +1311,12 @@ def create_mechanism_from_dict(
     linkage = to_simulatable_linkage(pylink_data)
 
     n_steps = pylink_data.get('n_steps', n_steps)
+    node_flags = pylink_data.get('linkage', {}).get('nodes', {})
     angle_per_step = 2 * math.pi / n_steps
     for joint in linkage.joints:
         if isinstance(joint, Crank):
-            joint.angle = angle_per_step
+            reverse = bool(node_flags.get(joint.name, {}).get('reverseDirection', False))
+            joint.angle = -angle_per_step if reverse else angle_per_step
 
     linkage.rebuild()
     linkage.compile()

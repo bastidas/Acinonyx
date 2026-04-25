@@ -147,16 +147,17 @@ const StatusAboutTab: React.FC = () => {
               display: 'inline-block'
             }
           }}>
-            <kbd>C</kbd> <Typography variant="body2" sx={{ color: 'var(--color-text-secondary)' }}>Create Link — click two points to create a new link</Typography>
+            <kbd>C</kbd> <Typography variant="body2" sx={{ color: 'var(--color-text-secondary)' }}>Create Link — click two points to create a new link; Ctrl+Z / Cmd+Z undoes the last user edit (link create/delete, merge, joint drag, mechanism move/rotate, …), up to 10 steps; Shift+Ctrl+Z or Ctrl+Y redoes</Typography>
             <kbd>S</kbd> <Typography variant="body2" sx={{ color: 'var(--color-text-secondary)' }}>Select — click to select joints or links, drag to move</Typography>
-            <kbd>X</kbd> <Typography variant="body2" sx={{ color: 'var(--color-text-secondary)' }}>Delete — click a joint or link to delete it</Typography>
+            <kbd>X</kbd> <Typography variant="body2" sx={{ color: 'var(--color-text-secondary)' }}>Delete — click a joint or link to delete it; use Ctrl+Z / Cmd+Z to restore the last deleted link or joint</Typography>
             <kbd>G</kbd> <Typography variant="body2" sx={{ color: 'var(--color-text-secondary)' }}>Group Select — drag a box to select multiple elements</Typography>
-            <kbd>M</kbd> <Typography variant="body2" sx={{ color: 'var(--color-text-secondary)' }}>Select Mechanism — click to select entire connected mechanism</Typography>
+            <kbd>M</kbd> <Typography variant="body2" sx={{ color: 'var(--color-text-secondary)' }}>Select Mechanism — click to select entire connected mechanism; drag to move; Alt+drag to rotate</Typography>
             <kbd>R</kbd> <Typography variant="body2" sx={{ color: 'var(--color-text-secondary)' }}>Measure — click two points to measure distance</Typography>
             <kbd>P</kbd> <Typography variant="body2" sx={{ color: 'var(--color-text-secondary)' }}>Draw Polygon — click to add vertices, double-click to close; Shift+click to start a circle (center), then set radius</Typography>
             <kbd>E</kbd> <Typography variant="body2" sx={{ color: 'var(--color-text-secondary)' }}>Merge — merge polygon/link/forms; Shift+click merged form to unmerge</Typography>
             <kbd>T</kbd> <Typography variant="body2" sx={{ color: 'var(--color-text-secondary)' }}>Draw Path — draw a target trajectory for optimization</Typography>
             <kbd>Y</kbd> <Typography variant="body2" sx={{ color: 'var(--color-text-secondary)' }}>Explore Trajectories — click a joint to see valid/invalid positions in a circle; click a valid (green) dot to apply that position</Typography>
+            <kbd>V</kbd> <Typography variant="body2" sx={{ color: 'var(--color-text-secondary)' }}>Find Viable Move — searches joint positions from inner to outer explore radius and applies the first move that yields a simulatable mechanism (uses Settings explore radius and samples)</Typography>
           </Box>
 
           <Typography
@@ -460,7 +461,7 @@ const StatusAboutTab: React.FC = () => {
             />
           </a>
           <a
-            href="https://github.com/bastidas/Game-Theory"
+            href="https://github.com/bastidas/Acinonyx"
             target="_blank"
             rel="noopener noreferrer"
             style={{ lineHeight: 0 }}

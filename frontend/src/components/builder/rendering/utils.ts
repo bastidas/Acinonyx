@@ -212,6 +212,18 @@ export function filterTrajectoriesForRendering(
     .filter((t): t is TrajectoryRenderData => t != null)
 }
 
+/**
+ * Joint names allowed to show trajectory paths — same rule as {@link filterTrajectoriesForRendering}
+ * (only `show_path === false` opts out; omitted or other values still show).
+ */
+export function getJointNamesForTrajectoryPathDisplay(
+  jointMeta: Record<string, JointMetaForTrajectory>
+): string[] {
+  return Object.entries(jointMeta)
+    .filter(([, m]) => m?.show_path !== false)
+    .map(([name]) => name)
+}
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // PATH GENERATION
 // ═══════════════════════════════════════════════════════════════════════════════

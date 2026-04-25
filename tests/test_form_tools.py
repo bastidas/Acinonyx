@@ -270,6 +270,81 @@ class TestComputeLinkZLevels:
         assert a0['coupler'] == 0
         assert a1['coupler'] == 3
 
+    def test_polygon_pins_same_z_degenerate_connector_sandwich(self):
+        """Regression for degenerate sandwich hard-connector (see z_level.py breadcrumb).
+
+        Two flanking polygon pins at the same z leave no open (lo, hi) interval for a
+        connector entity; `_violates_hard_connector_between` must not reject every z.
+        Graph: user/graphs/spine_bugged.json (rigid_group_0 + link_form_12 @ 3).
+        """
+        root = Path(__file__).resolve().parent.parent
+        path = root / 'user' / 'graphs' / 'spine_bugged.json'
+        if not path.is_file():
+            pytest.skip('fixture graph spine_bugged.json not present')
+        doc = json.loads(path.read_text(encoding='utf-8'))
+        drawn = [
+            {'id': o['id'], 'type': 'polygon', 'contained_links': o.get('contained_links') or []}
+            for o in doc.get('drawnObjects', [])
+            if o.get('type') == 'polygon' and (o.get('contained_links') or [])
+        ]
+        fixed = {'polygon:rigid_group_0': 3, 'polygon:link_form_12': 3}
+        # Keep sandwich from dominating height (ratio < _SANDWICH_DOMINATES_HEIGHT_RATIO) so
+        # co-layer pins for link_form_10 + rigid stay valid (see z_level module docstring).
+        pin_config = ZLevelHeuristicConfig(
+            weight_prefer_sandwich=5.0,
+            weight_reduce_height=0.3,
+            weight_reduce_deltas=1.0,
+            min_z=0,
+            crank_z=None,
+            weight_crank=0.0,
+        )
+        out = compute_link_z_levels(
+            pylink_data=doc,
+            drawn_objects=drawn,
+            fixed_entity_z_levels=fixed,
+            n_steps=32,
+            z_level_config=pin_config,
+        )
+        assert isinstance(out, tuple)
+        assignments, polygon_z = out
+        assert len(assignments) == 1
+        assert polygon_z.get('rigid_group_0') == 3
+        assert polygon_z.get('link_form_12') == 3
+        # link_form_10 may share z with triangle flanks (link_10 only conflicts link_28 @2);
+        # sandwich-body cost must not force it to z=1 and inflate span.
+        assert polygon_z.get('link_form_10') == 3
+        zvals = list(assignments[0].values())
+        assert max(zvals) - min(zvals) == 1
+
+    def test_spine_bugged_sandwich_dominates_separates_stacks(self):
+        """High sandwich vs height uses spine_bugged and spreads layers (not all z=0)."""
+        root = Path(__file__).resolve().parent.parent
+        path = root / 'user' / 'graphs' / 'spine_bugged.json'
+        if not path.is_file():
+            pytest.skip('fixture graph spine_bugged.json not present')
+        doc = json.loads(path.read_text(encoding='utf-8'))
+        drawn = [
+            {'id': o['id'], 'type': 'polygon', 'contained_links': o.get('contained_links') or []}
+            for o in doc.get('drawnObjects', [])
+            if o.get('type') == 'polygon' and (o.get('contained_links') or [])
+        ]
+        dom = ZLevelHeuristicConfig(
+            weight_prefer_sandwich=500.0,
+            weight_reduce_height=0.01,
+            weight_reduce_deltas=1.0,
+            min_z=0,
+            crank_z=None,
+            weight_crank=0.0,
+        )
+        out = compute_link_z_levels(
+            pylink_data=doc,
+            drawn_objects=drawn,
+            n_steps=32,
+            z_level_config=dom,
+        )
+        _, polygon_z = out
+        assert max(polygon_z.values()) - min(polygon_z.values()) >= 2
+
 
 # -----------------------------------------------------------------------------
 # Polygon utils: contained_links

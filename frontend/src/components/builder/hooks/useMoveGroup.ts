@@ -2,12 +2,12 @@
  * useMoveGroup hook
  *
  * Encapsulates move-group drag logic: hit-test for start drag on selection,
- * translate joints and drawn objects on move, commit and update start positions on up.
+ * translate or rotate joints and drawn objects on move, commit and update start positions on up.
  * Used by BuilderTab so canvas handlers can delegate to moveGroup.handleMouseDown/Move/Up.
  */
 
 import { useCallback } from 'react'
-import type { MoveGroupState } from '../../BuilderTools'
+import type { MoveGroupState, ToolMode } from '../../BuilderTools'
 import { isPointInPolygon } from '../../BuilderTools'
 
 export type CanvasPoint = [number, number]
@@ -15,6 +15,7 @@ export type CanvasPoint = [number, number]
 export interface UseMoveGroupParams {
   moveGroupState: MoveGroupState
   setMoveGroupState: React.Dispatch<React.SetStateAction<MoveGroupState>>
+  toolMode: ToolMode
   getJointsWithPositions: () => Array<{ name: string; position: [number, number] | null }>
   getLinksWithPositions: () => Array<{ name: string; start: [number, number] | null; end: [number, number] | null }>
   getJointPosition: (jointName: string) => [number, number] | null
@@ -46,6 +47,12 @@ export interface UseMoveGroupParams {
     dx: number,
     dy: number
   ) => void
+  rotateGroupFromOriginal: (
+    jointNames: string[],
+    originalPositions: Record<string, [number, number]>,
+    pivot: CanvasPoint,
+    angleRad: number
+  ) => void
   exitMoveGroupMode: () => void
   showStatus: (message: string, type?: string, duration?: number) => void
   triggerMechanismChange: () => void
@@ -55,6 +62,10 @@ export interface UseMoveGroupParams {
   apiFindAssociatedPolygons?: () => Promise<unknown>
   /** After group drag ends: e.g. validate form–link associations from document positions. */
   onAfterMoveGroupDragEnd?: () => void
+  /** After a committed group translate/rotate (mouse up); optional hook (e.g. analytics). */
+  onGroupDragCommit?: () => void
+  /** When a mechanism / form group drag starts (before first translate/rotate); capture one undo step for the whole gesture. */
+  onGroupDragStart?: () => void
 }
 
 export interface UseMoveGroupReturn {
@@ -66,15 +77,47 @@ export interface UseMoveGroupReturn {
 
 const BBOX_PADDING = 0.5
 
+function angleDiff(a: number, b: number): number {
+  let d = a - b
+  while (d > Math.PI) d -= 2 * Math.PI
+  while (d < -Math.PI) d += 2 * Math.PI
+  return d
+}
+
+function rotatePointAboutPivot(p: CanvasPoint, pivot: CanvasPoint, angleRad: number): CanvasPoint {
+  const cos = Math.cos(angleRad)
+  const sin = Math.sin(angleRad)
+  const dx = p[0] - pivot[0]
+  const dy = p[1] - pivot[1]
+  return [pivot[0] + dx * cos - dy * sin, pivot[1] + dx * sin + dy * cos]
+}
+
+function selectionCentroid(state: MoveGroupState): CanvasPoint | null {
+  const pts: CanvasPoint[] = []
+  for (const j of state.joints) {
+    const p = state.startPositions[j]
+    if (p) pts.push(p)
+  }
+  for (const id of state.drawnObjectIds) {
+    const arr = state.drawnObjectStartPositions[id]
+    if (arr) for (const p of arr) pts.push(p)
+  }
+  if (pts.length === 0) return null
+  const sx = pts.reduce((s, p) => s + p[0], 0)
+  const sy = pts.reduce((s, p) => s + p[1], 0)
+  return [sx / pts.length, sy / pts.length]
+}
+
 /**
  * Hook that returns move-group drag handlers. When move group is active and user
  * clicks on the selection (joint, group link, bounding box, or drawn object), starts
- * drag; on move translates rigidly; on up commits and updates start positions.
+ * drag; on move translates or (Mechanism Select + Alt) rotates rigidly; on up commits.
  */
 export function useMoveGroup(params: UseMoveGroupParams): UseMoveGroupReturn {
   const {
     moveGroupState,
     setMoveGroupState,
+    toolMode,
     getJointsWithPositions,
     getLinksWithPositions,
     getJointPosition,
@@ -84,12 +127,15 @@ export function useMoveGroup(params: UseMoveGroupParams): UseMoveGroupReturn {
     drawnObjects,
     setDrawnObjects,
     translateGroupRigid,
+    rotateGroupFromOriginal,
     exitMoveGroupMode,
     showStatus,
     triggerMechanismChange,
     resetAnimationToFirstFrame,
     apiFindAssociatedPolygons,
-    onAfterMoveGroupDragEnd
+    onAfterMoveGroupDragEnd,
+    onGroupDragCommit,
+    onGroupDragStart
   } = params
 
   const handleMouseDown = useCallback(
@@ -166,14 +212,32 @@ export function useMoveGroup(params: UseMoveGroupParams): UseMoveGroupReturn {
       })
 
       if (clickedOnJoint || clickedOnGroupLink || clickedInBoundingBox || clickedOnDrawnObj) {
+        const centroid = selectionCentroid(moveGroupState)
+        const wantRotate =
+          toolMode === 'mechanism_select' && event.altKey && centroid != null
+        const dragMode = wantRotate ? 'rotate' : 'translate'
+        const rotatePivot = wantRotate ? centroid : null
+        const rotateRefAngle =
+          wantRotate && rotatePivot
+            ? Math.atan2(clickPoint[1] - rotatePivot[1], clickPoint[0] - rotatePivot[0])
+            : null
+
         setMoveGroupState(prev => ({
           ...prev,
           isDragging: true,
-          dragStartPoint: clickPoint
+          dragStartPoint: clickPoint,
+          dragMode,
+          rotatePivot,
+          rotateRefAngle
         }))
+        onGroupDragStart?.()
         resetAnimationToFirstFrame?.()
         const itemCount = moveGroupState.joints.length + moveGroupState.drawnObjectIds.length
-        showStatus(`Moving ${itemCount} items — drag to reposition`, 'action')
+        if (dragMode === 'rotate') {
+          showStatus(`Rotating ${itemCount} items — Alt+drag`, 'action')
+        } else {
+          showStatus(`Moving ${itemCount} items — drag to reposition`, 'action')
+        }
         return true
       }
 
@@ -184,6 +248,9 @@ export function useMoveGroup(params: UseMoveGroupParams): UseMoveGroupReturn {
       moveGroupState.isActive,
       moveGroupState.joints,
       moveGroupState.drawnObjectIds,
+      moveGroupState.startPositions,
+      moveGroupState.drawnObjectStartPositions,
+      toolMode,
       getJointsWithPositions,
       getLinksWithPositions,
       getJointPosition,
@@ -194,13 +261,70 @@ export function useMoveGroup(params: UseMoveGroupParams): UseMoveGroupReturn {
       setMoveGroupState,
       exitMoveGroupMode,
       showStatus,
-      resetAnimationToFirstFrame
+      resetAnimationToFirstFrame,
+      onGroupDragStart
     ]
   )
 
   const handleMouseMove = useCallback(
-    (event: React.MouseEvent<SVGSVGElement>, currentPoint: CanvasPoint): boolean => {
-      if (!moveGroupState.isDragging || !moveGroupState.dragStartPoint) {
+    (_event: React.MouseEvent<SVGSVGElement>, currentPoint: CanvasPoint): boolean => {
+      if (!moveGroupState.isDragging) {
+        return false
+      }
+
+      if (moveGroupState.dragMode === 'rotate') {
+        const pivot = moveGroupState.rotatePivot
+        const refA = moveGroupState.rotateRefAngle
+        if (pivot == null || refA == null) {
+          return false
+        }
+
+        const curA = Math.atan2(currentPoint[1] - pivot[1], currentPoint[0] - pivot[0])
+        const angleRad = angleDiff(curA, refA)
+
+        rotateGroupFromOriginal(
+          moveGroupState.joints,
+          moveGroupState.startPositions,
+          pivot,
+          angleRad
+        )
+
+        if (moveGroupState.drawnObjectIds.length > 0) {
+          setDrawnObjects(prev => ({
+            ...prev,
+            objects: (prev.objects as Array<{
+              id: string
+              points: CanvasPoint[]
+              mergedLinkName?: string
+              mergedLinkOriginalStart?: CanvasPoint
+              mergedLinkOriginalEnd?: CanvasPoint
+            }>).map(obj => {
+              if (!moveGroupState.drawnObjectIds.includes(obj.id)) return obj
+              const canUseLinkTransform =
+                obj.mergedLinkName != null &&
+                obj.mergedLinkOriginalStart != null &&
+                obj.mergedLinkOriginalEnd != null &&
+                getLinkConnects(obj.mergedLinkName) != null
+              if (canUseLinkTransform) return obj
+              const originalPoints = moveGroupState.drawnObjectStartPositions[obj.id]
+              if (originalPoints) {
+                return {
+                  ...obj,
+                  points: originalPoints.map(p => rotatePointAboutPivot(p, pivot, angleRad))
+                }
+              }
+              return obj
+            })
+          }))
+        }
+
+        const totalItems = moveGroupState.joints.length + moveGroupState.drawnObjectIds.length
+        const deg = (angleRad * 180) / Math.PI
+        showStatus(`Rotating ${totalItems} items (${deg.toFixed(1)}°)`, 'action')
+        return true
+      }
+
+      if (!moveGroupState.dragStartPoint) {
         return false
       }
 
@@ -249,12 +373,16 @@ export function useMoveGroup(params: UseMoveGroupParams): UseMoveGroupReturn {
     },
     [
       moveGroupState.isDragging,
+      moveGroupState.dragMode,
       moveGroupState.dragStartPoint,
+      moveGroupState.rotatePivot,
+      moveGroupState.rotateRefAngle,
       moveGroupState.joints,
       moveGroupState.startPositions,
       moveGroupState.drawnObjectIds,
       moveGroupState.drawnObjectStartPositions,
       translateGroupRigid,
+      rotateGroupFromOriginal,
       getLinkConnects,
       setDrawnObjects,
       showStatus
@@ -262,17 +390,25 @@ export function useMoveGroup(params: UseMoveGroupParams): UseMoveGroupReturn {
   )
 
   const handleMouseUp = useCallback(
-    (event: React.MouseEvent<SVGSVGElement>): boolean => {
+    (_event: React.MouseEvent<SVGSVGElement>): boolean => {
       if (!moveGroupState.isDragging) {
         return false
       }
 
       const totalItems = moveGroupState.joints.length + moveGroupState.drawnObjectIds.length
-      showStatus(`Moved ${totalItems} items`, 'success', 2000)
+      const wasRotate = moveGroupState.dragMode === 'rotate'
+      showStatus(
+        wasRotate ? `Rotated ${totalItems} items` : `Moved ${totalItems} items`,
+        'success',
+        2000
+      )
       setMoveGroupState(prev => ({
         ...prev,
         isDragging: false,
         dragStartPoint: null,
+        dragMode: 'translate',
+        rotatePivot: null,
+        rotateRefAngle: null,
         startPositions: Object.fromEntries(
           prev.joints.map(jointName => {
             const pos = getJointPosition(jointName)
@@ -289,6 +425,7 @@ export function useMoveGroup(params: UseMoveGroupParams): UseMoveGroupReturn {
         )
       }))
       triggerMechanismChange()
+      onGroupDragCommit?.()
       setTimeout(() => {
         onAfterMoveGroupDragEnd?.()
         void apiFindAssociatedPolygons?.()
@@ -297,6 +434,7 @@ export function useMoveGroup(params: UseMoveGroupParams): UseMoveGroupReturn {
     },
     [
       moveGroupState.isDragging,
+      moveGroupState.dragMode,
       moveGroupState.joints,
       moveGroupState.drawnObjectIds,
       setMoveGroupState,
@@ -305,7 +443,8 @@ export function useMoveGroup(params: UseMoveGroupParams): UseMoveGroupReturn {
       showStatus,
       triggerMechanismChange,
       apiFindAssociatedPolygons,
-      onAfterMoveGroupDragEnd
+      onAfterMoveGroupDragEnd,
+      onGroupDragCommit
     ]
   )
 

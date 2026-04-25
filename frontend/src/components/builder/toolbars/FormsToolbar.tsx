@@ -37,7 +37,7 @@ export interface ZLevelHeuristicConfig {
 
 export const DEFAULT_Z_LEVEL_CONFIG: ZLevelHeuristicConfig = {
   weight_reduce_deltas: 1,
-  weight_reduce_height: 0.3,
+  weight_reduce_height: 5,
   weight_prefer_sandwich: 5,
   min_z: 0,
   crank_z: 1,
@@ -318,14 +318,14 @@ export const FormsToolbar: React.FC<FormsToolbarProps> = ({
                   size="small"
                   label="Height weight"
                   type="number"
-                  value={config.weight_reduce_height ?? 0.3}
+                  value={config.weight_reduce_height ?? 5}
                   onChange={(e) => onZLevelConfigChange({ ...(zLevelConfig ?? {}), weight_reduce_height: Number(e.target.value) || 0 })}
                   inputProps={{ min: 0, step: 0.1 }}
                   sx={{ '& .MuiInputBase-input': { fontSize: '0.75rem' } }}
                 />
               </Tooltip>
               <Tooltip
-                title="Sandwich weight: connector z outside its two-neighbor interval is heavily penalized; inside the interval gets only a small penalty."
+                title="Sandwich weight: connector z outside its two-neighbor interval is heavily penalized; inside the interval gets only a small penalty. When this value is much larger than height weight (about 25× or more), sandwich layering overrides tight stacking: co-flank bodies are separated again and bridge connectors sharing a body are discouraged from sharing the same z."
                 placement="left"
                 leaveDelay={0}
                 disableInteractive

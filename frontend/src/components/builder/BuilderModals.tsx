@@ -38,6 +38,7 @@ export interface BuilderModalsProps {
   updateLinkProperty: (linkName: string, property: string, value: string | string[] | boolean) => void
   onJointMetaValueChange: (jointName: string, metaValue: string) => void
   onJointShowPathChange: (jointName: string, showPath: boolean) => void
+  onJointReverseDirectionChange: (jointName: string, reverseDirection: boolean) => void
   setEditingJointData: React.Dispatch<React.SetStateAction<JointData | null>>
   setEditingLinkData: React.Dispatch<React.SetStateAction<LinkData | null>>
   editingFormData: FormData | null
@@ -63,6 +64,7 @@ export function BuilderModals({
   updateLinkProperty,
   onJointMetaValueChange,
   onJointShowPathChange,
+  onJointReverseDirectionChange,
   setEditingJointData,
   setEditingLinkData,
   editingFormData,
@@ -132,6 +134,10 @@ export function BuilderModals({
         onShowPathChange={(jointName, showPath) => {
           onJointShowPathChange(jointName, showPath)
           setEditingJointData(prev => prev ? { ...prev, showPath } : null)
+        }}
+        onReverseDirectionChange={(jointName, reverseDirection) => {
+          onJointReverseDirectionChange(jointName, reverseDirection)
+          setEditingJointData(prev => (prev ? { ...prev, reverseDirection } : null))
         }}
         darkMode={darkMode}
       />

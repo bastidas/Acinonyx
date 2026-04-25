@@ -449,6 +449,7 @@ export {
   moveNodeTo,
   moveNodesBy,
   moveNodesFromOriginal,
+  rotateNodesFromOriginal,
   mergeNodesOperation,
   renameNodeOperation,
   setNodeRoleOperation,
